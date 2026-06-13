@@ -766,6 +766,7 @@ def build_covariates(t, cohort):
         print(f"    Vitals loading failed: {e}")
 
     # ── First calcium (from lab) ──────────────────────────────────
+    lab = t["lab"]
     ca_labs = lab[
         lab.patientunitstayid.isin(pids)
         & matches_any(lab.labname, cfg.CA_LABNAMES)
