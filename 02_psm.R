@@ -222,10 +222,10 @@ tryCatch({
 
   # Analysis A: Mg distribution by AKI status
   if (nrow(dat_a) > 0) {
-    p1 <- ggplot(dat_a, aes(x = first_mg_value, fill = factor(aki_primary))) +
+    p1 <- ggplot(dat_a, aes(x = first_mg_value, fill = factor(ifelse(aki_primary == 1 | aki_delta03 == 1, 1, 0)))) +
       geom_density(alpha = 0.5) +
       labs(title = "Analysis A: Mg distribution by AKI status",
-           x = "First postop Mg (mg/dL)", fill = "AKI") +
+           x = "First postop Mg (mg/dL)", fill = "AKI (KDIGO ≥1)") +
       theme_minimal()
     print(p1)
   }

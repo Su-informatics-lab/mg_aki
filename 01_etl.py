@@ -471,11 +471,21 @@ def apply_aki_phenotype(cohort, cr_all, mg_offsets):
         )
 
     n_aki = cohort.aki_primary.sum()
+    # KDIGO Stage ≥1 full definition: ratio ≥1.5x OR delta ≥0.3 within 48h
+    cohort["aki_kdigo1"] = (
+        (cohort.aki_primary == 1) | (cohort.aki_delta03 == 1)
+    ).astype(int)
     print(f"  Eligible after washout: {len(cohort):,}")
-    print(f"  AKI (primary, ≥1.5×, post-Mg): {n_aki} ({n_aki/len(cohort)*100:.1f}%)")
-    print(f"  AKI delta≥0.3: {cohort.aki_delta03.sum()}")
-    print(f"  AKI stage 2: {cohort.aki_stage2.sum()}")
-    print(f"  AKI stage 3: {cohort.aki_stage3.sum()}")
+    print(f"  AKI definitions:")
+    print(
+        f"    KDIGO Stage ≥1 (ratio|delta): {cohort.aki_kdigo1.sum()} ({cohort.aki_kdigo1.mean()*100:.1f}%)"
+    )
+    print(f"    Ratio ≥1.5× only:            {n_aki} ({n_aki/len(cohort)*100:.1f}%)")
+    print(
+        f"    Delta ≥0.3 only:              {cohort.aki_delta03.sum()} ({cohort.aki_delta03.mean()*100:.1f}%)"
+    )
+    print(f"    Stage ≥2 (ratio ≥2.0×):       {cohort.aki_stage2.sum()}")
+    print(f"    Stage ≥3 (ratio ≥3.0×):       {cohort.aki_stage3.sum()}")
 
     return cohort
 

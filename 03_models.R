@@ -94,43 +94,64 @@ cat("\n", strrep("=", 70), "\n")
 cat("ANALYSIS A: Mg level → AKI (prognostic)\n")
 cat(strrep("=", 70), "\n")
 
-# ── A1: Continuous Mg (per 1 mg/dL decrease) ─────────────────────
-cat("\n  A1: Continuous Mg (per 1 mg/dL decrease)...\n")
-tryCatch({
-  # Negate Mg so positive coefficient = lower Mg → higher AKI
-  dat_a$mg_neg <- -dat_a$first_mg_value
+# ── A1: Continuous Mg across ALL AKI definitions ─────────────────
+dat_a$mg_neg <- -dat_a$first_mg_value
+# KDIGO Stage ≥1 union (if not already present)
+if (!"aki_kdigo1" %in% names(dat_a)) {
+  dat_a$aki_kdigo1 <- as.integer(dat_a$aki_primary == 1 | dat_a$aki_delta03 == 1)
+}
 
-  if (HAS_LME4 && length(unique(dat_a$hospitalid)) > 1) {
-    # Mixed-effects with hospital random intercept
-    f_a1 <- as.formula(paste("aki_primary ~ mg_neg +", cov_rhs,
-                             "+ (1 | hospitalid)"))
-    m_a1 <- glmer(f_a1, data = dat_a, family = binomial(),
-                  control = glmerControl(optimizer = "bobyqa"))
-  } else {
-    # Fallback: glm + cluster-robust SE
-    f_a1 <- as.formula(paste("aki_primary ~ mg_neg +", cov_rhs))
-    m_a1 <- glm(f_a1, data = dat_a, family = binomial())
-  }
+aki_outcomes <- c(
+  "aki_kdigo1"  = "KDIGO Stage ≥1 (ratio|delta) [PRIMARY]",
+  "aki_primary" = "Ratio ≥1.5× only",
+  "aki_delta03" = "Delta ≥0.3 within 48h",
+  "aki_stage2"  = "Stage ≥2 (ratio ≥2.0×)",
+  "aki_stage3"  = "Stage ≥3 (ratio ≥3.0×)"
+)
 
-  s_a1 <- tidy(m_a1, conf.int = TRUE, exponentiate = TRUE)
-  cat("  Key result (OR per 1 mg/dL DECREASE in Mg):\n")
-  mg_row <- s_a1 %>% filter(term == "mg_neg")
-  if (nrow(mg_row) > 0) {
-    cat(sprintf("    OR = %.2f (95%% CI: %.2f–%.2f), p = %.4f\n",
-                mg_row$estimate, mg_row$conf.low, mg_row$conf.high,
-                mg_row$p.value))
-    results_list[["A1_continuous"]] <- mg_row
-  }
-  cat("  Full model:\n")
-  print(s_a1 %>% select(term, estimate, conf.low, conf.high, p.value), n = 30)
-}, error = function(e) cat(sprintf("  A1 failed: %s\n", e$message)))
+cat("\n  A1: Continuous Mg (per 1 mg/dL increase) across AKI definitions:\n")
+cat(sprintf("  %-45s %8s %15s %10s\n", "Outcome", "Events", "OR (95% CI)", "p"))
+cat(strrep("-", 85), "\n")
 
-# ── A2: Mg quartiles (Q4=highest as reference) ──────────────────
-cat("\n  A2: Mg quartiles (Q4 = reference)...\n")
+for (outcome_var in names(aki_outcomes)) {
+  if (!outcome_var %in% names(dat_a)) next
+  label <- aki_outcomes[[outcome_var]]
+  n_events <- sum(dat_a[[outcome_var]], na.rm = TRUE)
+
+  tryCatch({
+    f <- as.formula(paste(outcome_var, "~ mg_neg +", cov_rhs))
+    m <- glm(f, data = dat_a, family = binomial())
+    s <- tidy(m, conf.int = TRUE, exponentiate = TRUE)
+    mg_row <- s %>% filter(term == "mg_neg")
+
+    if (nrow(mg_row) > 0) {
+      # Flip: report OR per 1 mg/dL INCREASE (= 1/OR_mg_neg)
+      or_inc <- 1 / mg_row$estimate
+      lo_inc <- 1 / mg_row$conf.high  # flip CI bounds
+      hi_inc <- 1 / mg_row$conf.low
+      cat(sprintf("  %-45s %8d %5.2f (%.2f-%.2f) %10.4f\n",
+                  label, n_events, or_inc, lo_inc, hi_inc, mg_row$p.value))
+      results_list[[paste0("A1_", outcome_var)]] <- tibble(
+        model = paste0("A1_", outcome_var), term = "mg_per_1_increase",
+        estimate = or_inc, conf.low = lo_inc, conf.high = hi_inc,
+        p.value = mg_row$p.value, n_events = n_events
+      )
+    }
+  }, error = function(e) {
+    cat(sprintf("  %-45s %8d   FAILED: %s\n", label, n_events, e$message))
+  })
+}
+
+# ── A2: Mg quartiles (Q4=highest as reference) — PRIMARY outcome ─
+# ── A2: Mg quartiles (Q4=highest as reference) — PRIMARY outcome ─
+cat("\n  A2: Mg quartiles (Q4 = reference), KDIGO Stage ≥1...\n")
 tryCatch({
   dat_a$mg_q <- relevel(factor(dat_a$mg_quartile), ref = "Q4")
+  if (!"aki_kdigo1" %in% names(dat_a)) {
+    dat_a$aki_kdigo1 <- as.integer(dat_a$aki_primary == 1 | dat_a$aki_delta03 == 1)
+  }
 
-  f_a2 <- as.formula(paste("aki_primary ~ mg_q +", cov_rhs))
+  f_a2 <- as.formula(paste("aki_kdigo1 ~ mg_q +", cov_rhs))
   m_a2 <- glm(f_a2, data = dat_a, family = binomial())
   # Cluster-robust SE by hospital
   if (length(unique(dat_a$hospitalid)) > 1) {
@@ -148,7 +169,7 @@ tryCatch({
 # ── A3: Restricted cubic spline (dose-response) ─────────────────
 cat("\n  A3: RCS dose-response...\n")
 tryCatch({
-  f_a3 <- as.formula(paste("aki_primary ~ ns(first_mg_value, df=4) +", cov_rhs))
+  f_a3 <- as.formula(paste("aki_kdigo1 ~ ns(first_mg_value, df=4) +", cov_rhs))
   m_a3 <- glm(f_a3, data = dat_a, family = binomial())
   cat("  Spline model AIC:", AIC(m_a3), "\n")
   results_list[["A3_spline_aic"]] <- AIC(m_a3)
@@ -162,7 +183,7 @@ tryCatch({
 
   if (nrow(dat_a_surv) > 20) {
     f_a4 <- as.formula(paste(
-      "Surv(time_to_event_hours, aki_primary) ~ mg_neg +", cov_rhs
+      "Surv(time_to_event_hours, aki_kdigo1) ~ mg_neg +", cov_rhs
     ))
     if (length(unique(dat_a_surv$hospitalid)) > 1) {
       m_a4 <- coxph(f_a4, data = dat_a_surv,
@@ -214,6 +235,14 @@ if (!is.null(dat_b) && nrow(dat_b) > 10) {
   cat("ANALYSIS B: TTE — Mg supplementation → AKI\n")
   cat(strrep("=", 70), "\n")
 
+  # Derive KDIGO Stage ≥1 for TTE cohort
+  if (!"aki_kdigo1" %in% names(dat_b)) {
+    dat_b$aki_kdigo1 <- as.integer(dat_b$aki_primary == 1 | dat_b$aki_delta03 == 1)
+  }
+  if (!is.null(dat_b_m) && !"aki_kdigo1" %in% names(dat_b_m)) {
+    dat_b_m$aki_kdigo1 <- as.integer(dat_b_m$aki_primary == 1 | dat_b_m$aki_delta03 == 1)
+  }
+
   # ── B1: IPTW-weighted logistic (primary) ───────────────────────
   cat("\n  B1: IPTW-weighted logistic...\n")
   tryCatch({
@@ -222,7 +251,7 @@ if (!is.null(dat_b) && nrow(dat_b) > 10) {
     } else {
       des <- svydesign(ids = ~1, weights = ~iptw, data = dat_b)
     }
-    m_b1 <- svyglm(aki_primary ~ trt, design = des,
+    m_b1 <- svyglm(aki_kdigo1 ~ trt, design = des,
                     family = quasibinomial())
     s_b1 <- tidy(m_b1, conf.int = TRUE, exponentiate = TRUE)
     trt_row <- s_b1 %>% filter(term == "trt")
@@ -240,7 +269,7 @@ if (!is.null(dat_b) && nrow(dat_b) > 10) {
     dat_b_surv <- dat_b %>%
       filter(!is.na(time_to_event_hours), time_to_event_hours > 0)
     if (nrow(dat_b_surv) > 10) {
-      m_b2 <- coxph(Surv(time_to_event_hours, aki_primary) ~ trt,
+      m_b2 <- coxph(Surv(time_to_event_hours, aki_kdigo1) ~ trt,
                      weights = iptw, data = dat_b_surv,
                      robust = TRUE)
       s_b2 <- tidy(m_b2, conf.int = TRUE, exponentiate = TRUE)
@@ -254,7 +283,7 @@ if (!is.null(dat_b) && nrow(dat_b) > 10) {
   cat("\n  B3: Overlap-weighted logistic...\n")
   tryCatch({
     des_ow <- svydesign(ids = ~1, weights = ~ow, data = dat_b)
-    m_b3 <- svyglm(aki_primary ~ trt, design = des_ow,
+    m_b3 <- svyglm(aki_kdigo1 ~ trt, design = des_ow,
                     family = quasibinomial())
     s_b3 <- tidy(m_b3, conf.int = TRUE, exponentiate = TRUE)
     trt_ow <- s_b3 %>% filter(term == "trt")
@@ -269,7 +298,7 @@ if (!is.null(dat_b) && nrow(dat_b) > 10) {
   if (!is.null(dat_b_m) && nrow(dat_b_m) > 4) {
     cat("\n  B4: PS-matched logistic...\n")
     tryCatch({
-      m_b4 <- glm(aki_primary ~ trt, data = dat_b_m,
+      m_b4 <- glm(aki_kdigo1 ~ trt, data = dat_b_m,
                    family = binomial(), weights = weights)
       s_b4 <- tidy(m_b4, conf.int = TRUE, exponentiate = TRUE)
       trt_m <- s_b4 %>% filter(term == "trt")
@@ -289,7 +318,7 @@ if (!is.null(dat_b) && nrow(dat_b) > 10) {
         ev <- evalues.OR(est = trt_row$estimate,
                          lo  = trt_row$conf.low,
                          hi  = trt_row$conf.high,
-                         rare = (mean(dat_b$aki_primary) < 0.15))
+                         rare = (mean(dat_b$aki_kdigo1) < 0.15))
         cat("  E-value results:\n")
         print(ev)
         results_list[["B_evalue"]] <- ev
