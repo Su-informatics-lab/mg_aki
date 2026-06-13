@@ -1,519 +1,257 @@
 #!/usr/bin/env Rscript
 # ─────────────────────────────────────────────────────────────────────
-# Mg Reserve → Cardiac Surgery AKI (eICU)
-# 03_models.R — Main regression models + sensitivity analyses
+# Mg → Cardiac Surgery Outcomes (eICU) — v2
+# 03_models.R — Self-validating multi-outcome TTE
 #
-# Analysis A (prognostic):
-#   Primary: mixed-effects logistic (Mg continuous + quartiles),
-#            hospital random intercept, cluster-robust SE
-#   Secondary: Cox proportional hazards for time-to-AKI
-#
-# Analysis B (TTE — Mg supplementation):
-#   Primary: IPTW-weighted logistic for 7-day AKI
-#   Secondary: IPTW-weighted Cox, PS-matched logistic
-#   Sensitivity: overlap-weighted, E-value
-#
-# Per TTE skill Tier 1: E-value for unmeasured confounding
-# Per TTE skill Tier 2: negative control outcomes
+#   A. Prognostic: Mg level → AKI
+#   B. Positive control: Mg supplementation → POAF (+ BB stratification)
+#   C. Primary: Mg supplementation → AKI (severity-stratified + BB)
+#   D. Negative controls (bias calibration)
+#   E. Neuro outcomes (exploratory)
+#   F. Secondary (RRT, mortality)
 # ─────────────────────────────────────────────────────────────────────
 
-# ─── Auto-install dependencies ──────────────────────────────────────
 local({
-  # lme4 requires nloptr which needs cmake — make it optional
-  pkgs_required <- c("tidyverse", "survival", "survey",
-                     "sandwich", "lmtest", "broom")
-  pkgs_optional <- c("lme4", "EValue")  # nice-to-have but not fatal
-
-  missing_req <- pkgs_required[!sapply(pkgs_required, requireNamespace, quietly = TRUE)]
-  if (length(missing_req) > 0) {
-    cat(sprintf("Installing %d required packages: %s\n",
-                length(missing_req), paste(missing_req, collapse = ", ")))
-    install.packages(missing_req, repos = "https://cloud.r-project.org",
+  pkgs <- c("tidyverse", "survival", "survey", "sandwich", "lmtest", "broom")
+  miss <- pkgs[!sapply(pkgs, requireNamespace, quietly = TRUE)]
+  if (length(miss) > 0)
+    install.packages(miss, repos = "https://cloud.r-project.org",
                      quiet = TRUE, Ncpus = parallel::detectCores())
-  }
-  missing_opt <- pkgs_optional[!sapply(pkgs_optional, requireNamespace, quietly = TRUE)]
-  if (length(missing_opt) > 0) {
-    cat(sprintf("Attempting %d optional packages: %s\n",
-                length(missing_opt), paste(missing_opt, collapse = ", ")))
-    tryCatch(
-      install.packages(missing_opt, repos = "https://cloud.r-project.org",
-                       quiet = TRUE, Ncpus = parallel::detectCores()),
-      error = function(e) cat("  (some optional packages failed — continuing)\n")
-    )
-  }
+  tryCatch(install.packages("EValue", repos = "https://cloud.r-project.org",
+                            quiet = TRUE), error = function(e) NULL)
 })
-
-HAS_LME4 <- requireNamespace("lme4", quietly = TRUE)
 HAS_EVALUE <- requireNamespace("EValue", quietly = TRUE)
-if (!HAS_LME4) cat("  NOTE: lme4 unavailable — using glm + cluster-robust SE instead\n")
-if (!HAS_EVALUE) cat("  NOTE: EValue unavailable — skipping E-value computation\n")
 
 suppressPackageStartupMessages({
-  library(tidyverse)
-  if (HAS_LME4) library(lme4)
-  library(survival)
-  library(survey)
-  library(sandwich)
-  library(lmtest)
-  if (HAS_EVALUE) library(EValue)
-  library(broom)
-  library(splines)
+  library(tidyverse); library(survival); library(survey)
+  library(sandwich); library(lmtest); library(broom); library(splines)
 })
 
 RESULTS <- path.expand("~/mg_aki/results")
 
-# ─── Load data ──────────────────────────────────────────────────────
-cat("Loading prepared data...\n")
-load(file.path(RESULTS, "02b_analysis_a_prepared.RData"))  # dat_a
-dat_b <- tryCatch(
-  read_csv(file.path(RESULTS, "02d_tte_iptw.csv"), show_col_types = FALSE),
-  error = function(e) NULL
-)
-dat_b_m <- tryCatch(
-  read_csv(file.path(RESULTS, "02c_tte_matched.csv"), show_col_types = FALSE),
-  error = function(e) NULL
-)
+# ─── Load ───────────────────────────────────────────────────────────
+cat("Loading data...\n")
+load(file.path(RESULTS, "02b_analysis_a_prepared.RData"))
+dat_tte_a <- tryCatch(read_csv(file.path(RESULTS, "02d_tte_iptw.csv"),
+                               show_col_types = FALSE), error = function(e) NULL)
+dat_tte_b <- tryCatch(read_csv(file.path(RESULTS, "02e_tteb_iptw.csv"),
+                               show_col_types = FALSE), error = function(e) NULL)
+dat_m_b   <- tryCatch(read_csv(file.path(RESULTS, "02f_tteb_matched.csv"),
+                               show_col_types = FALSE), error = function(e) NULL)
+
+add_aki <- function(d) {
+  if (!"aki_kdigo1" %in% names(d))
+    d$aki_kdigo1 <- as.integer(d$aki_primary == 1 | d$aki_delta03 == 1)
+  d
+}
+dat_a <- add_aki(dat_a)
+if (!is.null(dat_tte_a)) dat_tte_a <- add_aki(dat_tte_a)
+if (!is.null(dat_tte_b)) dat_tte_b <- add_aki(dat_tte_b)
+if (!is.null(dat_m_b))   dat_m_b   <- add_aki(dat_m_b)
 
 cov_rhs <- paste(c(
-  "age_num", "is_female", "bmi",
-  "surgery_type",
+  "age_num", "is_female", "bmi", "surgery_type",
   "hx_chf", "hx_hypertension", "hx_diabetes", "hx_ckd",
   "hx_copd", "hx_pvd", "hx_stroke",
   "baseline_cr", "baseline_egfr",
   "nephrotox_loop_diuretic", "nephrotox_nsaid",
-  "nephrotox_acei_arb"
+  "nephrotox_acei_arb", "nephrotox_ppi"
 ), collapse = " + ")
 if ("apachescore" %in% names(dat_a)) cov_rhs <- paste(cov_rhs, "+ apachescore")
 
 results_list <- list()
 
+# ─── Helper: IPTW OR for one outcome ───────────────────────────────
+iptw_or <- function(dat, outcome, label = outcome, wt = "iptw") {
+  if (!outcome %in% names(dat)) return(NULL)
+  d <- dat %>% filter(!is.na(.data[[outcome]]))
+  nev <- sum(d[[outcome]], na.rm = TRUE)
+  if (nev < 5) return(NULL)
+  tryCatch({
+    des <- if ("hospitalid" %in% names(d))
+      svydesign(ids = ~hospitalid, weights = as.formula(paste0("~", wt)), data = d)
+    else svydesign(ids = ~1, weights = as.formula(paste0("~", wt)), data = d)
+    m <- svyglm(as.formula(paste(outcome, "~ trt")), design = des,
+                family = quasibinomial())
+    s <- tidy(m, conf.int = TRUE, exponentiate = TRUE) %>% filter(term == "trt")
+    if (nrow(s) > 0) { s$n_events <- nev; s$label <- label }
+    s
+  }, error = function(e) NULL)
+}
+
+ptbl <- function(rows, title) {
+  cat(sprintf("\n  %s\n", title))
+  cat(sprintf("  %-44s %6s %16s %8s\n", "Outcome", "Events", "OR (95% CI)", "p"))
+  cat("  ", strrep("-", 78), "\n")
+  for (r in rows) if (!is.null(r) && nrow(r) > 0)
+    cat(sprintf("  %-44s %6d %5.2f (%.2f-%.2f) %8.4f\n",
+                r$label, r$n_events, r$estimate, r$conf.low, r$conf.high, r$p.value))
+}
+
 # =====================================================================
-# ANALYSIS A: Prognostic — Mg level → AKI
+# A. PROGNOSTIC
 # =====================================================================
 cat("\n", strrep("=", 70), "\n")
-cat("ANALYSIS A: Mg level → AKI (prognostic)\n")
+cat("A. PROGNOSTIC: Mg level -> AKI\n")
 cat(strrep("=", 70), "\n")
 
-# ── A1: Continuous Mg across ALL AKI definitions ─────────────────
 dat_a$mg_neg <- -dat_a$first_mg_value
-# KDIGO Stage ≥1 union (if not already present)
-if (!"aki_kdigo1" %in% names(dat_a)) {
-  dat_a$aki_kdigo1 <- as.integer(dat_a$aki_primary == 1 | dat_a$aki_delta03 == 1)
-}
+aki_defs <- c(aki_kdigo1 = "KDIGO Stage >=1", aki_primary = "Ratio >=1.5x",
+              aki_delta03 = "Delta >=0.3", aki_stage2 = "Stage >=2",
+              aki_stage3 = "Stage >=3")
 
-aki_outcomes <- c(
-  "aki_kdigo1"  = "KDIGO Stage ≥1 (ratio|delta) [PRIMARY]",
-  "aki_primary" = "Ratio ≥1.5× only",
-  "aki_delta03" = "Delta ≥0.3 within 48h",
-  "aki_stage2"  = "Stage ≥2 (ratio ≥2.0×)",
-  "aki_stage3"  = "Stage ≥3 (ratio ≥3.0×)"
-)
-
-cat("\n  A1: Continuous Mg (per 1 mg/dL increase) across AKI definitions:\n")
-cat(sprintf("  %-45s %8s %15s %10s\n", "Outcome", "Events", "OR (95% CI)", "p"))
-cat(strrep("-", 85), "\n")
-
-for (outcome_var in names(aki_outcomes)) {
-  if (!outcome_var %in% names(dat_a)) next
-  label <- aki_outcomes[[outcome_var]]
-  n_events <- sum(dat_a[[outcome_var]], na.rm = TRUE)
-
+cat("\n  A1: OR per 1 mg/dL Mg increase:\n")
+cat(sprintf("  %-44s %6s %16s %8s\n", "Outcome", "Events", "OR (95% CI)", "p"))
+cat("  ", strrep("-", 78), "\n")
+for (ov in names(aki_defs)) {
+  if (!ov %in% names(dat_a)) next
+  nev <- sum(dat_a[[ov]], na.rm = TRUE)
   tryCatch({
-    f <- as.formula(paste(outcome_var, "~ mg_neg +", cov_rhs))
-    m <- glm(f, data = dat_a, family = binomial())
-    s <- tidy(m, conf.int = TRUE, exponentiate = TRUE)
-    mg_row <- s %>% filter(term == "mg_neg")
-
-    if (nrow(mg_row) > 0) {
-      # Flip: report OR per 1 mg/dL INCREASE (= 1/OR_mg_neg)
-      or_inc <- 1 / mg_row$estimate
-      lo_inc <- 1 / mg_row$conf.high  # flip CI bounds
-      hi_inc <- 1 / mg_row$conf.low
-      cat(sprintf("  %-45s %8d %5.2f (%.2f-%.2f) %10.4f\n",
-                  label, n_events, or_inc, lo_inc, hi_inc, mg_row$p.value))
-      results_list[[paste0("A1_", outcome_var)]] <- tibble(
-        model = paste0("A1_", outcome_var), term = "mg_per_1_increase",
-        estimate = or_inc, conf.low = lo_inc, conf.high = hi_inc,
-        p.value = mg_row$p.value, n_events = n_events
-      )
+    m <- glm(as.formula(paste(ov, "~ mg_neg +", cov_rhs)),
+             data = dat_a, family = binomial())
+    s <- tidy(m, conf.int = TRUE, exponentiate = TRUE) %>% filter(term == "mg_neg")
+    if (nrow(s) > 0) {
+      or <- 1/s$estimate; lo <- 1/s$conf.high; hi <- 1/s$conf.low
+      cat(sprintf("  %-44s %6d %5.2f (%.2f-%.2f) %8.4f\n",
+                  aki_defs[[ov]], nev, or, lo, hi, s$p.value))
+      results_list[[paste0("A1_", ov)]] <<- tibble(
+        model = paste0("A1_", ov), term = "mg_per_1_increase",
+        estimate = or, conf.low = lo, conf.high = hi,
+        p.value = s$p.value, n_events = nev, label = aki_defs[[ov]])
     }
-  }, error = function(e) {
-    cat(sprintf("  %-45s %8d   FAILED: %s\n", label, n_events, e$message))
-  })
+  }, error = function(e) cat(sprintf("  %-44s FAILED\n", aki_defs[[ov]])))
 }
 
-# ── A2: Mg quartiles (Q4=highest as reference) — PRIMARY outcome ─
-# ── A2: Mg quartiles (Q4=highest as reference) — PRIMARY outcome ─
-cat("\n  A2: Mg quartiles (Q4 = reference), KDIGO Stage ≥1...\n")
+# Quartiles
+cat("\n  A2: Mg quartiles (Q4 = ref), KDIGO >=1:\n")
 tryCatch({
   dat_a$mg_q <- relevel(factor(dat_a$mg_quartile), ref = "Q4")
-  if (!"aki_kdigo1" %in% names(dat_a)) {
-    dat_a$aki_kdigo1 <- as.integer(dat_a$aki_primary == 1 | dat_a$aki_delta03 == 1)
-  }
+  m <- glm(as.formula(paste("aki_kdigo1 ~ mg_q +", cov_rhs)),
+           data = dat_a, family = binomial())
+  s <- tidy(m, conf.int = TRUE, exponentiate = TRUE) %>% filter(grepl("mg_q", term))
+  print(s %>% select(term, estimate, conf.low, conf.high, p.value))
+  results_list[["A2_quartiles"]] <<- s
+}, error = function(e) cat(sprintf("  Failed: %s\n", e$message)))
 
-  f_a2 <- as.formula(paste("aki_kdigo1 ~ mg_q +", cov_rhs))
-  m_a2 <- glm(f_a2, data = dat_a, family = binomial())
-  # Cluster-robust SE by hospital
-  if (length(unique(dat_a$hospitalid)) > 1) {
-    m_a2_robust <- coeftest(m_a2, vcov = vcovCL(m_a2, cluster = dat_a$hospitalid))
-    cat("  Quartile results (cluster-robust SE):\n")
-    print(m_a2_robust[grep("mg_q", rownames(m_a2_robust)), ])
-  }
-  s_a2 <- tidy(m_a2, conf.int = TRUE, exponentiate = TRUE)
-  q_rows <- s_a2 %>% filter(grepl("mg_q", term))
-  cat("\n  Quartile ORs:\n")
-  print(q_rows %>% select(term, estimate, conf.low, conf.high, p.value))
-  results_list[["A2_quartiles"]] <- q_rows
-}, error = function(e) cat(sprintf("  A2 failed: %s\n", e$message)))
-
-# ── A3: Restricted cubic spline (dose-response) ─────────────────
-cat("\n  A3: RCS dose-response...\n")
-tryCatch({
-  f_a3 <- as.formula(paste("aki_kdigo1 ~ ns(first_mg_value, df=4) +", cov_rhs))
-  m_a3 <- glm(f_a3, data = dat_a, family = binomial())
-  cat("  Spline model AIC:", AIC(m_a3), "\n")
-  results_list[["A3_spline_aic"]] <- AIC(m_a3)
-}, error = function(e) cat(sprintf("  A3 failed: %s\n", e$message)))
-
-# ── A4: Cox for time-to-AKI ─────────────────────────────────────
-cat("\n  A4: Cox proportional hazards (time-to-AKI)...\n")
-tryCatch({
-  dat_a_surv <- dat_a %>%
-    filter(!is.na(time_to_event_hours), time_to_event_hours > 0)
-
-  if (nrow(dat_a_surv) > 20) {
-    f_a4 <- as.formula(paste(
-      "Surv(time_to_event_hours, aki_kdigo1) ~ mg_neg +", cov_rhs
-    ))
-    if (length(unique(dat_a_surv$hospitalid)) > 1) {
-      m_a4 <- coxph(f_a4, data = dat_a_surv,
-                     cluster = hospitalid)
-    } else {
-      m_a4 <- coxph(f_a4, data = dat_a_surv)
-    }
-    s_a4 <- tidy(m_a4, conf.int = TRUE, exponentiate = TRUE)
-    mg_hr <- s_a4 %>% filter(term == "mg_neg")
-    if (nrow(mg_hr) > 0) {
-      cat(sprintf("    HR per 1 mg/dL decrease = %.2f (%.2f–%.2f), p = %.4f\n",
-                  mg_hr$estimate, mg_hr$conf.low, mg_hr$conf.high,
-                  mg_hr$p.value))
-    }
-    results_list[["A4_cox"]] <- mg_hr
-  }
-}, error = function(e) cat(sprintf("  A4 failed: %s\n", e$message)))
-
-# ── A_sens: Eadon baseline sensitivity ──────────────────────────
-cat("\n  A_sens: Eadon baseline (lowest 48h) sensitivity...\n")
-tryCatch({
-  if ("baseline_cr_eadon" %in% names(dat_a)) {
-    dat_a_eadon <- dat_a %>%
-      filter(!is.na(baseline_cr_eadon)) %>%
-      mutate(baseline_cr_orig = baseline_cr,
-             baseline_cr = baseline_cr_eadon)
-    # Re-derive AKI with Eadon baseline (simplified — ratio only)
-    dat_a_eadon <- dat_a_eadon %>%
-      mutate(max_cr_ratio_eadon = max_followup_cr / baseline_cr,
-             aki_eadon = as.integer(max_cr_ratio_eadon >= 1.5))
-
-    f_eadon <- as.formula(paste("aki_eadon ~ mg_neg +", cov_rhs))
-    m_eadon <- glm(f_eadon, data = dat_a_eadon, family = binomial())
-    s_eadon <- tidy(m_eadon, conf.int = TRUE, exponentiate = TRUE)
-    mg_eadon <- s_eadon %>% filter(term == "mg_neg")
-    if (nrow(mg_eadon) > 0) {
-      cat(sprintf("    OR (Eadon baseline) = %.2f (%.2f–%.2f)\n",
-                  mg_eadon$estimate, mg_eadon$conf.low, mg_eadon$conf.high))
-    }
-    results_list[["A_sens_eadon"]] <- mg_eadon
-  }
-}, error = function(e) cat(sprintf("  Eadon sensitivity failed: %s\n", e$message)))
 
 # =====================================================================
-# ANALYSIS B: TTE — Mg supplementation → AKI
+# TTE SUITE (runs for both unrestricted and restricted)
 # =====================================================================
-if (!is.null(dat_b) && nrow(dat_b) > 10) {
+run_suite <- function(dat, dat_m, title, pfx) {
+  if (is.null(dat) || nrow(dat) < 20) {
+    cat(sprintf("\n  Skipping %s\n", title)); return() }
+  dat <- add_aki(dat)
+  if (!is.null(dat_m)) dat_m <- add_aki(dat_m)
+
   cat("\n", strrep("=", 70), "\n")
-  cat("ANALYSIS B: TTE — Mg supplementation → AKI\n")
+  cat(sprintf("%s  [N=%d, trt=%d]\n", title, nrow(dat), sum(dat$trt)))
   cat(strrep("=", 70), "\n")
 
-  # Derive all AKI outcomes for TTE cohort
-  if (!"aki_kdigo1" %in% names(dat_b)) {
-    dat_b$aki_kdigo1 <- as.integer(dat_b$aki_primary == 1 | dat_b$aki_delta03 == 1)
-  }
-  if (!is.null(dat_b_m) && !"aki_kdigo1" %in% names(dat_b_m)) {
-    dat_b_m$aki_kdigo1 <- as.integer(dat_b_m$aki_primary == 1 | dat_b_m$aki_delta03 == 1)
-  }
+  # ── B. POAF (positive control) ─────────────────────────────────
+  r_all  <- iptw_or(dat, "poaf", "POAF (overall)")
+  r_nobb <- iptw_or(dat %>% filter(has_betablocker == 0), "poaf", "POAF (no BB)")
+  r_bb   <- iptw_or(dat %>% filter(has_betablocker == 1), "poaf", "POAF (with BB)")
+  ptbl(list(r_all, r_nobb, r_bb), "B. POSITIVE CONTROL: POAF")
+  for (r in list(r_all, r_nobb, r_bb))
+    if (!is.null(r)) results_list[[paste0(pfx, "_", r$label)]] <<- r
 
-  # ── B1: IPTW across ALL AKI definitions ───────────────────────
-  cat("\n  B1: Mg supplementation effect across AKI severity (IPTW):\n")
-  cat(sprintf("  %-45s %8s %15s %10s\n", "Outcome", "Events", "OR (95% CI)", "p"))
-  cat(strrep("-", 85), "\n")
+  # ── C. AKI severity-stratified ─────────────────────────────────
+  aki_oc <- c(aki_delta03="Delta >=0.3", aki_kdigo1="KDIGO >=1",
+              aki_primary="Ratio >=1.5x", aki_stage2="Stage >=2",
+              aki_stage3="Stage >=3")
+  aki_r <- lapply(names(aki_oc), function(o) iptw_or(dat, o, aki_oc[[o]]))
+  ptbl(aki_r, "C. PRIMARY: AKI severity-stratified")
+  for (r in aki_r) if (!is.null(r))
+    results_list[[paste0(pfx, "_aki_", r$label)]] <<- r
 
-  b_outcomes <- c(
-    "aki_delta03" = "Delta ≥0.3 (mildest)",
-    "aki_kdigo1"  = "KDIGO Stage ≥1 (union)",
-    "aki_primary" = "Ratio ≥1.5× (moderate)",
-    "aki_stage2"  = "Stage ≥2 (severe)",
-    "aki_stage3"  = "Stage ≥3 (most severe)"
-  )
+  # AKI x BB
+  r_nobb <- iptw_or(dat %>% filter(has_betablocker==0), "aki_primary", "AKI 1.5x (no BB)")
+  r_bb   <- iptw_or(dat %>% filter(has_betablocker==1), "aki_primary", "AKI 1.5x (with BB)")
+  ptbl(list(r_nobb, r_bb), "C2. AKI x beta-blocker")
+  for (r in list(r_nobb, r_bb))
+    if (!is.null(r)) results_list[[paste0(pfx, "_", r$label)]] <<- r
 
-  if ("hospitalid" %in% names(dat_b)) {
-    des <- svydesign(ids = ~hospitalid, weights = ~iptw, data = dat_b)
-  } else {
-    des <- svydesign(ids = ~1, weights = ~iptw, data = dat_b)
-  }
-
-  for (outcome_var in names(b_outcomes)) {
-    if (!outcome_var %in% names(dat_b)) next
-    label <- b_outcomes[[outcome_var]]
-    n_events <- sum(dat_b[[outcome_var]], na.rm = TRUE)
-
-    tryCatch({
-      f <- as.formula(paste(outcome_var, "~ trt"))
-      m <- svyglm(f, design = des, family = quasibinomial())
-      s <- tidy(m, conf.int = TRUE, exponentiate = TRUE)
-      trt_row <- s %>% filter(term == "trt")
-
-      if (nrow(trt_row) > 0) {
-        cat(sprintf("  %-45s %8d %5.2f (%.2f-%.2f) %10.4f\n",
-                    label, n_events,
-                    trt_row$estimate, trt_row$conf.low, trt_row$conf.high,
-                    trt_row$p.value))
-        results_list[[paste0("B1_", outcome_var)]] <- tibble(
-          model = paste0("B1_", outcome_var), term = "mg_supplementation",
-          estimate = trt_row$estimate, conf.low = trt_row$conf.low,
-          conf.high = trt_row$conf.high, p.value = trt_row$p.value,
-          n_events = n_events
-        )
-      }
-    }, error = function(e) {
-      cat(sprintf("  %-45s %8d   FAILED: %s\n", label, n_events, e$message))
-    })
-  }
-
-  # ── B2: IPTW-weighted Cox (ratio ≥1.5× — where protective trend is) ─
-  cat("\n  B2: IPTW-weighted Cox (ratio ≥1.5×)...\n")
+  # Sensitivity (Cox, OW, matching) for ratio >=1.5x
+  cat("\n  C3. Sensitivity (ratio >=1.5x):\n")
   tryCatch({
-    dat_b_surv <- dat_b %>%
-      filter(!is.na(time_to_event_hours), time_to_event_hours > 0)
-    if (nrow(dat_b_surv) > 10) {
-      m_b2 <- coxph(Surv(time_to_event_hours, aki_primary) ~ trt,
-                     weights = iptw, data = dat_b_surv,
-                     robust = TRUE)
-      s_b2 <- tidy(m_b2, conf.int = TRUE, exponentiate = TRUE)
-      cat(sprintf("    IPTW HR = %.2f (%.2f–%.2f)\n",
-                  s_b2$estimate[1], s_b2$conf.low[1], s_b2$conf.high[1]))
-      results_list[["B2_iptw_cox"]] <- s_b2
-    }
-  }, error = function(e) cat(sprintf("  B2 failed: %s\n", e$message)))
-
-  # ── B3: Overlap-weighted (ratio ≥1.5×) ─────────────────────────
-  cat("\n  B3: Overlap-weighted logistic (ratio ≥1.5×)...\n")
-  tryCatch({
-    des_ow <- svydesign(ids = ~1, weights = ~ow, data = dat_b)
-    m_b3 <- svyglm(aki_primary ~ trt, design = des_ow,
-                    family = quasibinomial())
-    s_b3 <- tidy(m_b3, conf.int = TRUE, exponentiate = TRUE)
-    trt_ow <- s_b3 %>% filter(term == "trt")
-    if (nrow(trt_ow) > 0) {
-      cat(sprintf("    OW OR = %.2f (%.2f–%.2f)\n",
-                  trt_ow$estimate, trt_ow$conf.low, trt_ow$conf.high))
-      results_list[["B3_overlap"]] <- trt_ow
-    }
-  }, error = function(e) cat(sprintf("  B3 failed: %s\n", e$message)))
-
-  # ── B4: PS-matched logistic (ratio ≥1.5×) ──────────────────────
-  if (!is.null(dat_b_m) && nrow(dat_b_m) > 4) {
-    cat("\n  B4: PS-matched logistic (ratio ≥1.5×)...\n")
-    tryCatch({
-      if (!"aki_primary" %in% names(dat_b_m)) dat_b_m$aki_primary <- dat_b_m$aki_kdigo1
-      m_b4 <- glm(aki_primary ~ trt, data = dat_b_m,
-                   family = binomial(), weights = weights)
-      s_b4 <- tidy(m_b4, conf.int = TRUE, exponentiate = TRUE)
-      trt_m <- s_b4 %>% filter(term == "trt")
-      if (nrow(trt_m) > 0) {
-        cat(sprintf("    Matched OR = %.2f (%.2f–%.2f)\n",
-                    trt_m$estimate, trt_m$conf.low, trt_m$conf.high))
-        results_list[["B4_matched"]] <- trt_m
-      }
-    }, error = function(e) cat(sprintf("  B4 failed: %s\n", e$message)))
-  }
-
-  # ── E-value (TTE Tier 1 — unmeasured confounding) ─────────────
-  if (HAS_EVALUE) {
-    cat("\n  E-value (unmeasured confounding sensitivity)...\n")
-    tryCatch({
-      # Use the aki_primary result from B1 stratified table
-      b1_primary <- results_list[["B1_aki_primary"]]
-      if (!is.null(b1_primary) && nrow(b1_primary) > 0) {
-        ev <- evalues.OR(est = b1_primary$estimate,
-                         lo  = b1_primary$conf.low,
-                         hi  = b1_primary$conf.high,
-                         rare = (mean(dat_b$aki_primary) < 0.15))
-        cat("  E-value results (ratio ≥1.5×):\n")
-        print(ev)
-        results_list[["B_evalue"]] <- ev
-      } else {
-        cat("  No aki_primary result available for E-value\n")
-      }
-    }, error = function(e) cat(sprintf("  E-value failed: %s\n", e$message)))
-  } else {
-    cat("\n  Skipping E-value (EValue package not available)\n")
-  }
-}
-
-# =====================================================================
-# TTE-B: UNRESTRICTED — routine Mg supplementation (all patients)
-# =====================================================================
-dat_b2 <- tryCatch(
-  read_csv(file.path(RESULTS, "02e_tteb_iptw.csv"), show_col_types = FALSE),
-  error = function(e) NULL
-)
-dat_b2_m <- tryCatch(
-  read_csv(file.path(RESULTS, "02f_tteb_matched.csv"), show_col_types = FALSE),
-  error = function(e) NULL
-)
-
-if (!is.null(dat_b2) && nrow(dat_b2) > 10) {
-  cat("\n", strrep("=", 70), "\n")
-  cat("TTE-B: Unrestricted — routine Mg supplementation (all patients)\n")
-  cat(strrep("=", 70), "\n")
-
-  # Derive AKI outcomes
-  if (!"aki_kdigo1" %in% names(dat_b2)) {
-    dat_b2$aki_kdigo1 <- as.integer(dat_b2$aki_primary == 1 | dat_b2$aki_delta03 == 1)
-  }
-
-  cat(sprintf("  N = %d (treated: %d, untreated: %d)\n",
-              nrow(dat_b2), sum(dat_b2$trt), sum(dat_b2$trt == 0)))
-
-  # ── B2-1: IPTW across AKI severity ────────────────────────────
-  cat("\n  B2-1: Mg supplementation effect across AKI severity (IPTW, ALL patients):\n")
-  cat(sprintf("  %-45s %8s %15s %10s\n", "Outcome", "Events", "OR (95% CI)", "p"))
-  cat(strrep("-", 85), "\n")
-
-  b2_outcomes <- c(
-    "aki_delta03" = "Delta >=0.3 (mildest)",
-    "aki_kdigo1"  = "KDIGO Stage >=1 (union)",
-    "aki_primary" = "Ratio >=1.5x (moderate)",
-    "aki_stage2"  = "Stage >=2 (severe)",
-    "aki_stage3"  = "Stage >=3 (most severe)"
-  )
-
-  if ("hospitalid" %in% names(dat_b2)) {
-    des_b2 <- svydesign(ids = ~hospitalid, weights = ~iptw, data = dat_b2)
-  } else {
-    des_b2 <- svydesign(ids = ~1, weights = ~iptw, data = dat_b2)
-  }
-
-  for (outcome_var in names(b2_outcomes)) {
-    if (!outcome_var %in% names(dat_b2)) next
-    label <- b2_outcomes[[outcome_var]]
-    n_events <- sum(dat_b2[[outcome_var]], na.rm = TRUE)
-
-    tryCatch({
-      f <- as.formula(paste(outcome_var, "~ trt"))
-      m <- svyglm(f, design = des_b2, family = quasibinomial())
-      s <- tidy(m, conf.int = TRUE, exponentiate = TRUE)
-      trt_row <- s %>% filter(term == "trt")
-
-      if (nrow(trt_row) > 0) {
-        cat(sprintf("  %-45s %8d %5.2f (%.2f-%.2f) %10.4f\n",
-                    label, n_events,
-                    trt_row$estimate, trt_row$conf.low, trt_row$conf.high,
-                    trt_row$p.value))
-        results_list[[paste0("B2_", outcome_var)]] <- tibble(
-          model = paste0("TTE-B_", outcome_var), term = "mg_supplementation",
-          estimate = trt_row$estimate, conf.low = trt_row$conf.low,
-          conf.high = trt_row$conf.high, p.value = trt_row$p.value,
-          n_events = n_events
-        )
-      }
-    }, error = function(e) {
-      cat(sprintf("  %-45s %8d   FAILED: %s\n", label, n_events, e$message))
-    })
-  }
-
-  # ── B2-2: Sensitivity methods (ratio >=1.5x) ──────────────────
-  cat("\n  B2-2: Sensitivity (ratio >=1.5x)...\n")
-
-  # Cox
-  tryCatch({
-    dat_b2_surv <- dat_b2 %>%
-      filter(!is.na(time_to_event_hours), time_to_event_hours > 0)
-    if (nrow(dat_b2_surv) > 10) {
+    ds <- dat %>% filter(!is.na(time_to_event_hours), time_to_event_hours > 0)
+    if (nrow(ds) > 10) {
       m <- coxph(Surv(time_to_event_hours, aki_primary) ~ trt,
-                 weights = iptw, data = dat_b2_surv, robust = TRUE)
+                 weights = iptw, data = ds, robust = TRUE)
       s <- tidy(m, conf.int = TRUE, exponentiate = TRUE)
-      cat(sprintf("    IPTW Cox HR = %.2f (%.2f-%.2f), p = %.4f\n",
+      cat(sprintf("    Cox HR = %.2f (%.2f-%.2f), p=%.4f\n",
                   s$estimate[1], s$conf.low[1], s$conf.high[1], s$p.value[1]))
-      results_list[["TTE-B_cox"]] <- s
+      results_list[[paste0(pfx, "_cox")]] <<- s
     }
-  }, error = function(e) cat(sprintf("    Cox failed: %s\n", e$message)))
-
-  # Overlap weighting
+  }, error = function(e) cat(sprintf("    Cox: %s\n", e$message)))
   tryCatch({
-    des_ow_b2 <- svydesign(ids = ~1, weights = ~ow, data = dat_b2)
-    m <- svyglm(aki_primary ~ trt, design = des_ow_b2, family = quasibinomial())
-    s <- tidy(m, conf.int = TRUE, exponentiate = TRUE)
-    trt_ow <- s %>% filter(term == "trt")
-    if (nrow(trt_ow) > 0) {
-      cat(sprintf("    OW OR = %.2f (%.2f-%.2f), p = %.4f\n",
-                  trt_ow$estimate, trt_ow$conf.low, trt_ow$conf.high, trt_ow$p.value))
-      results_list[["TTE-B_overlap"]] <- trt_ow
-    }
-  }, error = function(e) cat(sprintf("    OW failed: %s\n", e$message)))
+    des <- svydesign(ids=~1, weights=~ow, data=dat)
+    m <- svyglm(aki_primary ~ trt, design=des, family=quasibinomial())
+    s <- tidy(m, conf.int=TRUE, exponentiate=TRUE) %>% filter(term=="trt")
+    if (nrow(s)>0) cat(sprintf("    OW OR = %.2f (%.2f-%.2f), p=%.4f\n",
+                               s$estimate, s$conf.low, s$conf.high, s$p.value))
+    results_list[[paste0(pfx, "_ow")]] <<- s
+  }, error = function(e) cat(sprintf("    OW: %s\n", e$message)))
+  if (!is.null(dat_m) && nrow(dat_m) > 4) tryCatch({
+    m <- glm(aki_primary ~ trt, data=dat_m, family=binomial(), weights=weights)
+    s <- tidy(m, conf.int=TRUE, exponentiate=TRUE) %>% filter(term=="trt")
+    if (nrow(s)>0) cat(sprintf("    Matched OR = %.2f (%.2f-%.2f), p=%.4f\n",
+                               s$estimate, s$conf.low, s$conf.high, s$p.value))
+    results_list[[paste0(pfx, "_matched")]] <<- s
+  }, error = function(e) cat(sprintf("    Match: %s\n", e$message)))
 
-  # PS matching
-  if (!is.null(dat_b2_m) && nrow(dat_b2_m) > 4) {
-    tryCatch({
-      if (!"aki_primary" %in% names(dat_b2_m)) {
-        dat_b2_m$aki_primary <- as.integer(dat_b2_m$aki_kdigo1)
-      }
-      m <- glm(aki_primary ~ trt, data = dat_b2_m,
-               family = binomial(), weights = weights)
-      s <- tidy(m, conf.int = TRUE, exponentiate = TRUE)
-      trt_m <- s %>% filter(term == "trt")
-      if (nrow(trt_m) > 0) {
-        cat(sprintf("    Matched OR = %.2f (%.2f-%.2f), p = %.4f\n",
-                    trt_m$estimate, trt_m$conf.low, trt_m$conf.high, trt_m$p.value))
-        results_list[["TTE-B_matched"]] <- trt_m
-      }
-    }, error = function(e) cat(sprintf("    Matching failed: %s\n", e$message)))
-  }
+  # ── D. NEGATIVE CONTROLS ───────────────────────────────────────
+  nc_oc <- c(nc_fracture="Fracture", nc_skin_infection="Skin infection", nc_uti="UTI")
+  nc_r <- lapply(names(nc_oc), function(o) iptw_or(dat, o, nc_oc[[o]]))
+  ptbl(nc_r, "D. NEGATIVE CONTROLS")
+  for (r in nc_r) if (!is.null(r)) results_list[[paste0(pfx, "_nc_", r$label)]] <<- r
 
-} else {
-  cat("\n  Skipping TTE-B — no data\n")
+  # ── E. NEURO (exploratory) ─────────────────────────────────────
+  neuro_oc <- c(neuro_delirium="Delirium", neuro_seizure="Seizure",
+                neuro_stroke_postop="Stroke (postop)", neuro_encephalopathy="Encephalopathy")
+  neuro_r <- lapply(names(neuro_oc), function(o) iptw_or(dat, o, neuro_oc[[o]]))
+  ptbl(neuro_r, "E. NEURO (exploratory)")
+  for (r in neuro_r) if (!is.null(r)) results_list[[paste0(pfx, "_neuro_", r$label)]] <<- r
+
+  # ── F. SECONDARY ───────────────────────────────────────────────
+  sec_oc <- c(rrt_7d="RRT 7d", icu_mortality="ICU mortality", hosp_mortality="Hospital mortality")
+  sec_r <- lapply(names(sec_oc), function(o) iptw_or(dat, o, sec_oc[[o]]))
+  ptbl(sec_r, "F. SECONDARY")
+  for (r in sec_r) if (!is.null(r)) results_list[[paste0(pfx, "_sec_", r$label)]] <<- r
 }
+
+# ─── Run both TTE designs ───────────────────────────────────────────
+run_suite(dat_tte_b, dat_m_b,
+          "TTE-B: ALL PATIENTS (unrestricted)", "TTEB")
+run_suite(dat_tte_a, NULL,
+          "TTE-A: HYPOMAGNESEMIA ONLY (Mg < 2.0)", "TTEA")
+
+
+# =====================================================================
+# SAVE
 # =====================================================================
 cat("\n", strrep("=", 70), "\n")
 cat("RESULTS SUMMARY\n")
 cat(strrep("=", 70), "\n")
 
-summary_rows <- list()
+rows <- list()
 for (nm in names(results_list)) {
   obj <- results_list[[nm]]
-  if (is.data.frame(obj) && "estimate" %in% names(obj)) {
-    for (i in seq_len(nrow(obj))) {
-      summary_rows[[length(summary_rows) + 1]] <- tibble(
+  if (is.data.frame(obj) && "estimate" %in% names(obj))
+    for (i in seq_len(nrow(obj)))
+      rows[[length(rows)+1]] <- tibble(
         model = nm,
-        term = obj$term[i],
+        term = if ("label" %in% names(obj)) obj$label[i] else obj$term[i],
         estimate = obj$estimate[i],
-        conf.low = ifelse("conf.low" %in% names(obj), obj$conf.low[i], NA),
-        conf.high = ifelse("conf.high" %in% names(obj), obj$conf.high[i], NA),
-        p.value = ifelse("p.value" %in% names(obj), obj$p.value[i], NA),
-      )
-    }
-  }
+        conf.low = if ("conf.low" %in% names(obj)) obj$conf.low[i] else NA,
+        conf.high = if ("conf.high" %in% names(obj)) obj$conf.high[i] else NA,
+        p.value = if ("p.value" %in% names(obj)) obj$p.value[i] else NA,
+        n_events = if ("n_events" %in% names(obj)) obj$n_events[i] else NA)
 }
-
-if (length(summary_rows) > 0) {
-  summary_df <- bind_rows(summary_rows)
-  write_csv(summary_df, file.path(RESULTS, "03_results_summary.csv"))
-  cat("\n")
-  print(summary_df, n = 50)
-  cat(sprintf("\n  Saved: %s\n", file.path(RESULTS, "03_results_summary.csv")))
-} else {
-  cat("  No results to summarize (likely demo data too small)\n")
+if (length(rows) > 0) {
+  df <- bind_rows(rows)
+  write_csv(df, file.path(RESULTS, "03_results_summary.csv"))
+  print(df, n = 100)
+  cat(sprintf("\nSaved: %s\n", file.path(RESULTS, "03_results_summary.csv")))
 }
-
 cat("\n03_models.R COMPLETE\n")

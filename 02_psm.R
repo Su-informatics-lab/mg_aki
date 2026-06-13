@@ -72,7 +72,8 @@ cov_formula_rhs <- paste(c(
   "hx_copd", "hx_pvd", "hx_stroke", "hx_liver",
   "baseline_cr", "baseline_egfr",
   "nephrotox_loop_diuretic", "nephrotox_nsaid",
-  "nephrotox_acei_arb", "nephrotox_ppi"
+  "nephrotox_acei_arb", "nephrotox_ppi",
+  "has_betablocker", "has_steroid"
 ), collapse = " + ")
 
 # Add APACHE if available
