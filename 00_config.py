@@ -173,8 +173,80 @@ SURGERY_TYPE_MAP = {
 }
 
 # =====================================================================
-# ANALYSIS
+# POSITIVE CONTROL: POAF (postoperative atrial fibrillation)
 # =====================================================================
+# Diagnosis table patterns for NEW-ONSET POAF
+POAF_DX_PATTERNS = [
+    "atrial fibrillation",
+    "atrial flutter",
+    "a fib",
+    "afib",
+    "a-fib",
+    "a. fib",
+    "rapid afib",
+]
+# Pre-existing AF patterns in pastHistory (for exclusion)
+PREEXISTING_AF_PATTERNS = [
+    "atrial fibrillation",
+    "atrial flutter",
+    "afib",
+    "a-fib",
+    "chronic atrial",
+    "paroxysmal atrial",
+]
+POAF_WINDOW_MIN = 7 * 24 * 60  # 7 days in minutes
+
+# =====================================================================
+# EFFECT MODIFIERS: β-blockers, steroids
+# =====================================================================
+BETA_BLOCKER_PATTERNS = [
+    "metoprolol",
+    "atenolol",
+    "propranolol",
+    "carvedilol",
+    "bisoprolol",
+    "labetalol",
+    "nadolol",
+    "sotalol",
+    "esmolol",
+    "timolol",
+    "nebivolol",
+    "betaxolol",
+]
+
+STEROID_PATTERNS = [
+    "methylprednisolone",
+    "dexamethasone",
+    "hydrocortisone",
+    "prednisone",
+    "prednisolone",
+    "solumedrol",
+]
+
+# =====================================================================
+# NEGATIVE CONTROLS (bias calibration)
+# =====================================================================
+NEGATIVE_CONTROL_DX = {
+    "fracture": ["fracture"],
+    "skin_infection": ["cellulitis", "skin infection", "abscess"],
+    "uti": ["urinary tract infection", "uti", "cystitis"],
+}
+
+# =====================================================================
+# EXPLORATORY: Neurological outcomes (descriptive)
+# =====================================================================
+NEURO_DX_PATTERNS = {
+    "delirium": ["delirium", "confusion", "altered mental", "agitation"],
+    "seizure": ["seizure", "convulsion", "epilep"],
+    "stroke_postop": [
+        "stroke",
+        "cerebrovascular accident",
+        "cva",
+        "intracranial hemorrhage",
+        "cerebral infarct",
+    ],
+    "encephalopathy": ["encephalopathy", "metabolic encephalop"],
+}
 RANDOM_SEED = 42
 PS_CALIPER = 0.2  # SD of logit(PS)
 IPTW_TRIM_PERCENTILE = (1, 99)  # truncate at 1st/99th percentile

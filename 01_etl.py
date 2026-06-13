@@ -657,6 +657,114 @@ def build_covariates(t, cohort):
     print(f"  ICU mortality: {cohort.icu_mortality.sum()}")
     print(f"  Hospital mortality: {cohort.hosp_mortality.sum()}")
 
+    # ── β-blocker detection (effect modifier for POAF) ────────────
+    print("\n  Effect modifiers:")
+    bb_pids = set()
+    if len(ad_elig) > 0 and "drugname" in ad_elig.columns:
+        bb_pids |= set(
+            ad_elig[
+                matches_any(ad_elig.drugname, cfg.BETA_BLOCKER_PATTERNS)
+            ].patientunitstayid
+        )
+    if len(med_elig) > 0:
+        bb_early = med_elig[
+            matches_any(med_elig.drugname, cfg.BETA_BLOCKER_PATTERNS)
+            & (med_elig.drugstartoffset <= cfg.MG_WINDOW_MIN)
+        ]
+        bb_pids |= set(bb_early.patientunitstayid)
+    cohort["has_betablocker"] = cohort.patientunitstayid.isin(bb_pids).astype(int)
+    print(
+        f"    β-blocker (admission or early postop): {cohort.has_betablocker.sum()} "
+        f"({cohort.has_betablocker.mean()*100:.1f}%)"
+    )
+
+    # ── Steroid detection ─────────────────────────────────────────
+    steroid_pids = set()
+    if len(med_elig) > 0:
+        st_early = med_elig[
+            matches_any(med_elig.drugname, cfg.STEROID_PATTERNS)
+            & (med_elig.drugstartoffset <= cfg.MG_WINDOW_MIN)
+        ]
+        steroid_pids = set(st_early.patientunitstayid)
+    cohort["has_steroid"] = cohort.patientunitstayid.isin(steroid_pids).astype(int)
+    print(
+        f"    Steroid (early postop): {cohort.has_steroid.sum()} "
+        f"({cohort.has_steroid.mean()*100:.1f}%)"
+    )
+
+    # ── POAF detection (positive control) ─────────────────────────
+    print("\n  Outcome: POAF (positive control):")
+    dx = t["diagnosis"]
+    dx_elig = dx[dx.patientunitstayid.isin(pids)] if len(dx) > 0 else pd.DataFrame()
+
+    # Pre-existing AF exclusion
+    ph_elig = ph[ph.patientunitstayid.isin(pids)] if len(ph) > 0 else pd.DataFrame()
+    preexist_af_pids = set()
+    if len(ph_elig) > 0:
+        preexist_af_pids = set(
+            ph_elig[
+                matches_any(ph_elig.pasthistorypath, cfg.PREEXISTING_AF_PATTERNS)
+                | matches_any(ph_elig.pasthistoryvalue, cfg.PREEXISTING_AF_PATTERNS)
+            ].patientunitstayid
+        )
+    cohort["preexisting_af"] = cohort.patientunitstayid.isin(preexist_af_pids).astype(
+        int
+    )
+    print(
+        f"    Pre-existing AF (excluded from POAF analysis): {cohort.preexisting_af.sum()}"
+    )
+
+    # New-onset POAF within 7 days
+    poaf_pids = set()
+    if len(dx_elig) > 0 and "diagnosisstring" in dx_elig.columns:
+        poaf_dx = dx_elig[
+            matches_any(dx_elig.diagnosisstring, cfg.POAF_DX_PATTERNS)
+            & (dx_elig.diagnosisoffset >= 0)
+            & (dx_elig.diagnosisoffset <= cfg.POAF_WINDOW_MIN)
+        ]
+        poaf_pids = set(poaf_dx.patientunitstayid) - preexist_af_pids
+    cohort["poaf"] = cohort.patientunitstayid.isin(poaf_pids).astype(int)
+    # For patients with pre-existing AF, POAF is not assessable
+    cohort.loc[cohort.preexisting_af == 1, "poaf"] = np.nan
+    n_poaf = cohort.poaf.sum()
+    n_eligible_poaf = (cohort.preexisting_af == 0).sum()
+    print(
+        f"    POAF (new-onset, 7d): {int(n_poaf)} / {n_eligible_poaf} "
+        f"({n_poaf/n_eligible_poaf*100:.1f}%)"
+        if n_eligible_poaf > 0
+        else "    POAF: 0"
+    )
+
+    # ── Negative control outcomes ─────────────────────────────────
+    print("\n  Negative controls:")
+    for nc_name, nc_patterns in cfg.NEGATIVE_CONTROL_DX.items():
+        nc_pids = set()
+        if len(dx_elig) > 0 and "diagnosisstring" in dx_elig.columns:
+            nc_dx = dx_elig[
+                matches_any(dx_elig.diagnosisstring, nc_patterns)
+                & (dx_elig.diagnosisoffset >= 0)
+                & (dx_elig.diagnosisoffset <= cfg.POAF_WINDOW_MIN)
+            ]
+            nc_pids = set(nc_dx.patientunitstayid)
+        cohort[f"nc_{nc_name}"] = cohort.patientunitstayid.isin(nc_pids).astype(int)
+        print(f"    {nc_name}: {cohort[f'nc_{nc_name}'].sum()}")
+
+    # ── Neurological outcomes (exploratory/descriptive) ────────────
+    print("\n  Neuro outcomes (exploratory):")
+    for neuro_name, neuro_patterns in cfg.NEURO_DX_PATTERNS.items():
+        neuro_pids = set()
+        if len(dx_elig) > 0 and "diagnosisstring" in dx_elig.columns:
+            neuro_dx = dx_elig[
+                matches_any(dx_elig.diagnosisstring, neuro_patterns)
+                & (dx_elig.diagnosisoffset >= 0)
+                & (dx_elig.diagnosisoffset <= cfg.POAF_WINDOW_MIN)
+            ]
+            neuro_pids = set(neuro_dx.patientunitstayid)
+        cohort[f"neuro_{neuro_name}"] = cohort.patientunitstayid.isin(
+            neuro_pids
+        ).astype(int)
+        print(f"    {neuro_name}: {cohort[f'neuro_{neuro_name}'].sum()}")
+
     return cohort
 
 
