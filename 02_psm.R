@@ -41,7 +41,7 @@ suppressPackageStartupMessages({
   library(tableone)
 })
 
-RESULTS <- Sys.getenv("RESULTS", unset = "~/mg_aki/results")
+RESULTS <- path.expand("~/mg_aki/results")
 
 # ─── Load cohorts ───────────────────────────────────────────────────
 cat("Loading cohorts...\n")

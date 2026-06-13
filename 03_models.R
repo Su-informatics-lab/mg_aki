@@ -60,7 +60,7 @@ suppressPackageStartupMessages({
   library(splines)
 })
 
-RESULTS <- Sys.getenv("RESULTS", unset = "~/mg_aki/results")
+RESULTS <- path.expand("~/mg_aki/results")
 
 # ─── Load data ──────────────────────────────────────────────────────
 cat("Loading prepared data...\n")

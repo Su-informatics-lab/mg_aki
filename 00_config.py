@@ -9,13 +9,12 @@ Usage: imported by 01_etl.py, 02_analysis.py
 import os
 
 # =====================================================================
-# PATHS — change DATA_ROOT for full dataset
+# PATHS — Tempest (g91p721)
 # =====================================================================
-DATA_ROOT = os.environ.get(
-    "EICU_DATA",
-    os.path.expanduser("~/mg_aki/eicu-collaborative-research-database-demo-2.0.1"),
-)
-RESULTS = os.environ.get("RESULTS", os.path.expanduser("~/mg_aki/results"))
+_FULL = os.path.expanduser("~/mg_aki/eicu-crd-2.0")
+_DEMO = os.path.expanduser("~/mg_aki/eicu-collaborative-research-database-demo-2.0.1")
+DATA_ROOT = _FULL if os.path.isdir(_FULL) else _DEMO
+RESULTS = os.path.expanduser("~/mg_aki/results")
 os.makedirs(RESULTS, exist_ok=True)
 
 # =====================================================================
