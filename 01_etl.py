@@ -305,28 +305,29 @@ def compute_baseline_cr(t, eligible_pids, mg_offsets):
     pre_icu_bl["baseline_source"] = "pre_icu"
     n_pre = len(pre_icu_bl)
 
-    # Fallback: first Cr > 0 but BEFORE Mg measurement
+    # Fallback: first Cr within 12h of ICU admission (regardless of Mg timing).
+    # Rationale: baseline Cr is the REFERENCE VALUE for pre-injury renal
+    # function, not the exposure. Temporal anchoring applies to the AKI
+    # EVENT (Cr rise must occur AFTER Mg measurement), not the baseline.
+    # In eICU, Cr and Mg are often drawn from the same panel at the same
+    # offset, so requiring Cr < Mg offset drops most patients.
+    FALLBACK_WINDOW = 720  # 12h post-admit
     pids_need_fallback = eligible_pids - set(pre_icu_bl.patientunitstayid)
     if pids_need_fallback:
         fb_pool = cr[
-            cr.patientunitstayid.isin(pids_need_fallback) & (cr.labresultoffset > 0)
+            cr.patientunitstayid.isin(pids_need_fallback)
+            & (cr.labresultoffset >= -60)
+            & (cr.labresultoffset <= FALLBACK_WINDOW)
         ].copy()
-        # Only keep Cr measured BEFORE the Mg lab for each patient
-        fb_rows = []
-        for pid, grp in fb_pool.groupby("patientunitstayid"):
-            mg_off = mg_offsets.get(pid, cfg.MG_WINDOW_MIN)
-            before_mg = grp[grp.labresultoffset < mg_off]
-            if len(before_mg) > 0:
-                fb_rows.append(before_mg.sort_values("labresultoffset").iloc[0])
-        if fb_rows:
-            fb_df = pd.DataFrame(fb_rows)[["patientunitstayid", "labresult"]].rename(
-                columns={"labresult": "baseline_cr"}
-            )
-            fb_df["baseline_source"] = "first_post_icu"
-        else:
-            fb_df = pd.DataFrame(
-                columns=["patientunitstayid", "baseline_cr", "baseline_source"]
-            )
+        # Take the first (earliest) Cr per patient as baseline
+        fb_df = (
+            fb_pool.sort_values("labresultoffset")
+            .groupby("patientunitstayid")
+            .first()
+            .reset_index()[["patientunitstayid", "labresult"]]
+            .rename(columns={"labresult": "baseline_cr"})
+        )
+        fb_df["baseline_source"] = "first_admission"
     else:
         fb_df = pd.DataFrame(
             columns=["patientunitstayid", "baseline_cr", "baseline_source"]
@@ -336,7 +337,7 @@ def compute_baseline_cr(t, eligible_pids, mg_offsets):
     baseline_primary = pd.concat([pre_icu_bl, fb_df], ignore_index=True)
     print(f"  PRIMARY baseline:")
     print(f"    Pre-ICU (lowest in [-12h, 0]): {n_pre:,}")
-    print(f"    Fallback (first post-ICU < Mg): {n_fb:,}")
+    print(f"    Fallback (first admission Cr, [-1h, 12h]): {n_fb:,}")
     print(f"    Total with baseline: {len(baseline_primary):,}")
 
     # ── Sensitivity: Approach 1 (Eadon) ──────────────────────────

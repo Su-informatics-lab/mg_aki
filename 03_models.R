@@ -19,26 +19,43 @@
 
 # ─── Auto-install dependencies ──────────────────────────────────────
 local({
-  pkgs <- c("tidyverse", "lme4", "survival", "survey",
-            "sandwich", "lmtest", "EValue", "broom", "splines")
-  # splines is base R, but keep it in the list harmlessly
-  missing <- pkgs[!sapply(pkgs, requireNamespace, quietly = TRUE)]
-  if (length(missing) > 0) {
-    cat(sprintf("Installing %d missing packages: %s\n",
-                length(missing), paste(missing, collapse = ", ")))
-    install.packages(missing, repos = "https://cloud.r-project.org",
+  # lme4 requires nloptr which needs cmake — make it optional
+  pkgs_required <- c("tidyverse", "survival", "survey",
+                     "sandwich", "lmtest", "broom")
+  pkgs_optional <- c("lme4", "EValue")  # nice-to-have but not fatal
+
+  missing_req <- pkgs_required[!sapply(pkgs_required, requireNamespace, quietly = TRUE)]
+  if (length(missing_req) > 0) {
+    cat(sprintf("Installing %d required packages: %s\n",
+                length(missing_req), paste(missing_req, collapse = ", ")))
+    install.packages(missing_req, repos = "https://cloud.r-project.org",
                      quiet = TRUE, Ncpus = parallel::detectCores())
+  }
+  missing_opt <- pkgs_optional[!sapply(pkgs_optional, requireNamespace, quietly = TRUE)]
+  if (length(missing_opt) > 0) {
+    cat(sprintf("Attempting %d optional packages: %s\n",
+                length(missing_opt), paste(missing_opt, collapse = ", ")))
+    tryCatch(
+      install.packages(missing_opt, repos = "https://cloud.r-project.org",
+                       quiet = TRUE, Ncpus = parallel::detectCores()),
+      error = function(e) cat("  (some optional packages failed — continuing)\n")
+    )
   }
 })
 
+HAS_LME4 <- requireNamespace("lme4", quietly = TRUE)
+HAS_EVALUE <- requireNamespace("EValue", quietly = TRUE)
+if (!HAS_LME4) cat("  NOTE: lme4 unavailable — using glm + cluster-robust SE instead\n")
+if (!HAS_EVALUE) cat("  NOTE: EValue unavailable — skipping E-value computation\n")
+
 suppressPackageStartupMessages({
   library(tidyverse)
-  library(lme4)
+  if (HAS_LME4) library(lme4)
   library(survival)
   library(survey)
   library(sandwich)
   library(lmtest)
-  library(EValue)
+  if (HAS_EVALUE) library(EValue)
   library(broom)
   library(splines)
 })
@@ -83,13 +100,14 @@ tryCatch({
   # Negate Mg so positive coefficient = lower Mg → higher AKI
   dat_a$mg_neg <- -dat_a$first_mg_value
 
-  if (length(unique(dat_a$hospitalid)) > 1) {
+  if (HAS_LME4 && length(unique(dat_a$hospitalid)) > 1) {
     # Mixed-effects with hospital random intercept
     f_a1 <- as.formula(paste("aki_primary ~ mg_neg +", cov_rhs,
                              "+ (1 | hospitalid)"))
     m_a1 <- glmer(f_a1, data = dat_a, family = binomial(),
                   control = glmerControl(optimizer = "bobyqa"))
   } else {
+    # Fallback: glm + cluster-robust SE
     f_a1 <- as.formula(paste("aki_primary ~ mg_neg +", cov_rhs))
     m_a1 <- glm(f_a1, data = dat_a, family = binomial())
   }
@@ -264,18 +282,22 @@ if (!is.null(dat_b) && nrow(dat_b) > 10) {
   }
 
   # ── E-value (TTE Tier 1 — unmeasured confounding) ─────────────
-  cat("\n  E-value (unmeasured confounding sensitivity)...\n")
-  tryCatch({
-    if (exists("trt_row") && nrow(trt_row) > 0) {
-      ev <- evalues.OR(est = trt_row$estimate,
-                       lo  = trt_row$conf.low,
-                       hi  = trt_row$conf.high,
-                       rare = (mean(dat_b$aki_primary) < 0.15))
-      cat("  E-value results:\n")
-      print(ev)
-      results_list[["B_evalue"]] <- ev
-    }
-  }, error = function(e) cat(sprintf("  E-value failed: %s\n", e$message)))
+  if (HAS_EVALUE) {
+    cat("\n  E-value (unmeasured confounding sensitivity)...\n")
+    tryCatch({
+      if (exists("trt_row") && nrow(trt_row) > 0) {
+        ev <- evalues.OR(est = trt_row$estimate,
+                         lo  = trt_row$conf.low,
+                         hi  = trt_row$conf.high,
+                         rare = (mean(dat_b$aki_primary) < 0.15))
+        cat("  E-value results:\n")
+        print(ev)
+        results_list[["B_evalue"]] <- ev
+      }
+    }, error = function(e) cat(sprintf("  E-value failed: %s\n", e$message)))
+  } else {
+    cat("\n  Skipping E-value (EValue package not available)\n")
+  }
 }
 
 # =====================================================================
