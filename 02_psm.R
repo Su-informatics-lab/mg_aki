@@ -76,9 +76,17 @@ cov_formula_rhs <- paste(c(
   "has_betablocker", "has_steroid"
 ), collapse = " + ")
 
-# Add APACHE if available
+# Add APACHE predicted mortality (pre-treatment) if available — NOT apacheScore (post-treatment!)
+# apacheScore uses worst values in first 24h → includes post-Mg-supplementation physiology → mediator
 if ("apachescore" %in% names(cohort_a)) {
-  cov_formula_rhs <- paste(cov_formula_rhs, "+ apachescore")
+  cat("  NOTE: Using predicted ICU mortality instead of APACHE score (post-treatment variable)\n")
+}
+
+# Add pre-op antiarrhythmic and potassium if available
+for (v in c("preop_antiarrhythmic", "first_k_value")) {
+  if (v %in% names(cohort_a)) {
+    cov_formula_rhs <- paste(cov_formula_rhs, "+", v)
+  }
 }
 
 # =====================================================================

@@ -261,3 +261,50 @@ NEGATIVE_CONTROL_DX = {
     "skin_infection": ["cellulitis", "skin infection", "abscess"],
     "uti": ["urinary tract infection", "uti", "cystitis"],
 }
+
+# =====================================================================
+# COMPOSITE POAF PHENOTYPE (v2 — multi-source)
+# =====================================================================
+# Treatment table patterns for AF management
+POAF_TREATMENT_PATTERNS = [
+    "cardioversion",
+    "rhythm control",
+    "defibrillat",
+    "atrial fibrillation",
+    "atrial flutter",
+]
+
+# NEW postop antiarrhythmic medications (if NOT in admissionDrug → new AF)
+POAF_MED_PATTERNS = [
+    "amiodarone",
+    "sotalol",
+    "flecainide",
+    "propafenone",
+    "ibutilide",
+    "dofetilide",
+    "vernakalant",
+    "dronedarone",
+]
+
+# InfusionDrug patterns for AF treatment
+POAF_INFUSION_PATTERNS = [
+    "amiodarone",
+    "cardizem",
+    "diltiazem",
+]
+
+# Pre-operative antiarrhythmic flag (from admissionDrug)
+PREOP_ANTIARRHYTHMIC_PATTERNS = [
+    "amiodarone",
+    "sotalol",
+    "flecainide",
+    "propafenone",
+    "dofetilide",
+    "dronedarone",
+    "digoxin",
+]
+
+# Potassium lab for electrolyte covariate
+K_LABNAMES = ["potassium"]
+K_PLAUSIBLE_MIN = 1.5
+K_PLAUSIBLE_MAX = 8.0
