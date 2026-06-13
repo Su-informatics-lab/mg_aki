@@ -76,8 +76,8 @@ cov_formula_rhs <- paste(c(
 ), collapse = " + ")
 
 # Add APACHE if available
-if ("apacheScore" %in% names(cohort_a)) {
-  cov_formula_rhs <- paste(cov_formula_rhs, "+ apacheScore")
+if ("apachescore" %in% names(cohort_a)) {
+  cov_formula_rhs <- paste(cov_formula_rhs, "+ apachescore")
 }
 
 # =====================================================================

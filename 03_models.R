@@ -66,7 +66,7 @@ cov_rhs <- paste(c(
   "nephrotox_loop_diuretic", "nephrotox_nsaid",
   "nephrotox_acei_arb"
 ), collapse = " + ")
-if ("apacheScore" %in% names(dat_a)) cov_rhs <- paste(cov_rhs, "+ apacheScore")
+if ("apachescore" %in% names(dat_a)) cov_rhs <- paste(cov_rhs, "+ apachescore")
 
 results_list <- list()
 
@@ -83,10 +83,10 @@ tryCatch({
   # Negate Mg so positive coefficient = lower Mg → higher AKI
   dat_a$mg_neg <- -dat_a$first_mg_value
 
-  if (length(unique(dat_a$hospitalID)) > 1) {
+  if (length(unique(dat_a$hospitalid)) > 1) {
     # Mixed-effects with hospital random intercept
     f_a1 <- as.formula(paste("aki_primary ~ mg_neg +", cov_rhs,
-                             "+ (1 | hospitalID)"))
+                             "+ (1 | hospitalid)"))
     m_a1 <- glmer(f_a1, data = dat_a, family = binomial(),
                   control = glmerControl(optimizer = "bobyqa"))
   } else {
@@ -115,8 +115,8 @@ tryCatch({
   f_a2 <- as.formula(paste("aki_primary ~ mg_q +", cov_rhs))
   m_a2 <- glm(f_a2, data = dat_a, family = binomial())
   # Cluster-robust SE by hospital
-  if (length(unique(dat_a$hospitalID)) > 1) {
-    m_a2_robust <- coeftest(m_a2, vcov = vcovCL(m_a2, cluster = dat_a$hospitalID))
+  if (length(unique(dat_a$hospitalid)) > 1) {
+    m_a2_robust <- coeftest(m_a2, vcov = vcovCL(m_a2, cluster = dat_a$hospitalid))
     cat("  Quartile results (cluster-robust SE):\n")
     print(m_a2_robust[grep("mg_q", rownames(m_a2_robust)), ])
   }
@@ -146,9 +146,9 @@ tryCatch({
     f_a4 <- as.formula(paste(
       "Surv(time_to_event_hours, aki_primary) ~ mg_neg +", cov_rhs
     ))
-    if (length(unique(dat_a_surv$hospitalID)) > 1) {
+    if (length(unique(dat_a_surv$hospitalid)) > 1) {
       m_a4 <- coxph(f_a4, data = dat_a_surv,
-                     cluster = hospitalID)
+                     cluster = hospitalid)
     } else {
       m_a4 <- coxph(f_a4, data = dat_a_surv)
     }
@@ -199,8 +199,8 @@ if (!is.null(dat_b) && nrow(dat_b) > 10) {
   # ── B1: IPTW-weighted logistic (primary) ───────────────────────
   cat("\n  B1: IPTW-weighted logistic...\n")
   tryCatch({
-    if ("hospitalID" %in% names(dat_b)) {
-      des <- svydesign(ids = ~hospitalID, weights = ~iptw, data = dat_b)
+    if ("hospitalid" %in% names(dat_b)) {
+      des <- svydesign(ids = ~hospitalid, weights = ~iptw, data = dat_b)
     } else {
       des <- svydesign(ids = ~1, weights = ~iptw, data = dat_b)
     }

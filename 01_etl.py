@@ -40,11 +40,20 @@ def save(df, name):
 
 
 def load_csv(table_name, usecols=None):
-    """Load eICU CSV, trying common naming patterns."""
-    for pattern in [f"{table_name}.csv", f"{table_name}.csv.gz"]:
+    """Load eICU CSV, trying common naming patterns and casing."""
+    candidates = [
+        f"{table_name}.csv",
+        f"{table_name}.csv.gz",
+        f"{table_name.lower()}.csv",
+        f"{table_name.lower()}.csv.gz",
+    ]
+    for pattern in candidates:
         path = os.path.join(cfg.DATA_ROOT, pattern)
         if os.path.exists(path):
-            df = pd.read_csv(path, low_memory=False, usecols=usecols)
+            # If usecols given, lowercase them to match actual headers
+            uc = [c.lower() for c in usecols] if usecols else None
+            df = pd.read_csv(path, low_memory=False, usecols=uc)
+            df.columns = df.columns.str.lower()
             print(f"  {table_name}: {len(df):,} rows")
             return df
     print(f"  WARNING: {table_name} not found in {cfg.DATA_ROOT}")
@@ -114,13 +123,13 @@ def load_tables():
     tables["medication"] = load_csv(
         "medication",
         usecols=[
-            "patientUnitStayID",
-            "medicationID",
-            "drugStartOffset",
-            "drugStopOffset",
-            "drugName",
-            "drugOrderCancelled",
-            "routeAdmin",
+            "patientunitstayid",
+            "medicationid",
+            "drugstartoffset",
+            "drugstopoffset",
+            "drugname",
+            "drugordercancelled",
+            "routeadmin",
             "dosage",
         ],
     )
@@ -158,19 +167,19 @@ def build_cardiac_cohort(t):
     consort["adults"] = len(adults)
     print(f"  Adults (≥{cfg.MIN_AGE}): {len(adults):,}")
 
-    # Cardiac surgery: apacheAdmissionDx OR unitType
-    by_dx = matches_any(adults.apacheAdmissionDx, cfg.CARDIAC_DX_PATTERNS)
-    by_unit = adults.unitType.isin(cfg.CARDIAC_UNIT_TYPES)
+    # Cardiac surgery: apacheadmissiondx OR unittype
+    by_dx = matches_any(adults.apacheadmissiondx, cfg.CARDIAC_DX_PATTERNS)
+    by_unit = adults.unittype.isin(cfg.CARDIAC_UNIT_TYPES)
     cardiac = adults[by_dx | by_unit].copy()
     consort["cardiac_surgery"] = len(cardiac)
-    print(f"  Cardiac surgery (dx|unitType): {len(cardiac):,}")
-    print(f"    by apacheAdmissionDx: {by_dx.sum():,}")
-    print(f"    by unitType:          {by_unit.sum():,}")
+    print(f"  Cardiac surgery (dx|unittype): {len(cardiac):,}")
+    print(f"    by apacheadmissiondx: {by_dx.sum():,}")
+    print(f"    by unittype:          {by_unit.sum():,}")
 
     # First ICU stay per patient
-    # Larger hospitalAdmitOffset → closer to hospital admit → earlier stay
+    # Larger hospitaladmitoffset → closer to hospital admit → earlier stay
     cardiac = (
-        cardiac.sort_values("hospitalAdmitOffset", ascending=False)
+        cardiac.sort_values("hospitaladmitoffset", ascending=False)
         .groupby("uniquepid")
         .first()
         .reset_index()
@@ -193,7 +202,7 @@ def build_cardiac_cohort(t):
             return "valve"
         return "other_cardiac"
 
-    cardiac["surgery_type"] = cardiac.apacheAdmissionDx.apply(_surgery_type)
+    cardiac["surgery_type"] = cardiac.apacheadmissiondx.apply(_surgery_type)
     print(f"  Surgery types: {cardiac.surgery_type.value_counts().to_dict()}")
 
     return cardiac, consort
@@ -207,30 +216,30 @@ def extract_mg_exposure(t, cardiac):
     print("STEP 2: Magnesium Exposure")
     print("=" * 70)
     lab = t["lab"]
-    pids = set(cardiac.patientUnitStayID)
+    pids = set(cardiac.patientunitstayid)
 
     # All Mg labs for cardiac patients
     mg = lab[
-        lab.patientUnitStayID.isin(pids)
-        & matches_any(lab.labName, cfg.MG_LABNAMES)
-        & lab.labResult.between(cfg.MG_PLAUSIBLE_MIN, cfg.MG_PLAUSIBLE_MAX)
+        lab.patientunitstayid.isin(pids)
+        & matches_any(lab.labname, cfg.MG_LABNAMES)
+        & lab.labresult.between(cfg.MG_PLAUSIBLE_MIN, cfg.MG_PLAUSIBLE_MAX)
     ].copy()
     print(f"  Mg measurements (cardiac patients): {len(mg):,}")
-    print(f"  Patients with any Mg: {mg.patientUnitStayID.nunique():,}")
+    print(f"  Patients with any Mg: {mg.patientunitstayid.nunique():,}")
 
     # First Mg within window [0, MG_WINDOW_MIN]
     mg_window = mg[
-        (mg.labResultOffset >= 0) & (mg.labResultOffset <= cfg.MG_WINDOW_MIN)
+        (mg.labresultoffset >= 0) & (mg.labresultoffset <= cfg.MG_WINDOW_MIN)
     ]
     first_mg = (
-        mg_window.sort_values("labResultOffset")
-        .groupby("patientUnitStayID")
+        mg_window.sort_values("labresultoffset")
+        .groupby("patientunitstayid")
         .first()
-        .reset_index()[["patientUnitStayID", "labResult", "labResultOffset"]]
+        .reset_index()[["patientunitstayid", "labresult", "labresultoffset"]]
         .rename(
             columns={
-                "labResult": "first_mg_value",
-                "labResultOffset": "mg_offset",
+                "labresult": "first_mg_value",
+                "labresultoffset": "mg_offset",
             }
         )
     )
@@ -266,7 +275,7 @@ def compute_baseline_cr(t, eligible_pids, mg_offsets):
       Fallback: first Cr with offset > 0 and < mg_offset.
     Sensitivity (Approach 1 / Eadon): lowest Cr within [-60, 2880].
 
-    mg_offsets: dict {patientUnitStayID: mg_offset} for temporal anchoring.
+    mg_offsets: dict {patientunitstayid: mg_offset} for temporal anchoring.
     """
     print("\n" + "=" * 70)
     print("STEP 3: Baseline Creatinine")
@@ -274,53 +283,53 @@ def compute_baseline_cr(t, eligible_pids, mg_offsets):
     lab = t["lab"]
 
     cr = lab[
-        lab.patientUnitStayID.isin(eligible_pids)
-        & matches_any(lab.labName, cfg.CR_LABNAMES)
-        & lab.labResult.between(cfg.CR_PLAUSIBLE_MIN, cfg.CR_PLAUSIBLE_MAX)
+        lab.patientunitstayid.isin(eligible_pids)
+        & matches_any(lab.labname, cfg.CR_LABNAMES)
+        & lab.labresult.between(cfg.CR_PLAUSIBLE_MIN, cfg.CR_PLAUSIBLE_MAX)
     ].copy()
     print(f"  Cr measurements (eligible): {len(cr):,}")
 
     # ── Primary: Approach 2 ──────────────────────────────────────
     # Pre-ICU Cr: offset ∈ [-720, 0]
     pre_icu = cr[
-        (cr.labResultOffset >= cfg.BASELINE_PRE_ICU_WINDOW_MIN)
-        & (cr.labResultOffset <= cfg.BASELINE_PRE_ICU_WINDOW_MAX)
+        (cr.labresultoffset >= cfg.BASELINE_PRE_ICU_WINDOW_MIN)
+        & (cr.labresultoffset <= cfg.BASELINE_PRE_ICU_WINDOW_MAX)
     ]
     pre_icu_bl = (
-        pre_icu.sort_values("labResult")
-        .groupby("patientUnitStayID")
+        pre_icu.sort_values("labresult")
+        .groupby("patientunitstayid")
         .first()
-        .reset_index()[["patientUnitStayID", "labResult"]]
-        .rename(columns={"labResult": "baseline_cr"})
+        .reset_index()[["patientunitstayid", "labresult"]]
+        .rename(columns={"labresult": "baseline_cr"})
     )
     pre_icu_bl["baseline_source"] = "pre_icu"
     n_pre = len(pre_icu_bl)
 
     # Fallback: first Cr > 0 but BEFORE Mg measurement
-    pids_need_fallback = eligible_pids - set(pre_icu_bl.patientUnitStayID)
+    pids_need_fallback = eligible_pids - set(pre_icu_bl.patientunitstayid)
     if pids_need_fallback:
         fb_pool = cr[
-            cr.patientUnitStayID.isin(pids_need_fallback) & (cr.labResultOffset > 0)
+            cr.patientunitstayid.isin(pids_need_fallback) & (cr.labresultoffset > 0)
         ].copy()
         # Only keep Cr measured BEFORE the Mg lab for each patient
         fb_rows = []
-        for pid, grp in fb_pool.groupby("patientUnitStayID"):
+        for pid, grp in fb_pool.groupby("patientunitstayid"):
             mg_off = mg_offsets.get(pid, cfg.MG_WINDOW_MIN)
-            before_mg = grp[grp.labResultOffset < mg_off]
+            before_mg = grp[grp.labresultoffset < mg_off]
             if len(before_mg) > 0:
-                fb_rows.append(before_mg.sort_values("labResultOffset").iloc[0])
+                fb_rows.append(before_mg.sort_values("labresultoffset").iloc[0])
         if fb_rows:
-            fb_df = pd.DataFrame(fb_rows)[["patientUnitStayID", "labResult"]].rename(
-                columns={"labResult": "baseline_cr"}
+            fb_df = pd.DataFrame(fb_rows)[["patientunitstayid", "labresult"]].rename(
+                columns={"labresult": "baseline_cr"}
             )
             fb_df["baseline_source"] = "first_post_icu"
         else:
             fb_df = pd.DataFrame(
-                columns=["patientUnitStayID", "baseline_cr", "baseline_source"]
+                columns=["patientunitstayid", "baseline_cr", "baseline_source"]
             )
     else:
         fb_df = pd.DataFrame(
-            columns=["patientUnitStayID", "baseline_cr", "baseline_source"]
+            columns=["patientunitstayid", "baseline_cr", "baseline_source"]
         )
     n_fb = len(fb_df)
 
@@ -332,15 +341,15 @@ def compute_baseline_cr(t, eligible_pids, mg_offsets):
 
     # ── Sensitivity: Approach 1 (Eadon) ──────────────────────────
     eadon_pool = cr[
-        (cr.labResultOffset >= cfg.BASELINE_EADON_WINDOW_MIN)
-        & (cr.labResultOffset <= cfg.BASELINE_EADON_WINDOW_MAX)
+        (cr.labresultoffset >= cfg.BASELINE_EADON_WINDOW_MIN)
+        & (cr.labresultoffset <= cfg.BASELINE_EADON_WINDOW_MAX)
     ]
     baseline_eadon = (
-        eadon_pool.sort_values("labResult")
-        .groupby("patientUnitStayID")
+        eadon_pool.sort_values("labresult")
+        .groupby("patientunitstayid")
         .first()
-        .reset_index()[["patientUnitStayID", "labResult"]]
-        .rename(columns={"labResult": "baseline_cr_eadon"})
+        .reset_index()[["patientunitstayid", "labresult"]]
+        .rename(columns={"labresult": "baseline_cr_eadon"})
     )
     print(f"  EADON baseline (lowest in [-1h, 48h]): {len(baseline_eadon):,}")
 
@@ -363,37 +372,37 @@ def apply_aki_phenotype(cohort, cr_all, mg_offsets):
 
     results = []
     for _, row in cohort.iterrows():
-        pid = row.patientUnitStayID
+        pid = row.patientunitstayid
         bl_cr = row.baseline_cr
         mg_off = mg_offsets.get(pid, 0)
 
-        pt_cr = cr_all[cr_all.patientUnitStayID == pid].copy()
+        pt_cr = cr_all[cr_all.patientunitstayid == pid].copy()
 
         # Follow-up Cr: AFTER Mg measurement, within 7 days
         fu = pt_cr[
-            (pt_cr.labResultOffset > mg_off)
-            & (pt_cr.labResultOffset <= cfg.AKI_WINDOW_7D_MIN)
-        ].sort_values("labResultOffset")
+            (pt_cr.labresultoffset > mg_off)
+            & (pt_cr.labresultoffset <= cfg.AKI_WINDOW_7D_MIN)
+        ].sort_values("labresultoffset")
 
         # Primary: Cr ≥ 1.5× baseline
         aki_15x = 0
         aki_time = np.nan
         if len(fu) > 0 and bl_cr > 0:
-            fu_ratio = fu.labResult / bl_cr
+            fu_ratio = fu.labresult / bl_cr
             hits = fu[fu_ratio >= cfg.AKI_RATIO_STAGE1]
             if len(hits) > 0:
                 aki_15x = 1
-                aki_time = hits.labResultOffset.iloc[0]
+                aki_time = hits.labresultoffset.iloc[0]
 
         # Secondary: delta ≥ 0.3 within 48h sliding window
         aki_delta03 = 0
         if len(fu) >= 2:
             for i in range(len(fu)):
                 for j in range(i + 1, len(fu)):
-                    off_i = fu.labResultOffset.iloc[i]
-                    off_j = fu.labResultOffset.iloc[j]
+                    off_i = fu.labresultoffset.iloc[i]
+                    off_j = fu.labresultoffset.iloc[j]
                     if (off_j - off_i) <= cfg.AKI_WINDOW_48H_MIN:
-                        delta = fu.labResult.iloc[j] - fu.labResult.iloc[i]
+                        delta = fu.labresult.iloc[j] - fu.labresult.iloc[i]
                         if delta >= cfg.AKI_DELTA_48H:
                             aki_delta03 = 1
                             break
@@ -401,7 +410,7 @@ def apply_aki_phenotype(cohort, cr_all, mg_offsets):
                     break
 
         # Stage 2/3
-        max_cr = fu.labResult.max() if len(fu) > 0 else np.nan
+        max_cr = fu.labresult.max() if len(fu) > 0 else np.nan
         max_ratio = max_cr / bl_cr if bl_cr > 0 and not np.isnan(max_cr) else 0
         aki_stage2 = int(max_ratio >= cfg.AKI_RATIO_STAGE2)
         aki_stage3 = int(
@@ -410,15 +419,15 @@ def apply_aki_phenotype(cohort, cr_all, mg_offsets):
         )
 
         # Washout: Cr ≥ 1.5× baseline AT or BEFORE Mg measurement
-        pre_mg = pt_cr[(pt_cr.labResultOffset > 0) & (pt_cr.labResultOffset <= mg_off)]
+        pre_mg = pt_cr[(pt_cr.labresultoffset > 0) & (pt_cr.labresultoffset <= mg_off)]
         prevalent_aki = 0
         if len(pre_mg) > 0 and bl_cr > 0:
-            if (pre_mg.labResult / bl_cr).max() >= cfg.AKI_RATIO_STAGE1:
+            if (pre_mg.labresult / bl_cr).max() >= cfg.AKI_RATIO_STAGE1:
                 prevalent_aki = 1
 
         results.append(
             {
-                "patientUnitStayID": pid,
+                "patientunitstayid": pid,
                 "aki_primary": aki_15x,
                 "aki_time_offset": aki_time,
                 "aki_delta03": aki_delta03,
@@ -432,7 +441,7 @@ def apply_aki_phenotype(cohort, cr_all, mg_offsets):
         )
 
     aki_df = pd.DataFrame(results)
-    cohort = cohort.merge(aki_df, on="patientUnitStayID")
+    cohort = cohort.merge(aki_df, on="patientunitstayid")
 
     # Exclude prevalent AKI (washout)
     pre_washout = len(cohort)
@@ -442,10 +451,10 @@ def apply_aki_phenotype(cohort, cr_all, mg_offsets):
 
     # Time-to-AKI for survival analysis (minutes → hours)
     cohort["time_to_aki_hours"] = cohort.aki_time_offset / 60.0
-    # Censoring time: min(unitDischargeOffset, 7d) — from Mg time
-    if "unitDischargeOffset" in cohort.columns:
-        cohort["censor_offset"] = cohort[["unitDischargeOffset"]].apply(
-            lambda r: min(r.unitDischargeOffset, cfg.AKI_WINDOW_7D_MIN),
+    # Censoring time: min(unitdischargeoffset, 7d) — from Mg time
+    if "unitdischargeoffset" in cohort.columns:
+        cohort["censor_offset"] = cohort[["unitdischargeoffset"]].apply(
+            lambda r: min(r.unitdischargeoffset, cfg.AKI_WINDOW_7D_MIN),
             axis=1,
         )
         cohort["time_to_event_hours"] = np.where(
@@ -477,7 +486,7 @@ def build_covariates(t, cohort):
     print("\n" + "=" * 70)
     print("STEP 5: Covariates")
     print("=" * 70)
-    pids = set(cohort.patientUnitStayID)
+    pids = set(cohort.patientunitstayid)
 
     # ── Demographics (already in cohort from patient table) ──────
     cohort["sex"] = cohort.gender.map({"Male": "Male", "Female": "Female"}).fillna(
@@ -496,36 +505,36 @@ def build_covariates(t, cohort):
 
     # BMI
     cohort["bmi"] = np.where(
-        (cohort.admissionHeight > 0) & (cohort.admissionWeight > 0),
-        cohort.admissionWeight / (cohort.admissionHeight / 100) ** 2,
+        (cohort.admissionheight > 0) & (cohort.admissionweight > 0),
+        cohort.admissionweight / (cohort.admissionheight / 100) ** 2,
         np.nan,
     )
 
     # ── Comorbidities from pastHistory ───────────────────────────
     ph = t["pastHistory"]
-    ph_elig = ph[ph.patientUnitStayID.isin(pids)]
+    ph_elig = ph[ph.patientunitstayid.isin(pids)]
     for cmorb, keywords in cfg.COMORBIDITY_KEYWORDS.items():
         flagged = set(
             ph_elig[
-                matches_any(ph_elig.pastHistoryPath, keywords)
-                | matches_any(ph_elig.pastHistoryValue, keywords)
-            ].patientUnitStayID
+                matches_any(ph_elig.pasthistorypath, keywords)
+                | matches_any(ph_elig.pasthistoryvalue, keywords)
+            ].patientunitstayid
         )
-        cohort[f"hx_{cmorb}"] = cohort.patientUnitStayID.isin(flagged).astype(int)
+        cohort[f"hx_{cmorb}"] = cohort.patientunitstayid.isin(flagged).astype(int)
         print(f"    hx_{cmorb}: {cohort[f'hx_{cmorb}'].sum()}")
 
     # ── APACHE from apachePredVar ────────────────────────────────
     apv = t["apachePredVar"]
     if len(apv) > 0:
-        apv_elig = apv[apv.patientUnitStayID.isin(pids)].copy()
-        apache_cols = ["electiveSurgery", "dialysis"]
+        apv_elig = apv[apv.patientunitstayid.isin(pids)].copy()
+        apache_cols = ["electivesurgery", "dialysis"]
         avail = [c for c in apache_cols if c in apv_elig.columns]
         if avail:
             cohort = cohort.merge(
-                apv_elig[["patientUnitStayID"] + avail].drop_duplicates(
-                    "patientUnitStayID"
+                apv_elig[["patientunitstayid"] + avail].drop_duplicates(
+                    "patientunitstayid"
                 ),
-                on="patientUnitStayID",
+                on="patientunitstayid",
                 how="left",
             )
             # ESKD exclusion via dialysis flag
@@ -539,50 +548,50 @@ def build_covariates(t, cohort):
     # ── APACHE IV score ──────────────────────────────────────────
     apr = t["apachePatientResult"]
     if len(apr) > 0:
-        apr_elig = apr[apr.patientUnitStayID.isin(pids)].copy()
-        if "apacheScore" in apr_elig.columns:
+        apr_elig = apr[apr.patientunitstayid.isin(pids)].copy()
+        if "apachescore" in apr_elig.columns:
             apache_score = (
-                apr_elig.sort_values("apacheScore", ascending=False)
-                .groupby("patientUnitStayID")
+                apr_elig.sort_values("apachescore", ascending=False)
+                .groupby("patientunitstayid")
                 .first()
-                .reset_index()[["patientUnitStayID", "apacheScore"]]
+                .reset_index()[["patientunitstayid", "apachescore"]]
             )
-            cohort = cohort.merge(apache_score, on="patientUnitStayID", how="left")
+            cohort = cohort.merge(apache_score, on="patientunitstayid", how="left")
             print(
-                f"  APACHE IV: median={cohort.apacheScore.median():.0f}, "
-                f"available={cohort.apacheScore.notna().sum()}"
+                f"  APACHE IV: median={cohort.apachescore.median():.0f}, "
+                f"available={cohort.apachescore.notna().sum()}"
             )
 
     # ── Nephrotoxins from admissionDrug + medication ─────────────
     ad = t["admissionDrug"]
     med = t["medication"]
-    ad_elig = ad[ad.patientUnitStayID.isin(pids)] if len(ad) > 0 else pd.DataFrame()
+    ad_elig = ad[ad.patientunitstayid.isin(pids)] if len(ad) > 0 else pd.DataFrame()
     med_elig = (
-        med[med.patientUnitStayID.isin(pids) & (med.drugOrderCancelled != "Yes")]
+        med[med.patientunitstayid.isin(pids) & (med.drugordercancelled != "Yes")]
         if len(med) > 0
         else pd.DataFrame()
     )
 
     for drug_class, patterns in cfg.NEPHROTOXIN_CLASSES.items():
         flagged = set()
-        if len(ad_elig) > 0 and "drugName" in ad_elig.columns:
+        if len(ad_elig) > 0 and "drugname" in ad_elig.columns:
             flagged |= set(
-                ad_elig[matches_any(ad_elig.drugName, patterns)].patientUnitStayID
+                ad_elig[matches_any(ad_elig.drugname, patterns)].patientunitstayid
             )
         if len(med_elig) > 0:
             # Pre-Mg medications only
             for pid in pids:
-                mg_off = cohort.loc[cohort.patientUnitStayID == pid, "mg_offset"]
+                mg_off = cohort.loc[cohort.patientunitstayid == pid, "mg_offset"]
                 if len(mg_off) == 0:
                     continue
                 mg_off = mg_off.iloc[0]
                 pt_meds = med_elig[
-                    (med_elig.patientUnitStayID == pid)
-                    & (med_elig.drugStartOffset <= mg_off)
+                    (med_elig.patientunitstayid == pid)
+                    & (med_elig.drugstartoffset <= mg_off)
                 ]
-                if len(pt_meds) > 0 and matches_any(pt_meds.drugName, patterns).any():
+                if len(pt_meds) > 0 and matches_any(pt_meds.drugname, patterns).any():
                     flagged.add(pid)
-        cohort[f"nephrotox_{drug_class}"] = cohort.patientUnitStayID.isin(
+        cohort[f"nephrotox_{drug_class}"] = cohort.patientunitstayid.isin(
             flagged
         ).astype(int)
         print(f"    nephrotox_{drug_class}: {cohort[f'nephrotox_{drug_class}'].sum()}")
@@ -590,20 +599,20 @@ def build_covariates(t, cohort):
     # ── Mg supplementation (for TTE Analysis B) ──────────────────
     mg_supp_pids = set()
     if len(med_elig) > 0:
-        mg_meds = med_elig[matches_any(med_elig.drugName, cfg.MG_SUPP_DRUG_PATTERNS)]
+        mg_meds = med_elig[matches_any(med_elig.drugname, cfg.MG_SUPP_DRUG_PATTERNS)]
         for pid in pids:
-            mg_off = cohort.loc[cohort.patientUnitStayID == pid, "mg_offset"]
+            mg_off = cohort.loc[cohort.patientunitstayid == pid, "mg_offset"]
             if len(mg_off) == 0:
                 continue
             mg_off = mg_off.iloc[0]
             pt_mg = mg_meds[
-                (mg_meds.patientUnitStayID == pid)
-                & (mg_meds.drugStartOffset >= mg_off)
-                & (mg_meds.drugStartOffset <= mg_off + cfg.MG_SUPP_GRACE_MIN)
+                (mg_meds.patientunitstayid == pid)
+                & (mg_meds.drugstartoffset >= mg_off)
+                & (mg_meds.drugstartoffset <= mg_off + cfg.MG_SUPP_GRACE_MIN)
             ]
             if len(pt_mg) > 0:
                 mg_supp_pids.add(pid)
-    cohort["mg_supplementation"] = cohort.patientUnitStayID.isin(mg_supp_pids).astype(
+    cohort["mg_supplementation"] = cohort.patientunitstayid.isin(mg_supp_pids).astype(
         int
     )
     print(
@@ -615,24 +624,24 @@ def build_covariates(t, cohort):
     tx = t["treatment"]
     rrt_pids = set()
     if len(tx) > 0:
-        tx_elig = tx[tx.patientUnitStayID.isin(pids)]
+        tx_elig = tx[tx.patientunitstayid.isin(pids)]
         rrt_pids = set(
             tx_elig[
                 matches_any(
-                    tx_elig.treatmentString,
+                    tx_elig.treatmentstring,
                     ["dialysis", "crrt", "hemodialysis", "cvvh"],
                 )
-            ].patientUnitStayID
+            ].patientunitstayid
         )
-    cohort["rrt_7d"] = cohort.patientUnitStayID.isin(rrt_pids).astype(int)
+    cohort["rrt_7d"] = cohort.patientunitstayid.isin(rrt_pids).astype(int)
     print(f"  RRT within ICU stay: {cohort.rrt_7d.sum()}")
 
     # ── Mortality ────────────────────────────────────────────────
     cohort["icu_mortality"] = (
-        cohort.unitDischargeStatus.str.lower() == "expired"
+        cohort.unitdischargestatus.str.lower() == "expired"
     ).astype(int)
     cohort["hosp_mortality"] = (
-        cohort.hospitalDischargeStatus.str.lower() == "expired"
+        cohort.hospitaldischargestatus.str.lower() == "expired"
     ).astype(int)
     print(f"  ICU mortality: {cohort.icu_mortality.sum()}")
     print(f"  Hospital mortality: {cohort.hosp_mortality.sum()}")
@@ -690,16 +699,16 @@ def main():
 
     # Step 2: Mg exposure
     first_mg = extract_mg_exposure(t, cardiac)
-    cohort = cardiac.merge(first_mg, on="patientUnitStayID")
+    cohort = cardiac.merge(first_mg, on="patientunitstayid")
     consort["has_mg"] = len(cohort)
-    mg_offsets = dict(zip(cohort.patientUnitStayID, cohort.mg_offset))
+    mg_offsets = dict(zip(cohort.patientunitstayid, cohort.mg_offset))
 
     # Step 3: Baseline Cr
     baseline_primary, baseline_eadon, cr_all = compute_baseline_cr(
-        t, set(cohort.patientUnitStayID), mg_offsets
+        t, set(cohort.patientunitstayid), mg_offsets
     )
-    cohort = cohort.merge(baseline_primary, on="patientUnitStayID")
-    cohort = cohort.merge(baseline_eadon, on="patientUnitStayID", how="left")
+    cohort = cohort.merge(baseline_primary, on="patientunitstayid")
+    cohort = cohort.merge(baseline_eadon, on="patientunitstayid", how="left")
     consort["has_baseline_cr"] = len(cohort)
 
     # Exclude baseline Cr ≥ 4.0
@@ -716,15 +725,15 @@ def main():
     if len(ph) > 0:
         eskd_pids = set(
             ph[
-                ph.patientUnitStayID.isin(cohort.patientUnitStayID)
+                ph.patientunitstayid.isin(cohort.patientunitstayid)
                 & (
-                    matches_any(ph.pastHistoryPath, cfg.ESKD_DX_PATTERNS)
-                    | matches_any(ph.pastHistoryValue, cfg.ESKD_DX_PATTERNS)
+                    matches_any(ph.pasthistorypath, cfg.ESKD_DX_PATTERNS)
+                    | matches_any(ph.pasthistoryvalue, cfg.ESKD_DX_PATTERNS)
                 )
-            ].patientUnitStayID
+            ].patientunitstayid
         )
     pre_eskd = len(cohort)
-    cohort = cohort[~cohort.patientUnitStayID.isin(eskd_pids)].copy()
+    cohort = cohort[~cohort.patientunitstayid.isin(eskd_pids)].copy()
     consort["excluded_eskd_hx"] = pre_eskd - len(cohort)
     print(f"  Excluded ESKD (pastHistory): {pre_eskd - len(cohort)}")
 
