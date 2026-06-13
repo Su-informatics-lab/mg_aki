@@ -235,7 +235,7 @@ if (!is.null(dat_b) && nrow(dat_b) > 10) {
   cat("ANALYSIS B: TTE — Mg supplementation → AKI\n")
   cat(strrep("=", 70), "\n")
 
-  # Derive KDIGO Stage ≥1 for TTE cohort
+  # Derive all AKI outcomes for TTE cohort
   if (!"aki_kdigo1" %in% names(dat_b)) {
     dat_b$aki_kdigo1 <- as.integer(dat_b$aki_primary == 1 | dat_b$aki_delta03 == 1)
   }
@@ -243,33 +243,60 @@ if (!is.null(dat_b) && nrow(dat_b) > 10) {
     dat_b_m$aki_kdigo1 <- as.integer(dat_b_m$aki_primary == 1 | dat_b_m$aki_delta03 == 1)
   }
 
-  # ── B1: IPTW-weighted logistic (primary) ───────────────────────
-  cat("\n  B1: IPTW-weighted logistic...\n")
-  tryCatch({
-    if ("hospitalid" %in% names(dat_b)) {
-      des <- svydesign(ids = ~hospitalid, weights = ~iptw, data = dat_b)
-    } else {
-      des <- svydesign(ids = ~1, weights = ~iptw, data = dat_b)
-    }
-    m_b1 <- svyglm(aki_kdigo1 ~ trt, design = des,
-                    family = quasibinomial())
-    s_b1 <- tidy(m_b1, conf.int = TRUE, exponentiate = TRUE)
-    trt_row <- s_b1 %>% filter(term == "trt")
-    if (nrow(trt_row) > 0) {
-      cat(sprintf("    IPTW OR = %.2f (95%% CI: %.2f–%.2f), p = %.4f\n",
-                  trt_row$estimate, trt_row$conf.low, trt_row$conf.high,
-                  trt_row$p.value))
-      results_list[["B1_iptw"]] <- trt_row
-    }
-  }, error = function(e) cat(sprintf("  B1 failed: %s\n", e$message)))
+  # ── B1: IPTW across ALL AKI definitions ───────────────────────
+  cat("\n  B1: Mg supplementation effect across AKI severity (IPTW):\n")
+  cat(sprintf("  %-45s %8s %15s %10s\n", "Outcome", "Events", "OR (95% CI)", "p"))
+  cat(strrep("-", 85), "\n")
 
-  # ── B2: IPTW-weighted Cox ─────────────────────────────────────
-  cat("\n  B2: IPTW-weighted Cox...\n")
+  b_outcomes <- c(
+    "aki_delta03" = "Delta ≥0.3 (mildest)",
+    "aki_kdigo1"  = "KDIGO Stage ≥1 (union)",
+    "aki_primary" = "Ratio ≥1.5× (moderate)",
+    "aki_stage2"  = "Stage ≥2 (severe)",
+    "aki_stage3"  = "Stage ≥3 (most severe)"
+  )
+
+  if ("hospitalid" %in% names(dat_b)) {
+    des <- svydesign(ids = ~hospitalid, weights = ~iptw, data = dat_b)
+  } else {
+    des <- svydesign(ids = ~1, weights = ~iptw, data = dat_b)
+  }
+
+  for (outcome_var in names(b_outcomes)) {
+    if (!outcome_var %in% names(dat_b)) next
+    label <- b_outcomes[[outcome_var]]
+    n_events <- sum(dat_b[[outcome_var]], na.rm = TRUE)
+
+    tryCatch({
+      f <- as.formula(paste(outcome_var, "~ trt"))
+      m <- svyglm(f, design = des, family = quasibinomial())
+      s <- tidy(m, conf.int = TRUE, exponentiate = TRUE)
+      trt_row <- s %>% filter(term == "trt")
+
+      if (nrow(trt_row) > 0) {
+        cat(sprintf("  %-45s %8d %5.2f (%.2f-%.2f) %10.4f\n",
+                    label, n_events,
+                    trt_row$estimate, trt_row$conf.low, trt_row$conf.high,
+                    trt_row$p.value))
+        results_list[[paste0("B1_", outcome_var)]] <- tibble(
+          model = paste0("B1_", outcome_var), term = "mg_supplementation",
+          estimate = trt_row$estimate, conf.low = trt_row$conf.low,
+          conf.high = trt_row$conf.high, p.value = trt_row$p.value,
+          n_events = n_events
+        )
+      }
+    }, error = function(e) {
+      cat(sprintf("  %-45s %8d   FAILED: %s\n", label, n_events, e$message))
+    })
+  }
+
+  # ── B2: IPTW-weighted Cox (ratio ≥1.5× — where protective trend is) ─
+  cat("\n  B2: IPTW-weighted Cox (ratio ≥1.5×)...\n")
   tryCatch({
     dat_b_surv <- dat_b %>%
       filter(!is.na(time_to_event_hours), time_to_event_hours > 0)
     if (nrow(dat_b_surv) > 10) {
-      m_b2 <- coxph(Surv(time_to_event_hours, aki_kdigo1) ~ trt,
+      m_b2 <- coxph(Surv(time_to_event_hours, aki_primary) ~ trt,
                      weights = iptw, data = dat_b_surv,
                      robust = TRUE)
       s_b2 <- tidy(m_b2, conf.int = TRUE, exponentiate = TRUE)
@@ -279,11 +306,11 @@ if (!is.null(dat_b) && nrow(dat_b) > 10) {
     }
   }, error = function(e) cat(sprintf("  B2 failed: %s\n", e$message)))
 
-  # ── B3: Overlap-weighted (sensitivity) ─────────────────────────
-  cat("\n  B3: Overlap-weighted logistic...\n")
+  # ── B3: Overlap-weighted (ratio ≥1.5×) ─────────────────────────
+  cat("\n  B3: Overlap-weighted logistic (ratio ≥1.5×)...\n")
   tryCatch({
     des_ow <- svydesign(ids = ~1, weights = ~ow, data = dat_b)
-    m_b3 <- svyglm(aki_kdigo1 ~ trt, design = des_ow,
+    m_b3 <- svyglm(aki_primary ~ trt, design = des_ow,
                     family = quasibinomial())
     s_b3 <- tidy(m_b3, conf.int = TRUE, exponentiate = TRUE)
     trt_ow <- s_b3 %>% filter(term == "trt")
@@ -294,11 +321,12 @@ if (!is.null(dat_b) && nrow(dat_b) > 10) {
     }
   }, error = function(e) cat(sprintf("  B3 failed: %s\n", e$message)))
 
-  # ── B4: PS-matched logistic ────────────────────────────────────
+  # ── B4: PS-matched logistic (ratio ≥1.5×) ──────────────────────
   if (!is.null(dat_b_m) && nrow(dat_b_m) > 4) {
-    cat("\n  B4: PS-matched logistic...\n")
+    cat("\n  B4: PS-matched logistic (ratio ≥1.5×)...\n")
     tryCatch({
-      m_b4 <- glm(aki_kdigo1 ~ trt, data = dat_b_m,
+      if (!"aki_primary" %in% names(dat_b_m)) dat_b_m$aki_primary <- dat_b_m$aki_kdigo1
+      m_b4 <- glm(aki_primary ~ trt, data = dat_b_m,
                    family = binomial(), weights = weights)
       s_b4 <- tidy(m_b4, conf.int = TRUE, exponentiate = TRUE)
       trt_m <- s_b4 %>% filter(term == "trt")
@@ -314,14 +342,18 @@ if (!is.null(dat_b) && nrow(dat_b) > 10) {
   if (HAS_EVALUE) {
     cat("\n  E-value (unmeasured confounding sensitivity)...\n")
     tryCatch({
-      if (exists("trt_row") && nrow(trt_row) > 0) {
-        ev <- evalues.OR(est = trt_row$estimate,
-                         lo  = trt_row$conf.low,
-                         hi  = trt_row$conf.high,
-                         rare = (mean(dat_b$aki_kdigo1) < 0.15))
-        cat("  E-value results:\n")
+      # Use the aki_primary result from B1 stratified table
+      b1_primary <- results_list[["B1_aki_primary"]]
+      if (!is.null(b1_primary) && nrow(b1_primary) > 0) {
+        ev <- evalues.OR(est = b1_primary$estimate,
+                         lo  = b1_primary$conf.low,
+                         hi  = b1_primary$conf.high,
+                         rare = (mean(dat_b$aki_primary) < 0.15))
+        cat("  E-value results (ratio ≥1.5×):\n")
         print(ev)
         results_list[["B_evalue"]] <- ev
+      } else {
+        cat("  No aki_primary result available for E-value\n")
       }
     }, error = function(e) cat(sprintf("  E-value failed: %s\n", e$message)))
   } else {
