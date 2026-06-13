@@ -832,6 +832,7 @@ def build_covariates(t, cohort):
     print("\n  Positive control: Serum Mg elevation:")
     followup_mg_window_start = cfg.MG_WINDOW_MIN  # 6h (after treatment window)
     followup_mg_window_end = 48 * 60  # 48h
+    lab = t["lab"]
     mg_labs = lab[
         lab.patientunitstayid.isin(pids)
         & matches_any(lab.labname, cfg.MG_LABNAMES)
