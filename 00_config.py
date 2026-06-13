@@ -308,3 +308,20 @@ PREOP_ANTIARRHYTHMIC_PATTERNS = [
 K_LABNAMES = ["potassium"]
 K_PLAUSIBLE_MIN = 1.5
 K_PLAUSIBLE_MAX = 8.0
+
+# =====================================================================
+# POSITIVE CONTROL: Ventricular arrhythmia (RR 0.52 from 10 RCTs)
+# =====================================================================
+VENT_ARRHYTHMIA_DX = [
+    "ventricular tachycardia",
+    "ventricular fibrillation",
+    "v-tach",
+    "v-fib",
+    "vtach",
+    "vfib",
+    "v tach",
+    "v fib",
+    "torsade",
+    "torsades",
+    "ventricular arrhythmia",
+]

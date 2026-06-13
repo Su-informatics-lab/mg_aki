@@ -905,6 +905,68 @@ def build_covariates(t, cohort):
         cohort[f"nc_{nc_name}"] = cohort.patientunitstayid.isin(nc_pids).astype(int)
         print(f"    {nc_name}: {cohort[f'nc_{nc_name}'].sum()}")
 
+    # ── POSITIVE CONTROL: Ventricular arrhythmia (RR 0.52, 10 RCTs) ─
+    print("\n  Positive control: Ventricular arrhythmia:")
+    va_pids = set()
+    if len(dx_elig) > 0 and "diagnosisstring" in dx_elig.columns:
+        va_dx = dx_elig[
+            matches_any(dx_elig.diagnosisstring, cfg.VENT_ARRHYTHMIA_DX)
+            & (dx_elig.diagnosisoffset >= 0)
+            & (dx_elig.diagnosisoffset <= cfg.POAF_WINDOW_MIN)
+        ]
+        va_pids = set(va_dx.patientunitstayid)
+    cohort["vent_arrhythmia"] = cohort.patientunitstayid.isin(va_pids).astype(int)
+    print(
+        f"    VT/VF/TdP (7d): {cohort.vent_arrhythmia.sum()} "
+        f"({cohort.vent_arrhythmia.mean()*100:.1f}%)"
+    )
+
+    # ── Peak Cr ratio (continuous AKI severity) ───────────────────
+    print("\n  Continuous AKI measures:")
+    cr_post_all = lab[
+        lab.patientunitstayid.isin(pids)
+        & matches_any(lab.labname, cfg.CR_LABNAMES)
+        & lab.labresult.between(cfg.CR_PLAUSIBLE_MIN, cfg.CR_PLAUSIBLE_MAX)
+    ]
+    peak_rows = []
+    for pid in pids:
+        mg_off_s = cohort.loc[cohort.patientunitstayid == pid, "mg_offset"]
+        if len(mg_off_s) == 0:
+            continue
+        mg_off = mg_off_s.iloc[0]
+        pt_cr = cr_post_all[
+            (cr_post_all.patientunitstayid == pid)
+            & (cr_post_all.labresultoffset > mg_off)
+        ]
+        if len(pt_cr) > 0:
+            peak_rows.append(
+                {"patientunitstayid": pid, "peak_cr": pt_cr.labresult.max()}
+            )
+    if peak_rows:
+        peak_df = pd.DataFrame(peak_rows)
+        cohort = cohort.merge(peak_df, on="patientunitstayid", how="left")
+        cohort["peak_cr_ratio"] = cohort["peak_cr"] / cohort["baseline_cr"]
+        print(
+            f"    Peak Cr ratio: median={cohort.peak_cr_ratio.median():.2f}, "
+            f">1.5: {(cohort.peak_cr_ratio > 1.5).sum()}, "
+            f">2.0: {(cohort.peak_cr_ratio > 2.0).sum()}"
+        )
+    else:
+        cohort["peak_cr"] = np.nan
+        cohort["peak_cr_ratio"] = np.nan
+
+    # ── Time-windowed AKI (24h, 48h, 72h) ────────────────────────
+    print("  Time-windowed AKI:")
+    if "time_to_event_hours" in cohort.columns:
+        for wh in [24, 48, 72]:
+            col = f"aki_primary_{wh}h"
+            cohort[col] = (
+                (cohort.aki_primary == 1) & (cohort.time_to_event_hours <= wh)
+            ).astype(int)
+            print(f"    Ratio >=1.5x within {wh}h: {cohort[col].sum()}")
+    else:
+        print("    time_to_event_hours unavailable")
+
     # ── Neurological outcomes (exploratory/descriptive) ────────────
     print("\n  Neuro outcomes (exploratory):")
     for neuro_name, neuro_patterns in cfg.NEURO_DX_PATTERNS.items():

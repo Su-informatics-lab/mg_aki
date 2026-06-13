@@ -150,8 +150,8 @@ run_suite <- function(dat, dat_m, title, pfx) {
   cat(sprintf("%s  [N=%d, trt=%d]\n", title, nrow(dat), sum(dat$trt)))
   cat(strrep("=", 70), "\n")
 
-  # ── A*. POSITIVE CONTROL: Serum Mg elevation (continuous) ──────
-  cat("\n  A*. POSITIVE CONTROL: Serum Mg elevation (trivially causal)\n")
+  # ── A*. PIPELINE CHECK: Serum Mg elevation ──────────────────────
+  cat("\n  A*. PIPELINE CHECK: Serum Mg elevation\n")
   if ("delta_mg" %in% names(dat)) {
     dat_mg <- dat %>% filter(!is.na(delta_mg))
     if (nrow(dat_mg) > 20) {
@@ -164,17 +164,28 @@ run_suite <- function(dat, dat_m, title, pfx) {
         m <- svyglm(delta_mg ~ trt, design = des)
         s <- tidy(m, conf.int = TRUE) %>% filter(term == "trt")
         if (nrow(s) > 0) {
-          cat(sprintf("    IPTW mean diff = %.3f mg/dL (95%% CI: %.3f to %.3f), p = %.4f\n",
+          cat(sprintf("    IPTW mean diff = %.3f mg/dL (%.3f to %.3f), p = %.4f\n",
                       s$estimate, s$conf.low, s$conf.high, s$p.value))
-          cat(sprintf("    (Expected: +0.2 to +0.5 mg/dL if pipeline is valid)\n"))
           results_list[[paste0(pfx, "_mg_elevation")]] <<- tibble(
             model = paste0(pfx, "_mg_elevation"), term = "trt",
             estimate = s$estimate, conf.low = s$conf.low, conf.high = s$conf.high,
-            p.value = s$p.value, n_events = nrow(dat_mg), label = "Serum Mg elevation")
+            p.value = s$p.value, n_events = nrow(dat_mg), label = "Serum Mg elevation (pipeline)")
         }
       }, error = function(e) cat(sprintf("    Failed: %s\n", e$message)))
-    } else cat("    Insufficient follow-up Mg data\n")
-  } else cat("    delta_mg column not found\n")
+    }
+  }
+
+  # ── A**. POSITIVE CONTROL: Ventricular arrhythmia (RR 0.52) ───
+  cat("\n  A**. POSITIVE CONTROL: Ventricular arrhythmia (RCT RR=0.52)\n")
+  r_va <- iptw_or(dat, "vent_arrhythmia", "VT/VF (positive control)")
+  if (!is.null(r_va)) {
+    cat(sprintf("    IPTW OR = %.2f (%.2f-%.2f), p = %.4f  [n_events=%d]\n",
+                r_va$estimate, r_va$conf.low, r_va$conf.high, r_va$p.value, r_va$n_events))
+    cat("    (Expected: OR ~0.5 if pipeline captures causal effect)\n")
+    results_list[[paste0(pfx, "_vent_arrhythmia")]] <<- r_va
+  } else {
+    cat("    Insufficient VT/VF events\n")
+  }
 
   # ── B. POAF (secondary outcome) ──────────────────────────────────
   r_all  <- iptw_or(dat, "poaf", "POAF dx-only (primary)")
@@ -194,6 +205,36 @@ run_suite <- function(dat, dat_m, title, pfx) {
   ptbl(aki_r, "C. PRIMARY: AKI severity-stratified")
   for (r in aki_r) if (!is.null(r))
     results_list[[paste0(pfx, "_aki_", r$label)]] <<- r
+
+  # C1b. Time-windowed AKI (ratio >=1.5x within 24h, 48h, 72h)
+  tw_oc <- c(aki_primary_24h="AKI 1.5x <=24h", aki_primary_48h="AKI 1.5x <=48h",
+             aki_primary_72h="AKI 1.5x <=72h")
+  tw_r <- lapply(names(tw_oc), function(o) iptw_or(dat, o, tw_oc[[o]]))
+  ptbl(tw_r, "C1b. Time-windowed AKI")
+  for (r in tw_r) if (!is.null(r))
+    results_list[[paste0(pfx, "_tw_", r$label)]] <<- r
+
+  # C1c. Peak Cr ratio (continuous outcome)
+  if ("peak_cr_ratio" %in% names(dat)) {
+    dat_pcr <- dat %>% filter(!is.na(peak_cr_ratio))
+    if (nrow(dat_pcr) > 20) {
+      tryCatch({
+        des <- if ("hospitalid" %in% names(dat_pcr))
+          svydesign(ids=~hospitalid, weights=~iptw, data=dat_pcr)
+        else svydesign(ids=~1, weights=~iptw, data=dat_pcr)
+        m <- svyglm(peak_cr_ratio ~ trt, design=des)
+        s <- tidy(m, conf.int=TRUE) %>% filter(term=="trt")
+        if (nrow(s) > 0) {
+          cat(sprintf("\n  C1c. Peak Cr ratio diff = %.3f (%.3f to %.3f), p=%.4f\n",
+                      s$estimate, s$conf.low, s$conf.high, s$p.value))
+          results_list[[paste0(pfx, "_peak_cr")]] <<- tibble(
+            model=paste0(pfx,"_peak_cr"), term="trt", estimate=s$estimate,
+            conf.low=s$conf.low, conf.high=s$conf.high, p.value=s$p.value,
+            n_events=nrow(dat_pcr), label="Peak Cr ratio diff")
+        }
+      }, error = function(e) cat(sprintf("  Peak Cr failed: %s\n", e$message)))
+    }
+  }
 
   # AKI x BB
   r_nobb <- iptw_or(dat %>% filter(has_betablocker==0), "aki_primary", "AKI 1.5x (no BB)")
