@@ -17,6 +17,20 @@
 # Per TTE skill Tier 2: negative control outcomes
 # ─────────────────────────────────────────────────────────────────────
 
+# ─── Auto-install dependencies ──────────────────────────────────────
+local({
+  pkgs <- c("tidyverse", "lme4", "survival", "survey",
+            "sandwich", "lmtest", "EValue", "broom", "splines")
+  # splines is base R, but keep it in the list harmlessly
+  missing <- pkgs[!sapply(pkgs, requireNamespace, quietly = TRUE)]
+  if (length(missing) > 0) {
+    cat(sprintf("Installing %d missing packages: %s\n",
+                length(missing), paste(missing, collapse = ", ")))
+    install.packages(missing, repos = "https://cloud.r-project.org",
+                     quiet = TRUE, Ncpus = parallel::detectCores())
+  }
+})
+
 suppressPackageStartupMessages({
   library(tidyverse)
   library(lme4)

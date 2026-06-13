@@ -18,6 +18,19 @@
 #     Sensitivity: overlap weighting (Li, Morgan, Zaslavsky 2018)
 # ─────────────────────────────────────────────────────────────────────
 
+# ─── Auto-install dependencies ──────────────────────────────────────
+local({
+  pkgs <- c("tidyverse", "MatchIt", "cobalt", "WeightIt",
+            "survey", "survival", "tableone")
+  missing <- pkgs[!sapply(pkgs, requireNamespace, quietly = TRUE)]
+  if (length(missing) > 0) {
+    cat(sprintf("Installing %d missing packages: %s\n",
+                length(missing), paste(missing, collapse = ", ")))
+    install.packages(missing, repos = "https://cloud.r-project.org",
+                     quiet = TRUE, Ncpus = parallel::detectCores())
+  }
+})
+
 suppressPackageStartupMessages({
   library(tidyverse)
   library(MatchIt)
