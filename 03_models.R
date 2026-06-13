@@ -57,7 +57,10 @@ cov_rhs <- paste(c(
   "nephrotox_loop_diuretic", "nephrotox_nsaid",
   "nephrotox_acei_arb", "nephrotox_ppi"
 ), collapse = " + ")
-if ("apachescore" %in% names(dat_a)) cov_rhs <- paste(cov_rhs, "+ apachescore")
+# NOTE: apachescore excluded — it's a post-treatment variable (worst in 24h includes post-Mg physiology)
+for (v in c("preop_antiarrhythmic", "first_k_value")) {
+  if (v %in% names(dat_a)) cov_rhs <- paste(cov_rhs, "+", v)
+}
 
 results_list <- list()
 
@@ -147,11 +150,39 @@ run_suite <- function(dat, dat_m, title, pfx) {
   cat(sprintf("%s  [N=%d, trt=%d]\n", title, nrow(dat), sum(dat$trt)))
   cat(strrep("=", 70), "\n")
 
-  # ── B. POAF (positive control) ─────────────────────────────────
-  r_all  <- iptw_or(dat, "poaf", "POAF (overall)")
-  r_nobb <- iptw_or(dat %>% filter(has_betablocker == 0), "poaf", "POAF (no BB)")
-  r_bb   <- iptw_or(dat %>% filter(has_betablocker == 1), "poaf", "POAF (with BB)")
-  ptbl(list(r_all, r_nobb, r_bb), "B. POSITIVE CONTROL: POAF")
+  # ── A*. POSITIVE CONTROL: Serum Mg elevation (continuous) ──────
+  cat("\n  A*. POSITIVE CONTROL: Serum Mg elevation (trivially causal)\n")
+  if ("delta_mg" %in% names(dat)) {
+    dat_mg <- dat %>% filter(!is.na(delta_mg))
+    if (nrow(dat_mg) > 20) {
+      tryCatch({
+        if ("hospitalid" %in% names(dat_mg)) {
+          des <- svydesign(ids = ~hospitalid, weights = ~iptw, data = dat_mg)
+        } else {
+          des <- svydesign(ids = ~1, weights = ~iptw, data = dat_mg)
+        }
+        m <- svyglm(delta_mg ~ trt, design = des)
+        s <- tidy(m, conf.int = TRUE) %>% filter(term == "trt")
+        if (nrow(s) > 0) {
+          cat(sprintf("    IPTW mean diff = %.3f mg/dL (95%% CI: %.3f to %.3f), p = %.4f\n",
+                      s$estimate, s$conf.low, s$conf.high, s$p.value))
+          cat(sprintf("    (Expected: +0.2 to +0.5 mg/dL if pipeline is valid)\n"))
+          results_list[[paste0(pfx, "_mg_elevation")]] <<- tibble(
+            model = paste0(pfx, "_mg_elevation"), term = "trt",
+            estimate = s$estimate, conf.low = s$conf.low, conf.high = s$conf.high,
+            p.value = s$p.value, n_events = nrow(dat_mg), label = "Serum Mg elevation")
+        }
+      }, error = function(e) cat(sprintf("    Failed: %s\n", e$message)))
+    } else cat("    Insufficient follow-up Mg data\n")
+  } else cat("    delta_mg column not found\n")
+
+  # ── B. POAF (secondary outcome) ──────────────────────────────────
+  r_all  <- iptw_or(dat, "poaf", "POAF dx-only (primary)")
+  r_cv   <- iptw_or(dat, "poaf_cardioversion", "POAF cardioversion (Yan)")
+  r_comp <- iptw_or(dat, "poaf_composite", "POAF composite (sensitivity)")
+  r_nobb <- iptw_or(dat %>% filter(has_betablocker == 0), "poaf", "POAF dx (no BB)")
+  r_bb   <- iptw_or(dat %>% filter(has_betablocker == 1), "poaf", "POAF dx (with BB)")
+  ptbl(list(r_all, r_cv, r_comp, r_nobb, r_bb), "B. POAF (secondary)")
   for (r in list(r_all, r_nobb, r_bb))
     if (!is.null(r)) results_list[[paste0(pfx, "_", r$label)]] <<- r
 

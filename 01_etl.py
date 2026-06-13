@@ -692,8 +692,8 @@ def build_covariates(t, cohort):
         f"({cohort.has_steroid.mean()*100:.1f}%)"
     )
 
-    # ── POAF detection (positive control) ─────────────────────────
-    print("\n  Outcome: POAF (positive control):")
+    # ── POAF detection (positive control — COMPOSITE phenotype) ────
+    print("\n  Outcome: POAF (composite phenotype):")
     dx = t["diagnosis"]
     dx_elig = dx[dx.patientunitstayid.isin(pids)] if len(dx) > 0 else pd.DataFrame()
 
@@ -710,29 +710,184 @@ def build_covariates(t, cohort):
     cohort["preexisting_af"] = cohort.patientunitstayid.isin(preexist_af_pids).astype(
         int
     )
-    print(
-        f"    Pre-existing AF (excluded from POAF analysis): {cohort.preexisting_af.sum()}"
-    )
+    print(f"    Pre-existing AF (excluded from POAF): {cohort.preexisting_af.sum()}")
 
-    # New-onset POAF within 7 days
-    poaf_pids = set()
+    # Source 1: diagnosis table
+    poaf_dx_pids = set()
     if len(dx_elig) > 0 and "diagnosisstring" in dx_elig.columns:
         poaf_dx = dx_elig[
             matches_any(dx_elig.diagnosisstring, cfg.POAF_DX_PATTERNS)
             & (dx_elig.diagnosisoffset >= 0)
             & (dx_elig.diagnosisoffset <= cfg.POAF_WINDOW_MIN)
         ]
-        poaf_pids = set(poaf_dx.patientunitstayid) - preexist_af_pids
-    cohort["poaf"] = cohort.patientunitstayid.isin(poaf_pids).astype(int)
-    # For patients with pre-existing AF, POAF is not assessable
+        poaf_dx_pids = set(poaf_dx.patientunitstayid) - preexist_af_pids
+    print(f"    Source 1 (diagnosis): {len(poaf_dx_pids)}")
+
+    # Source 2: treatment table (cardioversion, rhythm control)
+    tx = t["treatment"]
+    poaf_tx_pids = set()
+    if len(tx) > 0 and "treatmentstring" in tx.columns:
+        tx_elig = tx[tx.patientunitstayid.isin(pids)]
+        poaf_tx = tx_elig[
+            matches_any(tx_elig.treatmentstring, cfg.POAF_TREATMENT_PATTERNS)
+            & (tx_elig.treatmentoffset >= 0)
+            & (tx_elig.treatmentoffset <= cfg.POAF_WINDOW_MIN)
+        ]
+        poaf_tx_pids = set(poaf_tx.patientunitstayid) - preexist_af_pids
+    print(f"    Source 2 (treatment): {len(poaf_tx_pids)}")
+
+    # Source 3: NEW postop antiarrhythmic meds (not in admissionDrug)
+    preop_aa_pids = set()
+    if len(ad_elig) > 0 and "drugname" in ad_elig.columns:
+        preop_aa_pids = set(
+            ad_elig[
+                matches_any(ad_elig.drugname, cfg.POAF_MED_PATTERNS)
+            ].patientunitstayid
+        )
+    poaf_med_pids = set()
+    if len(med_elig) > 0:
+        new_aa = med_elig[
+            matches_any(med_elig.drugname, cfg.POAF_MED_PATTERNS)
+            & (med_elig.drugstartoffset >= 0)
+            & (med_elig.drugstartoffset <= cfg.POAF_WINDOW_MIN)
+        ]
+        # Only count if NOT already on the drug at admission
+        poaf_med_pids = set(new_aa.patientunitstayid) - preop_aa_pids - preexist_af_pids
+    print(f"    Source 3 (new antiarrhythmic): {len(poaf_med_pids)}")
+
+    # Source 4: infusionDrug (amiodarone/diltiazem drips)
+    inf = t["infusionDrug"]
+    poaf_inf_pids = set()
+    if len(inf) > 0 and "drugname" in inf.columns:
+        inf_elig = inf[inf.patientunitstayid.isin(pids)]
+        poaf_inf = inf_elig[
+            matches_any(inf_elig.drugname, cfg.POAF_INFUSION_PATTERNS)
+            & (inf_elig.infusionoffset >= 0)
+            & (inf_elig.infusionoffset <= cfg.POAF_WINDOW_MIN)
+        ]
+        # Exclude patients who were already on these at admission
+        poaf_inf_pids = (
+            set(poaf_inf.patientunitstayid) - preop_aa_pids - preexist_af_pids
+        )
+    print(f"    Source 4 (infusion drip): {len(poaf_inf_pids)}")
+
+    # Union of all sources → sensitivity
+    poaf_all_pids = poaf_dx_pids | poaf_tx_pids | poaf_med_pids | poaf_inf_pids
+    cohort["poaf"] = cohort.patientunitstayid.isin(poaf_dx_pids).astype(
+        int
+    )  # primary: dx only
+    cohort["poaf_composite"] = cohort.patientunitstayid.isin(poaf_all_pids).astype(
+        int
+    )  # sensitivity
     cohort.loc[cohort.preexisting_af == 1, "poaf"] = np.nan
+    cohort.loc[cohort.preexisting_af == 1, "poaf_composite"] = np.nan
     n_poaf = cohort.poaf.sum()
+    n_poaf_comp = cohort.poaf_composite.sum()
     n_eligible_poaf = (cohort.preexisting_af == 0).sum()
     print(
-        f"    POAF (new-onset, 7d): {int(n_poaf)} / {n_eligible_poaf} "
+        f"    POAF (dx-only, primary):    {int(n_poaf)} / {n_eligible_poaf} "
         f"({n_poaf/n_eligible_poaf*100:.1f}%)"
         if n_eligible_poaf > 0
         else "    POAF: 0"
+    )
+    print(
+        f"    POAF (composite, sensitivity): {int(n_poaf_comp)} / {n_eligible_poaf} "
+        f"({n_poaf_comp/n_eligible_poaf*100:.1f}%)"
+        if n_eligible_poaf > 0
+        else "    POAF composite: 0"
+    )
+
+    # ── Pre-op antiarrhythmic flag (confounder for POAF analysis) ─
+    cohort["preop_antiarrhythmic"] = cohort.patientunitstayid.isin(
+        preop_aa_pids
+    ).astype(int)
+    print(
+        f"    Pre-op antiarrhythmic (admissionDrug): {cohort.preop_antiarrhythmic.sum()}"
+    )
+
+    # ── POAF: cardioversion-only definition (Yan — AF-specific) ───
+    cardioversion_pids = set()
+    if len(tx) > 0 and "treatmentstring" in tx.columns:
+        tx_elig2 = tx[tx.patientunitstayid.isin(pids)]
+        cv_tx = tx_elig2[
+            matches_any(tx_elig2.treatmentstring, ["cardioversion", "cardiovert"])
+            & (tx_elig2.treatmentoffset >= 0)
+            & (tx_elig2.treatmentoffset <= cfg.POAF_WINDOW_MIN)
+        ]
+        cardioversion_pids = set(cv_tx.patientunitstayid) - preexist_af_pids
+    cohort["poaf_cardioversion"] = cohort.patientunitstayid.isin(
+        cardioversion_pids
+    ).astype(int)
+    cohort.loc[cohort.preexisting_af == 1, "poaf_cardioversion"] = np.nan
+    n_cv = cohort.poaf_cardioversion.sum()
+    print(
+        f"    POAF (cardioversion-only, Yan): {int(n_cv)} / {n_eligible_poaf} "
+        f"({n_cv/n_eligible_poaf*100:.1f}%)"
+        if n_eligible_poaf > 0
+        else ""
+    )
+
+    # ── POSITIVE CONTROL: Serum Mg elevation (lab-based) ──────────
+    # Follow-up Mg = first Mg lab AFTER the treatment window (6-48h)
+    print("\n  Positive control: Serum Mg elevation:")
+    followup_mg_window_start = cfg.MG_WINDOW_MIN  # 6h (after treatment window)
+    followup_mg_window_end = 48 * 60  # 48h
+    mg_labs = lab[
+        lab.patientunitstayid.isin(pids)
+        & matches_any(lab.labname, cfg.MG_LABNAMES)
+        & lab.labresult.between(cfg.MG_PLAUSIBLE_MIN, cfg.MG_PLAUSIBLE_MAX)
+    ]
+    followup_mg = (
+        mg_labs[
+            (mg_labs.labresultoffset >= followup_mg_window_start)
+            & (mg_labs.labresultoffset <= followup_mg_window_end)
+        ]
+        .sort_values("labresultoffset")
+        .groupby("patientunitstayid")
+        .first()
+        .reset_index()
+    )
+    followup_mg = followup_mg[["patientunitstayid", "labresult"]].rename(
+        columns={"labresult": "followup_mg_value"}
+    )
+    cohort = cohort.merge(followup_mg, on="patientunitstayid", how="left")
+    cohort["delta_mg"] = cohort["followup_mg_value"] - cohort["first_mg_value"]
+    n_followup = cohort.followup_mg_value.notna().sum()
+    print(f"    Follow-up Mg (6-48h): {n_followup} patients with data")
+    if n_followup > 0:
+        mg_supp_mask = cohort.mg_supplementation == 1
+        delta_trt = cohort.loc[mg_supp_mask & cohort.delta_mg.notna(), "delta_mg"]
+        delta_ctrl = cohort.loc[~mg_supp_mask & cohort.delta_mg.notna(), "delta_mg"]
+        print(
+            f"    Treated: delta_mg = {delta_trt.mean():.3f} ± {delta_trt.std():.3f} (n={len(delta_trt)})"
+        )
+        print(
+            f"    Untreated: delta_mg = {delta_ctrl.mean():.3f} ± {delta_ctrl.std():.3f} (n={len(delta_ctrl)})"
+        )
+        print(f"    Difference: {delta_trt.mean() - delta_ctrl.mean():.3f} mg/dL")
+
+    # ── First postop potassium (electrolyte covariate) ────────────
+    lab = t["lab"]
+    k_labs = lab[
+        lab.patientunitstayid.isin(pids)
+        & matches_any(lab.labname, cfg.K_LABNAMES)
+        & lab.labresult.between(cfg.K_PLAUSIBLE_MIN, cfg.K_PLAUSIBLE_MAX)
+        & (lab.labresultoffset >= 0)
+        & (lab.labresultoffset <= cfg.MG_WINDOW_MIN)
+    ]
+    first_k = (
+        k_labs.sort_values("labresultoffset")
+        .groupby("patientunitstayid")
+        .first()
+        .reset_index()[["patientunitstayid", "labresult"]]
+        .rename(columns={"labresult": "first_k_value"})
+    )
+    cohort = cohort.merge(first_k, on="patientunitstayid", how="left")
+    print(
+        f"    First postop K+: {cohort.first_k_value.notna().sum()} available, "
+        f"median={cohort.first_k_value.median():.1f}"
+        if cohort.first_k_value.notna().sum() > 0
+        else "    First K+: unavailable"
     )
 
     # ── Negative control outcomes ─────────────────────────────────
