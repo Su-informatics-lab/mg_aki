@@ -100,7 +100,9 @@ dat_a <- cohort_a %>%
     mg_quartile  = factor(mg_quartile),
     ethnicity    = factor(replace_na(ethnicity, "Other/Unknown")),
   ) %>%
-  filter(!is.na(baseline_cr), !is.na(age_num))
+  filter(!is.na(baseline_cr), !is.na(age_num)) %>%
+  # Cap implausible BMI (eICU admissionWeight/Height can be junk)
+  mutate(bmi = ifelse(!is.na(bmi) & bmi > 10 & bmi < 80, bmi, NA_real_))
 
 cat(sprintf("  Analysis A sample: %d\n", nrow(dat_a)))
 
@@ -144,7 +146,11 @@ if (!is.null(cohort_b) && nrow(cohort_b) > 10) {
   ps_formula <- as.formula(paste("trt ~", cov_formula_rhs,
                                  "+ first_mg_value"))
 
-  cat(sprintf("  TTE sample: %d (treated: %d)\n",
+  # Drop rows with NA in any PS covariate before fitting
+  ps_vars <- all.vars(ps_formula)
+  dat_b <- dat_b %>% drop_na(any_of(ps_vars))
+
+  cat(sprintf("  TTE sample: %d (treated: %d) [after dropping NA covariates]\n",
               nrow(dat_b), sum(dat_b$trt)))
 
   # ── PS estimation ──────────────────────────────────────────────
