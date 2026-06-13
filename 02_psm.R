@@ -83,7 +83,9 @@ if ("apachescore" %in% names(cohort_a)) {
 }
 
 # Add pre-op antiarrhythmic and potassium if available
-for (v in c("preop_antiarrhythmic", "first_k_value")) {
+for (v in c("preop_antiarrhythmic", "first_k_value",
+            "has_vasopressor", "first_map", "first_hr",
+            "first_ca_value", "first_lactate")) {
   if (v %in% names(cohort_a)) {
     cov_formula_rhs <- paste(cov_formula_rhs, "+", v)
   }

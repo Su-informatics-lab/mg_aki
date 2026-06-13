@@ -692,6 +692,129 @@ def build_covariates(t, cohort):
         f"({cohort.has_steroid.mean()*100:.1f}%)"
     )
 
+    # ── Vasopressor use (critical missing confounder) ─────────────
+    vaso_pids = set()
+    inf = t["infusionDrug"]
+    if len(inf) > 0 and "drugname" in inf.columns:
+        inf_elig = inf[inf.patientunitstayid.isin(pids)]
+        vaso_inf = inf_elig[
+            matches_any(inf_elig.drugname, cfg.VASOPRESSOR_PATTERNS)
+            & (inf_elig.infusionoffset >= 0)
+            & (inf_elig.infusionoffset <= cfg.MG_WINDOW_MIN)
+        ]
+        vaso_pids |= set(vaso_inf.patientunitstayid)
+    if len(med_elig) > 0:
+        vaso_med = med_elig[
+            matches_any(med_elig.drugname, cfg.VASOPRESSOR_PATTERNS)
+            & (med_elig.drugstartoffset >= 0)
+            & (med_elig.drugstartoffset <= cfg.MG_WINDOW_MIN)
+        ]
+        vaso_pids |= set(vaso_med.patientunitstayid)
+    cohort["has_vasopressor"] = cohort.patientunitstayid.isin(vaso_pids).astype(int)
+    print(
+        f"    Vasopressor (early postop): {cohort.has_vasopressor.sum()} "
+        f"({cohort.has_vasopressor.mean()*100:.1f}%)"
+    )
+
+    # ── First MAP and HR (from vitalPeriodic) ─────────────────────
+    try:
+        vp = pd.read_csv(
+            os.path.join(cfg.DATA_ROOT, "vitalPeriodic.csv.gz"),
+            usecols=[
+                "patientunitstayid",
+                "observationoffset",
+                "systemicmean",
+                "heartrate",
+            ],
+            dtype={"patientunitstayid": int},
+        )
+        vp.columns = vp.columns.str.lower()
+        vp_elig = (
+            vp[
+                vp.patientunitstayid.isin(pids)
+                & (vp.observationoffset >= 0)
+                & (vp.observationoffset <= 60)  # first hour
+            ]
+            .sort_values("observationoffset")
+            .groupby("patientunitstayid")
+            .first()
+            .reset_index()
+        )
+
+        if "systemicmean" in vp_elig.columns:
+            map_df = vp_elig[["patientunitstayid", "systemicmean"]].rename(
+                columns={"systemicmean": "first_map"}
+            )
+            map_df = map_df[map_df.first_map.between(20, 200)]
+            cohort = cohort.merge(map_df, on="patientunitstayid", how="left")
+            print(
+                f"    First MAP: {cohort.first_map.notna().sum()} available, "
+                f"median={cohort.first_map.median():.0f}"
+            )
+
+        if "heartrate" in vp_elig.columns:
+            hr_df = vp_elig[["patientunitstayid", "heartrate"]].rename(
+                columns={"heartrate": "first_hr"}
+            )
+            hr_df = hr_df[hr_df.first_hr.between(20, 250)]
+            cohort = cohort.merge(hr_df, on="patientunitstayid", how="left")
+            print(
+                f"    First HR: {cohort.first_hr.notna().sum()} available, "
+                f"median={cohort.first_hr.median():.0f}"
+            )
+    except Exception as e:
+        print(f"    Vitals loading failed: {e}")
+
+    # ── First calcium (from lab) ──────────────────────────────────
+    ca_labs = lab[
+        lab.patientunitstayid.isin(pids)
+        & matches_any(lab.labname, cfg.CA_LABNAMES)
+        & lab.labresult.between(cfg.CA_PLAUSIBLE_MIN, cfg.CA_PLAUSIBLE_MAX)
+        & (lab.labresultoffset >= 0)
+        & (lab.labresultoffset <= cfg.MG_WINDOW_MIN)
+    ]
+    first_ca = (
+        ca_labs.sort_values("labresultoffset")
+        .groupby("patientunitstayid")
+        .first()
+        .reset_index()[["patientunitstayid", "labresult"]]
+        .rename(columns={"labresult": "first_ca_value"})
+    )
+    cohort = cohort.merge(first_ca, on="patientunitstayid", how="left")
+    print(
+        f"    First Ca2+: {cohort.first_ca_value.notna().sum()} available"
+        + (
+            f", median={cohort.first_ca_value.median():.1f}"
+            if cohort.first_ca_value.notna().sum() > 0
+            else ""
+        )
+    )
+
+    # ── First lactate (from lab) ──────────────────────────────────
+    lac_labs = lab[
+        lab.patientunitstayid.isin(pids)
+        & matches_any(lab.labname, cfg.LACTATE_LABNAMES)
+        & lab.labresult.between(cfg.LACTATE_PLAUSIBLE_MIN, cfg.LACTATE_PLAUSIBLE_MAX)
+        & (lab.labresultoffset >= 0)
+        & (lab.labresultoffset <= cfg.MG_WINDOW_MIN)
+    ]
+    first_lac = (
+        lac_labs.sort_values("labresultoffset")
+        .groupby("patientunitstayid")
+        .first()
+        .reset_index()[["patientunitstayid", "labresult"]]
+        .rename(columns={"labresult": "first_lactate"})
+    )
+    cohort = cohort.merge(first_lac, on="patientunitstayid", how="left")
+    print(
+        f"    First lactate: {cohort.first_lactate.notna().sum()} available"
+        + (
+            f", median={cohort.first_lactate.median():.1f}"
+            if cohort.first_lactate.notna().sum() > 0
+            else ""
+        )
+    )
+
     # ── POAF detection (positive control — COMPOSITE phenotype) ────
     print("\n  Outcome: POAF (composite phenotype):")
     dx = t["diagnosis"]

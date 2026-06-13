@@ -58,7 +58,9 @@ cov_rhs <- paste(c(
   "nephrotox_acei_arb", "nephrotox_ppi"
 ), collapse = " + ")
 # NOTE: apachescore excluded — it's a post-treatment variable (worst in 24h includes post-Mg physiology)
-for (v in c("preop_antiarrhythmic", "first_k_value")) {
+for (v in c("preop_antiarrhythmic", "first_k_value",
+            "has_vasopressor", "first_map", "first_hr",
+            "first_ca_value", "first_lactate")) {
   if (v %in% names(dat_a)) cov_rhs <- paste(cov_rhs, "+", v)
 }
 

@@ -325,3 +325,27 @@ VENT_ARRHYTHMIA_DX = [
     "torsades",
     "ventricular arrhythmia",
 ]
+
+# =====================================================================
+# MISSING PS CONFOUNDERS (hemodynamic, electrolyte, acuity)
+# =====================================================================
+VASOPRESSOR_PATTERNS = [
+    "norepinephrine",
+    "levophed",
+    "epinephrine",
+    "adrenaline",
+    "vasopressin",
+    "phenylephrine",
+    "neosynephrine",
+    "dopamine",
+    "dobutamine",
+    "milrinone",
+]
+
+CA_LABNAMES = ["calcium", "ionized calcium"]
+CA_PLAUSIBLE_MIN = 4.0
+CA_PLAUSIBLE_MAX = 15.0
+
+LACTATE_LABNAMES = ["lactate"]
+LACTATE_PLAUSIBLE_MIN = 0.1
+LACTATE_PLAUSIBLE_MAX = 30.0
