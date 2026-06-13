@@ -209,10 +209,87 @@ if (!is.null(cohort_b) && nrow(cohort_b) > 10) {
 
   # Save IPTW cohort
   write_csv(dat_b, file.path(RESULTS, "02d_tte_iptw.csv"))
-  cat("  Saved TTE IPTW cohort\n")
+  cat("  Saved TTE-A IPTW cohort\n")
 
 } else {
-  cat("\n  Skipping Analysis B — insufficient TTE sample\n")
+  cat("\n  Skipping TTE-A — insufficient sample\n")
+}
+
+# =====================================================================
+# TTE-B: UNRESTRICTED (all cardiac surgery, prophylactic question)
+# =====================================================================
+cat("\n", strrep("=", 70), "\n")
+cat("TTE-B: Unrestricted — routine Mg supplementation (all patients)\n")
+cat(strrep("=", 70), "\n")
+
+dat_b2 <- cohort_a %>%
+  mutate(
+    surgery_type = factor(surgery_type,
+                          levels = c("cabg", "valve", "combined",
+                                     "other_cardiac")),
+    trt = as.integer(mg_supplementation),
+  ) %>%
+  filter(!is.na(baseline_cr), !is.na(age_num))
+
+# PS formula: same covariates + first_mg_value (critical for confounding by indication)
+ps_formula_b2 <- as.formula(paste("trt ~", cov_formula_rhs, "+ first_mg_value"))
+
+# Drop NA in PS covariates
+ps_vars_b2 <- all.vars(ps_formula_b2)
+dat_b2 <- dat_b2 %>% drop_na(any_of(ps_vars_b2))
+
+cat(sprintf("  TTE-B sample: %d (treated: %d, untreated: %d)\n",
+            nrow(dat_b2), sum(dat_b2$trt), sum(dat_b2$trt == 0)))
+
+if (nrow(dat_b2) > 50 && sum(dat_b2$trt) > 20) {
+  # ── PS estimation ──────────────────────────────────────────────
+  cat("\n  Fitting propensity score model...\n")
+  ps_model_b2 <- glm(ps_formula_b2, data = dat_b2, family = binomial())
+  dat_b2$ps <- predict(ps_model_b2, type = "response")
+
+  cat(sprintf("  PS: mean=%.3f, range=[%.3f, %.3f]\n",
+              mean(dat_b2$ps), min(dat_b2$ps), max(dat_b2$ps)))
+
+  # ── IPTW ───────────────────────────────────────────────────────
+  cat("\n  Computing IPTW (stabilized, truncated 1/99)...\n")
+  w_obj_b2 <- weightit(ps_formula_b2, data = dat_b2, method = "ps",
+                        estimand = "ATE")
+  dat_b2$iptw_raw <- w_obj_b2$weights
+  q01 <- quantile(dat_b2$iptw_raw, 0.01)
+  q99 <- quantile(dat_b2$iptw_raw, 0.99)
+  dat_b2$iptw <- pmax(pmin(dat_b2$iptw_raw, q99), q01)
+
+  cat(sprintf("  IPTW: median=%.2f, max=%.2f, ESS=%.0f\n",
+              median(dat_b2$iptw), max(dat_b2$iptw),
+              (sum(dat_b2$iptw))^2 / sum(dat_b2$iptw^2)))
+
+  # Balance
+  bal_b2 <- bal.tab(w_obj_b2, stats = c("m", "v"), thresholds = c(m = 0.1))
+  cat("\n  Balance (IPTW):\n")
+  print(bal_b2)
+
+  # ── Overlap weighting ─────────────────────────────────────────
+  dat_b2$ow <- ifelse(dat_b2$trt == 1, 1 - dat_b2$ps, dat_b2$ps)
+
+  # ── PS Matching ────────────────────────────────────────────────
+  cat("\n  PS Matching (1:1 nearest-neighbor, caliper 0.2 SD)...\n")
+  dat_b2_matched <- NULL
+  tryCatch({
+    m_out_b2 <- matchit(ps_formula_b2, data = dat_b2, method = "nearest",
+                         distance = "glm", caliper = 0.2, ratio = 1)
+    dat_b2_matched <- match.data(m_out_b2)
+    cat(sprintf("  Matched: %d pairs (%d total)\n",
+                sum(dat_b2_matched$trt == 1), nrow(dat_b2_matched)))
+    write_csv(dat_b2_matched, file.path(RESULTS, "02f_tteb_matched.csv"))
+  }, error = function(e) {
+    cat(sprintf("  Matching failed: %s\n", e$message))
+  })
+
+  write_csv(dat_b2, file.path(RESULTS, "02e_tteb_iptw.csv"))
+  cat("  Saved TTE-B IPTW cohort\n")
+
+} else {
+  cat("  Skipping TTE-B — insufficient sample\n")
 }
 
 # ─── PS diagnostics PDF ────────────────────────────────────────────
@@ -230,14 +307,24 @@ tryCatch({
     print(p1)
   }
 
-  # Analysis B: PS overlap
+  # Analysis B (restricted): PS overlap
   if (!is.null(cohort_b) && exists("dat_b") && "ps" %in% names(dat_b)) {
     p2 <- ggplot(dat_b, aes(x = ps, fill = factor(trt))) +
       geom_density(alpha = 0.5) +
-      labs(title = "Analysis B: PS overlap (Mg supplementation)",
+      labs(title = "TTE-A (hypoMg): PS overlap",
            x = "Propensity score", fill = "Mg supp") +
       theme_minimal()
     print(p2)
+  }
+
+  # TTE-B (unrestricted): PS overlap
+  if (exists("dat_b2") && "ps" %in% names(dat_b2)) {
+    p3 <- ggplot(dat_b2, aes(x = ps, fill = factor(trt))) +
+      geom_density(alpha = 0.5) +
+      labs(title = "TTE-B (all patients): PS overlap",
+           x = "Propensity score", fill = "Mg supp") +
+      theme_minimal()
+    print(p3)
   }
 
   dev.off()

@@ -362,7 +362,128 @@ if (!is.null(dat_b) && nrow(dat_b) > 10) {
 }
 
 # =====================================================================
-# SAVE RESULTS SUMMARY
+# TTE-B: UNRESTRICTED — routine Mg supplementation (all patients)
+# =====================================================================
+dat_b2 <- tryCatch(
+  read_csv(file.path(RESULTS, "02e_tteb_iptw.csv"), show_col_types = FALSE),
+  error = function(e) NULL
+)
+dat_b2_m <- tryCatch(
+  read_csv(file.path(RESULTS, "02f_tteb_matched.csv"), show_col_types = FALSE),
+  error = function(e) NULL
+)
+
+if (!is.null(dat_b2) && nrow(dat_b2) > 10) {
+  cat("\n", strrep("=", 70), "\n")
+  cat("TTE-B: Unrestricted — routine Mg supplementation (all patients)\n")
+  cat(strrep("=", 70), "\n")
+
+  # Derive AKI outcomes
+  if (!"aki_kdigo1" %in% names(dat_b2)) {
+    dat_b2$aki_kdigo1 <- as.integer(dat_b2$aki_primary == 1 | dat_b2$aki_delta03 == 1)
+  }
+
+  cat(sprintf("  N = %d (treated: %d, untreated: %d)\n",
+              nrow(dat_b2), sum(dat_b2$trt), sum(dat_b2$trt == 0)))
+
+  # ── B2-1: IPTW across AKI severity ────────────────────────────
+  cat("\n  B2-1: Mg supplementation effect across AKI severity (IPTW, ALL patients):\n")
+  cat(sprintf("  %-45s %8s %15s %10s\n", "Outcome", "Events", "OR (95% CI)", "p"))
+  cat(strrep("-", 85), "\n")
+
+  b2_outcomes <- c(
+    "aki_delta03" = "Delta >=0.3 (mildest)",
+    "aki_kdigo1"  = "KDIGO Stage >=1 (union)",
+    "aki_primary" = "Ratio >=1.5x (moderate)",
+    "aki_stage2"  = "Stage >=2 (severe)",
+    "aki_stage3"  = "Stage >=3 (most severe)"
+  )
+
+  if ("hospitalid" %in% names(dat_b2)) {
+    des_b2 <- svydesign(ids = ~hospitalid, weights = ~iptw, data = dat_b2)
+  } else {
+    des_b2 <- svydesign(ids = ~1, weights = ~iptw, data = dat_b2)
+  }
+
+  for (outcome_var in names(b2_outcomes)) {
+    if (!outcome_var %in% names(dat_b2)) next
+    label <- b2_outcomes[[outcome_var]]
+    n_events <- sum(dat_b2[[outcome_var]], na.rm = TRUE)
+
+    tryCatch({
+      f <- as.formula(paste(outcome_var, "~ trt"))
+      m <- svyglm(f, design = des_b2, family = quasibinomial())
+      s <- tidy(m, conf.int = TRUE, exponentiate = TRUE)
+      trt_row <- s %>% filter(term == "trt")
+
+      if (nrow(trt_row) > 0) {
+        cat(sprintf("  %-45s %8d %5.2f (%.2f-%.2f) %10.4f\n",
+                    label, n_events,
+                    trt_row$estimate, trt_row$conf.low, trt_row$conf.high,
+                    trt_row$p.value))
+        results_list[[paste0("B2_", outcome_var)]] <- tibble(
+          model = paste0("TTE-B_", outcome_var), term = "mg_supplementation",
+          estimate = trt_row$estimate, conf.low = trt_row$conf.low,
+          conf.high = trt_row$conf.high, p.value = trt_row$p.value,
+          n_events = n_events
+        )
+      }
+    }, error = function(e) {
+      cat(sprintf("  %-45s %8d   FAILED: %s\n", label, n_events, e$message))
+    })
+  }
+
+  # ── B2-2: Sensitivity methods (ratio >=1.5x) ──────────────────
+  cat("\n  B2-2: Sensitivity (ratio >=1.5x)...\n")
+
+  # Cox
+  tryCatch({
+    dat_b2_surv <- dat_b2 %>%
+      filter(!is.na(time_to_event_hours), time_to_event_hours > 0)
+    if (nrow(dat_b2_surv) > 10) {
+      m <- coxph(Surv(time_to_event_hours, aki_primary) ~ trt,
+                 weights = iptw, data = dat_b2_surv, robust = TRUE)
+      s <- tidy(m, conf.int = TRUE, exponentiate = TRUE)
+      cat(sprintf("    IPTW Cox HR = %.2f (%.2f-%.2f), p = %.4f\n",
+                  s$estimate[1], s$conf.low[1], s$conf.high[1], s$p.value[1]))
+      results_list[["TTE-B_cox"]] <- s
+    }
+  }, error = function(e) cat(sprintf("    Cox failed: %s\n", e$message)))
+
+  # Overlap weighting
+  tryCatch({
+    des_ow_b2 <- svydesign(ids = ~1, weights = ~ow, data = dat_b2)
+    m <- svyglm(aki_primary ~ trt, design = des_ow_b2, family = quasibinomial())
+    s <- tidy(m, conf.int = TRUE, exponentiate = TRUE)
+    trt_ow <- s %>% filter(term == "trt")
+    if (nrow(trt_ow) > 0) {
+      cat(sprintf("    OW OR = %.2f (%.2f-%.2f), p = %.4f\n",
+                  trt_ow$estimate, trt_ow$conf.low, trt_ow$conf.high, trt_ow$p.value))
+      results_list[["TTE-B_overlap"]] <- trt_ow
+    }
+  }, error = function(e) cat(sprintf("    OW failed: %s\n", e$message)))
+
+  # PS matching
+  if (!is.null(dat_b2_m) && nrow(dat_b2_m) > 4) {
+    tryCatch({
+      if (!"aki_primary" %in% names(dat_b2_m)) {
+        dat_b2_m$aki_primary <- as.integer(dat_b2_m$aki_kdigo1)
+      }
+      m <- glm(aki_primary ~ trt, data = dat_b2_m,
+               family = binomial(), weights = weights)
+      s <- tidy(m, conf.int = TRUE, exponentiate = TRUE)
+      trt_m <- s %>% filter(term == "trt")
+      if (nrow(trt_m) > 0) {
+        cat(sprintf("    Matched OR = %.2f (%.2f-%.2f), p = %.4f\n",
+                    trt_m$estimate, trt_m$conf.low, trt_m$conf.high, trt_m$p.value))
+        results_list[["TTE-B_matched"]] <- trt_m
+      }
+    }, error = function(e) cat(sprintf("    Matching failed: %s\n", e$message)))
+  }
+
+} else {
+  cat("\n  Skipping TTE-B — no data\n")
+}
 # =====================================================================
 cat("\n", strrep("=", 70), "\n")
 cat("RESULTS SUMMARY\n")
