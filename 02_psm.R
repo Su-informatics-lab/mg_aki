@@ -83,11 +83,22 @@ if ("apachescore" %in% names(cohort_a)) {
 }
 
 # Add pre-op antiarrhythmic and potassium if available
+# NOTE: first_lactate (20% available) and first_map (56% available) excluded — too sparse
 for (v in c("preop_antiarrhythmic", "first_k_value",
-            "has_vasopressor", "first_map", "first_hr",
-            "first_ca_value", "first_lactate")) {
+            "has_vasopressor", "first_hr",
+            "first_ca_value")) {
   if (v %in% names(cohort_a)) {
     cov_formula_rhs <- paste(cov_formula_rhs, "+", v)
+  }
+}
+
+# Median-impute continuous covariates with moderate missingness to avoid sample collapse
+for (v in c("first_k_value", "first_hr", "first_ca_value")) {
+  if (v %in% names(cohort_a) && any(is.na(cohort_a[[v]]))) {
+    med_val <- median(cohort_a[[v]], na.rm = TRUE)
+    n_imp <- sum(is.na(cohort_a[[v]]))
+    cohort_a[[v]][is.na(cohort_a[[v]])] <- med_val
+    cat(sprintf("  Imputed %s: %d NA -> median %.2f\n", v, n_imp, med_val))
   }
 }
 
@@ -152,6 +163,13 @@ if (!is.null(cohort_b) && nrow(cohort_b) > 10) {
       trt = as.integer(mg_supplementation),
     ) %>%
     filter(!is.na(baseline_cr), !is.na(age_num))
+
+  # Median-impute continuous covariates
+  for (v in c("first_k_value", "first_hr", "first_ca_value")) {
+    if (v %in% names(dat_b) && any(is.na(dat_b[[v]]))) {
+      dat_b[[v]][is.na(dat_b[[v]])] <- median(dat_b[[v]], na.rm = TRUE)
+    }
+  }
 
   # Also include Mg level at time zero (the value triggering eligibility)
   ps_formula <- as.formula(paste("trt ~", cov_formula_rhs,
@@ -241,6 +259,13 @@ dat_b2 <- cohort_a %>%
     trt = as.integer(mg_supplementation),
   ) %>%
   filter(!is.na(baseline_cr), !is.na(age_num))
+
+# Median-impute continuous covariates
+for (v in c("first_k_value", "first_hr", "first_ca_value")) {
+  if (v %in% names(dat_b2) && any(is.na(dat_b2[[v]]))) {
+    dat_b2[[v]][is.na(dat_b2[[v]])] <- median(dat_b2[[v]], na.rm = TRUE)
+  }
+}
 
 # PS formula: same covariates + first_mg_value (critical for confounding by indication)
 ps_formula_b2 <- as.formula(paste("trt ~", cov_formula_rhs, "+ first_mg_value"))
