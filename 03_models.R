@@ -137,6 +137,63 @@ tryCatch({
   results_list[["A2_quartiles"]] <<- s
 }, error = function(e) cat(sprintf("  Failed: %s\n", e$message)))
 
+# A3: Surgery-type interaction (cardioplegia hypothesis test)
+cat("\n  A3: Surgery-type × Mg interaction (cardioplegia hypothesis):\n")
+cat("  If combined/valve (more cardioplegia) shows stronger Mg-AKI association,\n")
+cat("  supports cardioplegia confounding of the prognostic association.\n\n")
+tryCatch({
+  dat_a$surg_complex <- ifelse(dat_a$surgery_type %in% c("combined", "valve"),
+                                "complex", "simple")
+  m_int <- glm(as.formula(paste("aki_kdigo1 ~ first_mg_value * surg_complex +", cov_rhs)),
+               data = dat_a, family = binomial())
+  s_int <- tidy(m_int, conf.int = TRUE, exponentiate = TRUE)
+  main <- s_int %>% filter(term == "first_mg_value")
+  inter <- s_int %>% filter(grepl(":", term))
+  if (nrow(main) > 0)
+    cat(sprintf("    Mg effect (simple surgery): OR %.2f (%.2f-%.2f), p=%.4f\n",
+                main$estimate, main$conf.low, main$conf.high, main$p.value))
+  if (nrow(inter) > 0)
+    cat(sprintf("    Interaction (complex × Mg):  OR %.2f (%.2f-%.2f), p=%.4f\n",
+                inter$estimate, inter$conf.low, inter$conf.high, inter$p.value))
+
+  # Also: stratified ORs
+  for (stype in c("simple", "complex")) {
+    dat_sub <- dat_a %>% filter(surg_complex == stype)
+    m_sub <- glm(as.formula(paste("aki_kdigo1 ~ first_mg_value +", cov_rhs)),
+                 data = dat_sub, family = binomial())
+    s_sub <- tidy(m_sub, conf.int = TRUE, exponentiate = TRUE) %>%
+      filter(term == "first_mg_value")
+    if (nrow(s_sub) > 0)
+      cat(sprintf("    Stratified %s (n=%d): OR %.2f (%.2f-%.2f), p=%.4f\n",
+                  stype, nrow(dat_sub), s_sub$estimate, s_sub$conf.low,
+                  s_sub$conf.high, s_sub$p.value))
+  }
+}, error = function(e) cat(sprintf("  Interaction test failed: %s\n", e$message)))
+
+# A4: APACHE sensitivity (with vs without, mediator bias demonstration)
+cat("\n  A4: APACHE sensitivity (mediator bias test):\n")
+if ("apachescore" %in% names(dat_a)) {
+  tryCatch({
+    # Without APACHE (primary — current)
+    m_no <- glm(as.formula(paste("aki_kdigo1 ~ first_mg_value +", cov_rhs)),
+                data = dat_a, family = binomial())
+    s_no <- tidy(m_no, conf.int = TRUE, exponentiate = TRUE) %>%
+      filter(term == "first_mg_value")
+    # With APACHE
+    m_yes <- glm(as.formula(paste("aki_kdigo1 ~ first_mg_value +", cov_rhs, "+ apachescore")),
+                 data = dat_a %>% filter(!is.na(apachescore)), family = binomial())
+    s_yes <- tidy(m_yes, conf.int = TRUE, exponentiate = TRUE) %>%
+      filter(term == "first_mg_value")
+    if (nrow(s_no) > 0)
+      cat(sprintf("    Without APACHE (primary): OR %.2f (%.2f-%.2f), p=%.4f\n",
+                  s_no$estimate, s_no$conf.low, s_no$conf.high, s_no$p.value))
+    if (nrow(s_yes) > 0)
+      cat(sprintf("    With APACHE (sensitivity): OR %.2f (%.2f-%.2f), p=%.4f\n",
+                  s_yes$estimate, s_yes$conf.low, s_yes$conf.high, s_yes$p.value))
+    cat("    (If APACHE amplifies the association, it acts as a mediator, not confounder)\n")
+  }, error = function(e) cat(sprintf("  APACHE sensitivity failed: %s\n", e$message)))
+}
+
 
 # =====================================================================
 # TTE SUITE (runs for both unrestricted and restricted)
@@ -291,6 +348,50 @@ run_suite <- function(dat, dat_m, title, pfx) {
   sec_r <- lapply(names(sec_oc), function(o) iptw_or(dat, o, sec_oc[[o]]))
   ptbl(sec_r, "F. SECONDARY")
   for (r in sec_r) if (!is.null(r)) results_list[[paste0(pfx, "_sec_", r$label)]] <<- r
+
+  # ── G. E-VALUES (unmeasured confounding sensitivity) ───────────
+  if (HAS_EVALUE) {
+    cat("\n  G. E-VALUES:\n")
+    for (nm in c("KDIGO >=1", "Ratio >=1.5x", "AKI 1.5x <=48h")) {
+      key <- paste0(pfx, "_aki_", nm)
+      if (is.null(key)) key <- paste0(pfx, "_tw_", nm)
+      # search across all results
+      for (k in names(results_list)) {
+        obj <- results_list[[k]]
+        if (!is.null(obj) && is.data.frame(obj) && "label" %in% names(obj) &&
+            any(obj$label == nm) && grepl(pfx, k)) {
+          row <- obj[obj$label == nm, ]
+          if (nrow(row) > 0 && !is.na(row$estimate[1])) {
+            tryCatch({
+              rare <- (row$n_events[1] / row$n_total[1]) < 0.15
+              ev <- EValue::evalues.OR(row$estimate[1], row$conf.low[1],
+                                       row$conf.high[1], rare = rare)
+              cat(sprintf("    %s: E-value = %.2f (CI bound: %.2f)\n",
+                          nm, ev["E-values", "point"], ev["E-values", "lower"]))
+            }, error = function(e) NULL)
+          }
+          break
+        }
+      }
+    }
+    # Hospital mortality for TTE-A
+    for (k in names(results_list)) {
+      obj <- results_list[[k]]
+      if (!is.null(obj) && is.data.frame(obj) && "label" %in% names(obj) &&
+          any(obj$label == "Hospital mortality") && grepl(pfx, k)) {
+        row <- obj[obj$label == "Hospital mortality", ]
+        if (nrow(row) > 0 && !is.na(row$estimate[1])) {
+          tryCatch({
+            ev <- EValue::evalues.OR(row$estimate[1], row$conf.low[1],
+                                     row$conf.high[1], rare = TRUE)
+            cat(sprintf("    Hospital mortality: E-value = %.2f (CI bound: %.2f)\n",
+                        ev["E-values", "point"], ev["E-values", "lower"]))
+          }, error = function(e) NULL)
+        }
+        break
+      }
+    }
+  }
 }
 
 # ─── Run both TTE designs ───────────────────────────────────────────
