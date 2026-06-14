@@ -57,7 +57,6 @@ cov_rhs <- paste(c(
   "nephrotox_loop_diuretic", "nephrotox_nsaid",
   "nephrotox_acei_arb", "nephrotox_ppi"
 ), collapse = " + ")
-# NOTE: apachescore excluded — post-treatment. first_lactate/first_map excluded — too sparse.
 for (v in c("preop_antiarrhythmic", "first_k_value",
             "has_vasopressor", "first_hr", "first_ca_value")) {
   if (v %in% names(dat_a)) cov_rhs <- paste(cov_rhs, "+", v)
@@ -78,7 +77,7 @@ iptw_or <- function(dat, outcome, label = outcome, wt = "iptw") {
     m <- svyglm(as.formula(paste(outcome, "~ trt")), design = des,
                 family = quasibinomial())
     s <- tidy(m, conf.int = TRUE, exponentiate = TRUE) %>% filter(term == "trt")
-    if (nrow(s) > 0) { s$n_events <- nev; s$label <- label }
+    if (nrow(s) > 0) { s$n_events <- nev; s$label <- label; s$n_total <- nrow(d) }
     s
   }, error = function(e) NULL)
 }
@@ -139,8 +138,6 @@ tryCatch({
 
 # A3: Surgery-type interaction (cardioplegia hypothesis test)
 cat("\n  A3: Surgery-type × Mg interaction (cardioplegia hypothesis):\n")
-cat("  If combined/valve (more cardioplegia) shows stronger Mg-AKI association,\n")
-cat("  supports cardioplegia confounding of the prognostic association.\n\n")
 tryCatch({
   dat_a$surg_complex <- ifelse(dat_a$surgery_type %in% c("combined", "valve"),
                                 "complex", "simple")
@@ -156,7 +153,6 @@ tryCatch({
     cat(sprintf("    Interaction (complex × Mg):  OR %.2f (%.2f-%.2f), p=%.4f\n",
                 inter$estimate, inter$conf.low, inter$conf.high, inter$p.value))
 
-  # Also: stratified ORs
   for (stype in c("simple", "complex")) {
     dat_sub <- dat_a %>% filter(surg_complex == stype)
     m_sub <- glm(as.formula(paste("aki_kdigo1 ~ first_mg_value +", cov_rhs)),
@@ -170,16 +166,14 @@ tryCatch({
   }
 }, error = function(e) cat(sprintf("  Interaction test failed: %s\n", e$message)))
 
-# A4: APACHE sensitivity (with vs without, mediator bias demonstration)
+# A4: APACHE sensitivity
 cat("\n  A4: APACHE sensitivity (mediator bias test):\n")
 if ("apachescore" %in% names(dat_a)) {
   tryCatch({
-    # Without APACHE (primary — current)
     m_no <- glm(as.formula(paste("aki_kdigo1 ~ first_mg_value +", cov_rhs)),
                 data = dat_a, family = binomial())
     s_no <- tidy(m_no, conf.int = TRUE, exponentiate = TRUE) %>%
       filter(term == "first_mg_value")
-    # With APACHE
     m_yes <- glm(as.formula(paste("aki_kdigo1 ~ first_mg_value +", cov_rhs, "+ apachescore")),
                  data = dat_a %>% filter(!is.na(apachescore)), family = binomial())
     s_yes <- tidy(m_yes, conf.int = TRUE, exponentiate = TRUE) %>%
@@ -190,7 +184,6 @@ if ("apachescore" %in% names(dat_a)) {
     if (nrow(s_yes) > 0)
       cat(sprintf("    With APACHE (sensitivity): OR %.2f (%.2f-%.2f), p=%.4f\n",
                   s_yes$estimate, s_yes$conf.low, s_yes$conf.high, s_yes$p.value))
-    cat("    (If APACHE amplifies the association, it acts as a mediator, not confounder)\n")
   }, error = function(e) cat(sprintf("  APACHE sensitivity failed: %s\n", e$message)))
 }
 
@@ -203,6 +196,7 @@ run_suite <- function(dat, dat_m, title, pfx) {
     cat(sprintf("\n  Skipping %s\n", title)); return() }
   dat <- add_aki(dat)
   if (!is.null(dat_m)) dat_m <- add_aki(dat_m)
+  n_total <- nrow(dat)  # for E-value rare-outcome check
 
   cat("\n", strrep("=", 70), "\n")
   cat(sprintf("%s  [N=%d, trt=%d]\n", title, nrow(dat), sum(dat$trt)))
@@ -239,7 +233,6 @@ run_suite <- function(dat, dat_m, title, pfx) {
   if (!is.null(r_va)) {
     cat(sprintf("    IPTW OR = %.2f (%.2f-%.2f), p = %.4f  [n_events=%d]\n",
                 r_va$estimate, r_va$conf.low, r_va$conf.high, r_va$p.value, r_va$n_events))
-    cat("    (Expected: OR ~0.5 if pipeline captures causal effect)\n")
     results_list[[paste0(pfx, "_vent_arrhythmia")]] <<- r_va
   } else {
     cat("    Insufficient VT/VF events\n")
@@ -350,12 +343,12 @@ run_suite <- function(dat, dat_m, title, pfx) {
   for (r in sec_r) if (!is.null(r)) results_list[[paste0(pfx, "_sec_", r$label)]] <<- r
 
   # ── G. E-VALUES (unmeasured confounding sensitivity) ───────────
+  # FIX (bug #1): compute directly from OR/CI, not from n_total column
   if (HAS_EVALUE) {
     cat("\n  G. E-VALUES:\n")
-    for (nm in c("KDIGO >=1", "Ratio >=1.5x", "AKI 1.5x <=48h")) {
-      key <- paste0(pfx, "_aki_", nm)
-      if (is.null(key)) key <- paste0(pfx, "_tw_", nm)
-      # search across all results
+    evalue_targets <- c("KDIGO >=1", "Ratio >=1.5x", "AKI 1.5x <=48h",
+                        "Hospital mortality")
+    for (nm in evalue_targets) {
       for (k in names(results_list)) {
         obj <- results_list[[k]]
         if (!is.null(obj) && is.data.frame(obj) && "label" %in% names(obj) &&
@@ -363,7 +356,7 @@ run_suite <- function(dat, dat_m, title, pfx) {
           row <- obj[obj$label == nm, ]
           if (nrow(row) > 0 && !is.na(row$estimate[1])) {
             tryCatch({
-              rare <- (row$n_events[1] / row$n_total[1]) < 0.15
+              rare <- (row$n_events[1] / n_total) < 0.15
               ev <- EValue::evalues.OR(row$estimate[1], row$conf.low[1],
                                        row$conf.high[1], rare = rare)
               cat(sprintf("    %s: E-value = %.2f (CI bound: %.2f)\n",
@@ -372,23 +365,6 @@ run_suite <- function(dat, dat_m, title, pfx) {
           }
           break
         }
-      }
-    }
-    # Hospital mortality for TTE-A
-    for (k in names(results_list)) {
-      obj <- results_list[[k]]
-      if (!is.null(obj) && is.data.frame(obj) && "label" %in% names(obj) &&
-          any(obj$label == "Hospital mortality") && grepl(pfx, k)) {
-        row <- obj[obj$label == "Hospital mortality", ]
-        if (nrow(row) > 0 && !is.na(row$estimate[1])) {
-          tryCatch({
-            ev <- EValue::evalues.OR(row$estimate[1], row$conf.low[1],
-                                     row$conf.high[1], rare = TRUE)
-            cat(sprintf("    Hospital mortality: E-value = %.2f (CI bound: %.2f)\n",
-                        ev["E-values", "point"], ev["E-values", "lower"]))
-          }, error = function(e) NULL)
-        }
-        break
       }
     }
   }

@@ -252,16 +252,6 @@ PS_CALIPER = 0.2  # SD of logit(PS)
 IPTW_TRIM_PERCENTILE = (1, 99)  # truncate at 1st/99th percentile
 SMD_THRESHOLD = 0.1  # acceptable standardized mean difference
 
-# Sensitivity analysis: Mg window variants (hours)
-MG_WINDOW_SENSITIVITY = [1, 2, 3, 6, 12]
-
-# Negative control outcomes (not plausibly affected by Mg in 7d)
-NEGATIVE_CONTROL_DX = {
-    "fracture": ["fracture"],
-    "skin_infection": ["cellulitis", "skin infection", "abscess"],
-    "uti": ["urinary tract infection", "uti", "cystitis"],
-}
-
 # =====================================================================
 # COMPOSITE POAF PHENOTYPE (v2 — multi-source)
 # =====================================================================

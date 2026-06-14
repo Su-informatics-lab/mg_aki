@@ -2,6 +2,11 @@
 # ─────────────────────────────────────────────────────────────────────
 # 05_mimic_tte.R — MIMIC-IV External Validation (Full PS Model)
 # Mirrors eICU 02_psm.R + 03_models.R in one script
+#
+# Fixes vs prior version:
+#   - POAF removed (same-admission ICD can't distinguish pre/new-onset)
+#   - Results saved to 05_mimic_results_summary.csv (matching eICU format)
+#   - Hardcoded eICU comparison table removed (06_meta.R does this)
 # ─────────────────────────────────────────────────────────────────────
 
 suppressPackageStartupMessages({
@@ -18,7 +23,9 @@ dat$trt <- as.integer(dat$mg_supplementation)
 dat$surgery_type <- factor(dat$surgery_type,
                            levels = c("cabg","valve","combined","other_cardiac"))
 
-# ── PS formula (matching eICU's 30 covariates) ──────────────────────
+results_list <- list()
+
+# ── PS formula (matching eICU's covariates) ─────────────────────────
 ps_vars <- c(
   "age", "is_female",
   "surgery_type",
@@ -32,14 +39,10 @@ ps_vars <- c(
   "has_vasopressor",
   "first_mg_value"
 )
-
-# Add BMI and HR if available
 if ("bmi" %in% names(dat)) ps_vars <- c(ps_vars, "bmi")
 if ("first_hr" %in% names(dat)) ps_vars <- c(ps_vars, "first_hr")
-
-# Keep only variables that exist
 ps_vars <- ps_vars[ps_vars %in% names(dat)]
-cat(sprintf("PS covariates: %d / %d matched\n", length(ps_vars), 26))
+cat(sprintf("PS covariates: %d matched\n", length(ps_vars)))
 
 # Median-impute continuous covariates
 for (v in c("first_k_value", "first_ca_value", "first_hr",
@@ -53,8 +56,6 @@ for (v in c("first_k_value", "first_ca_value", "first_hr",
 }
 
 ps_formula <- as.formula(paste("trt ~", paste(ps_vars, collapse = " + ")))
-cat(sprintf("PS formula: %s\n", deparse(ps_formula, width.cutoff = 200)))
-
 dat_clean <- dat %>% drop_na(any_of(c(ps_vars, "aki_kdigo1")))
 cat(sprintf("After NA drop: %d (treated: %d)\n", nrow(dat_clean), sum(dat_clean$trt)))
 
@@ -101,7 +102,7 @@ iptw_or <- function(d, outcome, label, wt = "iptw") {
     m <- svyglm(as.formula(paste(outcome, "~ trt")), design = des,
                 family = quasibinomial())
     s <- tidy(m, conf.int = TRUE, exponentiate = TRUE) %>% filter(term == "trt")
-    if (nrow(s) > 0) { s$n_events <- nev; s$label <- label }
+    if (nrow(s) > 0) { s$n_events <- nev; s$label <- label; s$n_total <- nrow(d) }
     s
   }, error = function(e) NULL)
 }
@@ -115,9 +116,13 @@ ptbl <- function(rows, title) {
                 r$label, r$n_events, r$estimate, r$conf.low, r$conf.high, r$p.value))
 }
 
+store <- function(key, r) {
+  if (!is.null(r) && nrow(r) > 0) results_list[[key]] <<- r
+}
+
 # =====================================================================
 cat("\n", strrep("=", 70), "\n")
-cat("MIMIC-IV VALIDATION RESULTS (Full PS Model)\n")
+cat("MIMIC-IV TTE-B RESULTS (Full PS Model)\n")
 cat(strrep("=", 70), "\n")
 
 # ── Pipeline check ──────────────────────────────────────────────────
@@ -131,12 +136,17 @@ if ("delta_mg" %in% names(dat_clean)) {
       s <- tidy(m, conf.int=TRUE) %>% filter(term=="trt")
       cat(sprintf("    IPTW diff = %.3f (%.3f to %.3f), p=%.4f\n",
                   s$estimate, s$conf.low, s$conf.high, s$p.value))
+      results_list[["TTEB_mg_elevation"]] <- tibble(
+        model="TTEB_mg_elevation", term="trt", estimate=s$estimate,
+        conf.low=s$conf.low, conf.high=s$conf.high, p.value=s$p.value,
+        n_events=nrow(d_mg), label="Serum Mg elevation (pipeline)")
     }, error = function(e) cat("    Failed\n"))
   }
 }
 
-# ── Positive control: VT/VF ─────────────────────────────────────────
+# ── VT/VF (boundary analysis) ──────────────────────────────────────
 r_vt <- iptw_or(dat_clean, "vent_arrhythmia", "VT/VF (positive control)")
+store("TTEB_vent_arrhythmia", r_vt)
 if (!is.null(r_vt))
   cat(sprintf("\n  VT/VF: OR %.2f (%.2f-%.2f), p=%.4f  [n=%d]\n",
               r_vt$estimate, r_vt$conf.low, r_vt$conf.high, r_vt$p.value, r_vt$n_events))
@@ -147,12 +157,14 @@ aki_oc <- c(aki_delta03="Delta >=0.3", aki_kdigo1="KDIGO >=1",
             aki_stage3="Stage >=3")
 aki_r <- lapply(names(aki_oc), function(o) iptw_or(dat_clean, o, aki_oc[[o]]))
 ptbl(aki_r, "AKI: IPTW")
+for (r in aki_r) store(paste0("TTEB_aki_", r$label), r)
 
 # Time-windowed
 tw_oc <- c(aki_primary_24h="AKI 1.5x <=24h", aki_primary_48h="AKI 1.5x <=48h",
            aki_primary_72h="AKI 1.5x <=72h")
 tw_r <- lapply(names(tw_oc), function(o) iptw_or(dat_clean, o, tw_oc[[o]]))
 ptbl(tw_r, "AKI: Time-windowed")
+for (r in tw_r) store(paste0("TTEB_tw_", r$label), r)
 
 # Peak Cr ratio
 if ("peak_cr_ratio" %in% names(dat_clean)) {
@@ -163,6 +175,10 @@ if ("peak_cr_ratio" %in% names(dat_clean)) {
     s <- tidy(m, conf.int=TRUE) %>% filter(term=="trt")
     cat(sprintf("\n  Peak Cr ratio diff = %.3f (%.3f to %.3f), p=%.4f\n",
                 s$estimate, s$conf.low, s$conf.high, s$p.value))
+    results_list[["TTEB_peak_cr"]] <- tibble(
+      model="TTEB_peak_cr", term="trt", estimate=s$estimate,
+      conf.low=s$conf.low, conf.high=s$conf.high, p.value=s$p.value,
+      n_events=nrow(d_pcr), label="Peak Cr ratio diff")
   }, error = function(e) NULL)
 }
 
@@ -174,26 +190,29 @@ if (!is.null(dat_matched)) {
       m <- glm(as.formula(paste(ov, "~ trt")), data=dat_matched,
                family=binomial(), weights=weights)
       s <- tidy(m, conf.int=TRUE, exponentiate=TRUE) %>% filter(term=="trt")
-      if (nrow(s) > 0)
+      if (nrow(s) > 0) {
         cat(sprintf("    %s: OR %.2f (%.2f-%.2f), p=%.4f\n",
                     aki_oc[[ov]], s$estimate, s$conf.low, s$conf.high, s$p.value))
+        s$n_events <- sum(dat_matched[[ov]], na.rm=TRUE)
+        s$label <- aki_oc[[ov]]
+        s$n_total <- nrow(dat_matched)
+        results_list[[paste0("TTEB_matched_", aki_oc[[ov]])]] <- s
+      }
     }, error = function(e) NULL)
   }
 }
 
 # ── OW ──────────────────────────────────────────────────────────────
 r_ow <- iptw_or(dat_clean, "aki_primary", "OW ratio >=1.5x", wt="ow")
+store("TTEB_ow", r_ow)
 if (!is.null(r_ow))
   cat(sprintf("\n  OW: OR %.2f (%.2f-%.2f), p=%.4f\n",
               r_ow$estimate, r_ow$conf.low, r_ow$conf.high, r_ow$p.value))
 
 # ── Mortality ───────────────────────────────────────────────────────
 r_mort <- iptw_or(dat_clean, "hosp_mortality", "Hospital mortality")
+store("TTEB_sec_Hospital mortality", r_mort)
 ptbl(list(r_mort), "Mortality")
-
-# ── POAF ────────────────────────────────────────────────────────────
-r_poaf <- iptw_or(dat_clean, "poaf", "POAF (dx-only)")
-ptbl(list(r_poaf), "POAF")
 
 # ── Negative controls ───────────────────────────────────────────────
 nc_r <- list(
@@ -201,6 +220,7 @@ nc_r <- list(
   iptw_or(dat_clean, "nc_uti", "UTI")
 )
 ptbl(nc_r, "Negative controls")
+for (r in nc_r) store(paste0("TTEB_nc_", r$label), r)
 
 # ── Neuro ───────────────────────────────────────────────────────────
 neuro_r <- list(
@@ -208,6 +228,7 @@ neuro_r <- list(
   iptw_or(dat_clean, "neuro_encephalopathy", "Encephalopathy")
 )
 ptbl(neuro_r, "Neuro (exploratory)")
+for (r in neuro_r) store(paste0("TTEB_neuro_", r$label), r)
 
 # ── Dose-response (MIMIC unique) ────────────────────────────────────
 if ("mg_total_dose" %in% names(dat_clean)) {
@@ -229,22 +250,6 @@ if ("mg_total_dose" %in% names(dat_clean)) {
   }
 }
 
-# ── Comparison table ────────────────────────────────────────────────
-cat("\n", strrep("=", 70), "\n")
-cat("eICU vs MIMIC-IV COMPARISON\n")
-cat(strrep("=", 70), "\n")
-cat(sprintf("%-30s %12s %12s\n", "", "eICU", "MIMIC-IV"))
-cat(sprintf("%-30s %12d %12d\n", "N", 7924, nrow(dat_clean)))
-cat(sprintf("%-30s %12d %12d\n", "Treated", 1104, sum(dat_clean$trt)))
-cat(sprintf("%-30s %11.1f%% %11.1f%%\n", "AKI KDIGO >=1 rate", 22.5, mean(dat_clean$aki_kdigo1)*100))
-cat(sprintf("%-30s %11.1f%% %11.1f%%\n", "Hospital mortality", 7.3, mean(dat_clean$hosp_mortality)*100))
-
-cat("\n  eICU findings (for comparison):\n")
-cat("  KDIGO >=1:     OR 0.77 (p=0.032)\n")
-cat("  Ratio 1.5x:    OR 0.80 (p=0.099)\n")
-cat("  48h window:    OR 0.68 (p=0.045)\n")
-cat("  PS matched:    OR 0.76 (p=0.028)\n")
-cat("  Mortality:     OR 0.66 (p=0.027) [TTE-A]\n")
 
 # =====================================================================
 cat("\n", strrep("=", 70), "\n")
@@ -255,26 +260,25 @@ dat_a <- dat_clean %>% filter(first_mg_value < 2.0)
 cat(sprintf("TTE-A: N=%d (treated: %d)\n", nrow(dat_a), sum(dat_a$trt)))
 
 if (sum(dat_a$trt) >= 30) {
-  # Refit PS
   tryCatch({
     w_a <- weightit(ps_formula, data = dat_a, method = "ps", estimand = "ATE")
     dat_a$iptw_raw <- w_a$weights
     q01a <- quantile(dat_a$iptw_raw, 0.01); q99a <- quantile(dat_a$iptw_raw, 0.99)
     dat_a$iptw <- pmax(pmin(dat_a$iptw_raw, q99a), q01a)
-    bal_a <- bal.tab(w_a, stats = "m", thresholds = c(m = 0.1))
-    n_imbal <- sum(grepl("Not Balanced", capture.output(bal_a)))
-    cat(sprintf("  IPTW balance: %d imbalanced\n", n_imbal))
 
     # AKI
     aki_a <- lapply(names(aki_oc), function(o) iptw_or(dat_a, o, aki_oc[[o]]))
     ptbl(aki_a, "TTE-A AKI")
+    for (r in aki_a) store(paste0("TTEA_aki_", r$label), r)
 
     # Time-windowed
     tw_a <- lapply(names(tw_oc), function(o) iptw_or(dat_a, o, tw_oc[[o]]))
     ptbl(tw_a, "TTE-A Time-windowed AKI")
+    for (r in tw_a) store(paste0("TTEA_tw_", r$label), r)
 
     # Mortality
     r_mort_a <- iptw_or(dat_a, "hosp_mortality", "Hospital mortality")
+    store("TTEA_sec_Hospital mortality", r_mort_a)
     ptbl(list(r_mort_a), "TTE-A Mortality")
 
     # Negative controls
@@ -283,6 +287,7 @@ if (sum(dat_a$trt) >= 30) {
       iptw_or(dat_a, "nc_uti", "UTI")
     )
     ptbl(nc_a, "TTE-A Negative controls")
+    for (r in nc_a) store(paste0("TTEA_nc_", r$label), r)
 
     # PS matching TTE-A
     tryCatch({
@@ -290,14 +295,19 @@ if (sum(dat_a$trt) >= 30) {
                      distance = "glm", caliper = 0.2, ratio = 1)
       dat_ma <- match.data(m_a)
       cat(sprintf("\n  TTE-A matched: %d pairs\n", sum(dat_ma$trt)))
-      for (ov in c("aki_kdigo1", "aki_primary", "hosp_mortality")) {
+      for (ov in c("aki_kdigo1", "aki_primary", "aki_stage2", "hosp_mortality")) {
         if (ov %in% names(dat_ma)) tryCatch({
           m <- glm(as.formula(paste(ov, "~ trt")), data = dat_ma,
                    family = binomial(), weights = weights)
           s <- tidy(m, conf.int=TRUE, exponentiate=TRUE) %>% filter(term=="trt")
-          lbl <- ifelse(ov=="hosp_mortality","Mortality",aki_oc[[ov]])
-          if (nrow(s)>0) cat(sprintf("    %s: OR %.2f (%.2f-%.2f), p=%.4f\n",
-                                     lbl, s$estimate, s$conf.low, s$conf.high, s$p.value))
+          lbl <- if (ov=="hosp_mortality") "Hospital mortality" else aki_oc[[ov]]
+          if (nrow(s)>0) {
+            cat(sprintf("    %s: OR %.2f (%.2f-%.2f), p=%.4f\n",
+                        lbl, s$estimate, s$conf.low, s$conf.high, s$p.value))
+            s$n_events <- sum(dat_ma[[ov]], na.rm=TRUE)
+            s$label <- lbl; s$n_total <- nrow(dat_ma)
+            results_list[[paste0("TTEA_matched_", lbl)]] <- s
+          }
         }, error = function(e) NULL)
       }
     }, error = function(e) cat(sprintf("  TTE-A matching failed: %s\n", e$message)))
@@ -305,12 +315,12 @@ if (sum(dat_a$trt) >= 30) {
   }, error = function(e) cat(sprintf("TTE-A failed: %s\n", e$message)))
 }
 
+
 # =====================================================================
 cat("\n", strrep("=", 70), "\n")
 cat("SURGERY-TYPE INTERACTION (Cardioplegia Hypothesis)\n")
 cat(strrep("=", 70), "\n")
 
-# Prognostic: does Mg-AKI association differ by surgery complexity?
 tryCatch({
   dat_clean$surg_complex <- ifelse(dat_clean$surgery_type %in% c("combined","valve"),
                                     "complex", "simple")
@@ -326,7 +336,6 @@ tryCatch({
   if (nrow(inter) > 0)
     cat(sprintf("  Interaction (complex×Mg): OR %.2f (%.2f-%.2f), p=%.4f\n",
                 inter$estimate, inter$conf.low, inter$conf.high, inter$p.value))
-  # Stratified
   for (st in c("simple", "complex")) {
     dsub <- dat_clean %>% filter(surg_complex == st)
     msub <- glm(as.formula(paste("aki_kdigo1 ~ first_mg_value +", cov_rhs_mimic)),
@@ -337,6 +346,7 @@ tryCatch({
                   st, nrow(dsub), ssub$estimate, ssub$conf.low, ssub$conf.high, ssub$p.value))
   }
 }, error = function(e) cat(sprintf("  Interaction failed: %s\n", e$message)))
+
 
 # =====================================================================
 cat("\n", strrep("=", 70), "\n")
@@ -357,12 +367,43 @@ tryCatch({
   for (ev in evals) {
     tryCatch({
       or <- as.numeric(ev[2]); lo <- as.numeric(ev[3]); hi <- as.numeric(ev[4])
-      rare <- TRUE
-      res <- evalues.OR(or, lo, hi, rare = rare)
+      res <- evalues.OR(or, lo, hi, rare = TRUE)
       cat(sprintf("  %s: OR=%.2f, E-value=%.2f (CI bound=%.2f)\n",
                   ev[1], or, res["E-values","point"], res["E-values","lower"]))
     }, error = function(e) cat(sprintf("  %s: failed\n", ev[1])))
   }
 }, error = function(e) cat(sprintf("E-value computation failed: %s\n", e$message)))
+
+
+# =====================================================================
+# SAVE RESULTS (matching 03_results_summary.csv format)
+# =====================================================================
+cat("\n", strrep("=", 70), "\n")
+cat("SAVING MIMIC RESULTS\n")
+cat(strrep("=", 70), "\n")
+
+rows <- list()
+for (nm in names(results_list)) {
+  obj <- results_list[[nm]]
+  if (is.data.frame(obj) && "estimate" %in% names(obj))
+    for (i in seq_len(nrow(obj)))
+      rows[[length(rows)+1]] <- tibble(
+        model = nm,
+        term = if ("label" %in% names(obj)) obj$label[i] else obj$term[i],
+        estimate = obj$estimate[i],
+        conf.low = if ("conf.low" %in% names(obj)) obj$conf.low[i] else NA,
+        conf.high = if ("conf.high" %in% names(obj)) obj$conf.high[i] else NA,
+        p.value = if ("p.value" %in% names(obj)) obj$p.value[i] else NA,
+        n_events = if ("n_events" %in% names(obj)) obj$n_events[i] else NA)
+}
+if (length(rows) > 0) {
+  df <- bind_rows(rows)
+  out <- file.path(RESULTS, "05_mimic_results_summary.csv")
+  write_csv(df, out)
+  print(df, n = 100)
+  cat(sprintf("\nSaved: %s (%d estimates)\n", out, nrow(df)))
+} else {
+  cat("WARNING: No results to save\n")
+}
 
 cat("\n05_mimic_tte.R COMPLETE\n")
