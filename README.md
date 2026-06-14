@@ -64,7 +64,6 @@ Across 11,670 cardiac surgery patients (eICU: 8,109; MIMIC-IV: 3,746):
 | Hospital mortality | 0.66 (0.51–0.85) | .002 | 0% |
 | Fracture (negative control) | 1.04 (0.67–1.61) | .872 | 0% |
 
-
 ## License
 
 MIT. Datasets governed by PhysioNet data use agreements.
