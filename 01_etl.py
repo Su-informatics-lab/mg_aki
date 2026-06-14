@@ -607,7 +607,7 @@ def build_covariates(t, cohort):
         ).astype(int)
         print(f"    nephrotox_{drug_class}: {cohort[f'nephrotox_{drug_class}'].sum()}")
 
-    # ── Mg supplementation (for TTE Analysis B) ──────────────────
+    # ── Mg supplementation (for TTE: Hypomagnesemia subgroup) ──────────────────
     mg_supp_pids = set()
     if len(med_elig) > 0:
         mg_meds = med_elig[matches_any(med_elig.drugname, cfg.MG_SUPP_DRUG_PATTERNS)]
@@ -1115,7 +1115,7 @@ def build_covariates(t, cohort):
 # =====================================================================
 def build_tte_cohort(cohort):
     """
-    TTE Analysis B: Among hypomagnesemic patients (Mg < 2.0),
+    TTE: Hypomagnesemia subgroup: Among hypomagnesemic patients (Mg < 2.0),
     does Mg supplementation within 6h reduce AKI?
 
     ACNU design (Hernán & Robins 2016):
@@ -1143,7 +1143,7 @@ def build_tte_cohort(cohort):
             f"{(tte.mg_supplementation==0).sum()}"
         )
 
-    save(tte, "06_tte_cohort.csv")
+    save(tte, "01b_hypo_cohort.csv")
     return tte
 
 
@@ -1230,7 +1230,7 @@ def main():
 
     print(f"\n  Final cohort: {len(cohort):,} rows, {cohort.shape[1]} cols")
     print(f"  Analysis A (prognostic): {len(cohort):,}")
-    print(f"  Analysis B (TTE, Mg<{cfg.MG_HYPO_THRESHOLD}): {len(tte):,}")
+    print(f"  TTE hypoMg (Mg<{cfg.MG_HYPO_THRESHOLD}): {len(tte):,}")
     print(f"\n  Next: Rscript 02_psm.R && Rscript 03_models.R")
 
 
