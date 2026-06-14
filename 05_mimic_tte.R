@@ -246,4 +246,123 @@ cat("  48h window:    OR 0.68 (p=0.045)\n")
 cat("  PS matched:    OR 0.76 (p=0.028)\n")
 cat("  Mortality:     OR 0.66 (p=0.027) [TTE-A]\n")
 
+# =====================================================================
+cat("\n", strrep("=", 70), "\n")
+cat("TTE-A: HYPOMAGNESEMIA ONLY (Mg < 2.0)\n")
+cat(strrep("=", 70), "\n")
+
+dat_a <- dat_clean %>% filter(first_mg_value < 2.0)
+cat(sprintf("TTE-A: N=%d (treated: %d)\n", nrow(dat_a), sum(dat_a$trt)))
+
+if (sum(dat_a$trt) >= 30) {
+  # Refit PS
+  tryCatch({
+    w_a <- weightit(ps_formula, data = dat_a, method = "ps", estimand = "ATE")
+    dat_a$iptw_raw <- w_a$weights
+    q01a <- quantile(dat_a$iptw_raw, 0.01); q99a <- quantile(dat_a$iptw_raw, 0.99)
+    dat_a$iptw <- pmax(pmin(dat_a$iptw_raw, q99a), q01a)
+    bal_a <- bal.tab(w_a, stats = "m", thresholds = c(m = 0.1))
+    n_imbal <- sum(grepl("Not Balanced", capture.output(bal_a)))
+    cat(sprintf("  IPTW balance: %d imbalanced\n", n_imbal))
+
+    # AKI
+    aki_a <- lapply(names(aki_oc), function(o) iptw_or(dat_a, o, aki_oc[[o]]))
+    ptbl(aki_a, "TTE-A AKI")
+
+    # Time-windowed
+    tw_a <- lapply(names(tw_oc), function(o) iptw_or(dat_a, o, tw_oc[[o]]))
+    ptbl(tw_a, "TTE-A Time-windowed AKI")
+
+    # Mortality
+    r_mort_a <- iptw_or(dat_a, "hosp_mortality", "Hospital mortality")
+    ptbl(list(r_mort_a), "TTE-A Mortality")
+
+    # Negative controls
+    nc_a <- list(
+      iptw_or(dat_a, "nc_fracture", "Fracture"),
+      iptw_or(dat_a, "nc_uti", "UTI")
+    )
+    ptbl(nc_a, "TTE-A Negative controls")
+
+    # PS matching TTE-A
+    tryCatch({
+      m_a <- matchit(ps_formula, data = dat_a, method = "nearest",
+                     distance = "glm", caliper = 0.2, ratio = 1)
+      dat_ma <- match.data(m_a)
+      cat(sprintf("\n  TTE-A matched: %d pairs\n", sum(dat_ma$trt)))
+      for (ov in c("aki_kdigo1", "aki_primary", "hosp_mortality")) {
+        if (ov %in% names(dat_ma)) tryCatch({
+          m <- glm(as.formula(paste(ov, "~ trt")), data = dat_ma,
+                   family = binomial(), weights = weights)
+          s <- tidy(m, conf.int=TRUE, exponentiate=TRUE) %>% filter(term=="trt")
+          lbl <- ifelse(ov=="hosp_mortality","Mortality",aki_oc[[ov]])
+          if (nrow(s)>0) cat(sprintf("    %s: OR %.2f (%.2f-%.2f), p=%.4f\n",
+                                     lbl, s$estimate, s$conf.low, s$conf.high, s$p.value))
+        }, error = function(e) NULL)
+      }
+    }, error = function(e) cat(sprintf("  TTE-A matching failed: %s\n", e$message)))
+
+  }, error = function(e) cat(sprintf("TTE-A failed: %s\n", e$message)))
+}
+
+# =====================================================================
+cat("\n", strrep("=", 70), "\n")
+cat("SURGERY-TYPE INTERACTION (Cardioplegia Hypothesis)\n")
+cat(strrep("=", 70), "\n")
+
+# Prognostic: does Mg-AKI association differ by surgery complexity?
+tryCatch({
+  dat_clean$surg_complex <- ifelse(dat_clean$surgery_type %in% c("combined","valve"),
+                                    "complex", "simple")
+  cov_rhs_mimic <- paste(setdiff(ps_vars, "first_mg_value"), collapse = " + ")
+  m_int <- glm(as.formula(paste("aki_kdigo1 ~ first_mg_value * surg_complex +", cov_rhs_mimic)),
+               data = dat_clean, family = binomial())
+  s_int <- tidy(m_int, conf.int = TRUE, exponentiate = TRUE)
+  main <- s_int %>% filter(term == "first_mg_value")
+  inter <- s_int %>% filter(grepl(":", term))
+  if (nrow(main) > 0)
+    cat(sprintf("  Mg effect (simple): OR %.2f (%.2f-%.2f), p=%.4f\n",
+                main$estimate, main$conf.low, main$conf.high, main$p.value))
+  if (nrow(inter) > 0)
+    cat(sprintf("  Interaction (complex×Mg): OR %.2f (%.2f-%.2f), p=%.4f\n",
+                inter$estimate, inter$conf.low, inter$conf.high, inter$p.value))
+  # Stratified
+  for (st in c("simple", "complex")) {
+    dsub <- dat_clean %>% filter(surg_complex == st)
+    msub <- glm(as.formula(paste("aki_kdigo1 ~ first_mg_value +", cov_rhs_mimic)),
+                data = dsub, family = binomial())
+    ssub <- tidy(msub, conf.int=TRUE, exponentiate=TRUE) %>% filter(term=="first_mg_value")
+    if (nrow(ssub) > 0)
+      cat(sprintf("  Stratified %s (n=%d): OR %.2f (%.2f-%.2f), p=%.4f\n",
+                  st, nrow(dsub), ssub$estimate, ssub$conf.low, ssub$conf.high, ssub$p.value))
+  }
+}, error = function(e) cat(sprintf("  Interaction failed: %s\n", e$message)))
+
+# =====================================================================
+cat("\n", strrep("=", 70), "\n")
+cat("E-VALUES\n")
+cat(strrep("=", 70), "\n")
+
+tryCatch({
+  if (!require(EValue, quietly=TRUE)) install.packages("EValue", lib="~/R/libs", repos="https://cloud.r-project.org")
+  library(EValue)
+
+  evals <- list(
+    c("Mortality (IPTW)", 0.65, 0.45, 0.95),
+    c("AKI KDIGO>=1 (IPTW)", 0.91, 0.74, 1.13),
+    c("AKI Ratio 1.5x (IPTW)", 0.90, 0.71, 1.13),
+    c("AKI Stage>=3 (matched)", 0.69, 0.40, 1.18),
+    c("Encephalopathy (IPTW)", 0.47, 0.26, 0.86)
+  )
+  for (ev in evals) {
+    tryCatch({
+      or <- as.numeric(ev[2]); lo <- as.numeric(ev[3]); hi <- as.numeric(ev[4])
+      rare <- TRUE
+      res <- evalues.OR(or, lo, hi, rare = rare)
+      cat(sprintf("  %s: OR=%.2f, E-value=%.2f (CI bound=%.2f)\n",
+                  ev[1], or, res["E-values","point"], res["E-values","lower"]))
+    }, error = function(e) cat(sprintf("  %s: failed\n", ev[1])))
+  }
+}, error = function(e) cat(sprintf("E-value computation failed: %s\n", e$message)))
+
 cat("\n05_mimic_tte.R COMPLETE\n")
