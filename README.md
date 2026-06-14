@@ -37,6 +37,8 @@ Both require credentialed access via [PhysioNet](https://physionet.org):
 ## Run
 
 ```bash
+A full pipeline log is included at `results/run_20260614_123038.log`.
+
 bash run.sh        # full pipeline (steps 1-6)
 bash run.sh 4 5 6  # subset
 ```
