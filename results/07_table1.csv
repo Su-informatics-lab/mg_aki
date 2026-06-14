@@ -1,0 +1,68 @@
+Database,Variable,Mg Supplementation,No Supplementation,SMD
+eICU,n, 1128, 6981,
+eICU,age_num (mean (SD)),65.25 (14.44),65.12 (14.31), 0.009
+eICU,is_female = 1 (%),  445 (39.5) , 2515 (36.0) , 0.071
+eICU,bmi (mean (SD)),34.48 (165.32),61.60 (2568.77), 0.015
+eICU,surgery_type (%),  , , 0.199
+eICU,   cabg,  259 (23.0) , 1898 (27.2) ,
+eICU,   combined,   43 ( 3.8) ,  398 ( 5.7) ,
+eICU,   other_cardiac,  671 (59.5) , 3505 (50.2) ,
+eICU,   unknown,    4 ( 0.4) ,   12 ( 0.2) ,
+eICU,   valve,  151 (13.4) , 1168 (16.7) ,
+eICU,hx_chf = 1 (%),  184 (16.3) , 1187 (17.0) , 0.019
+eICU,hx_hypertension = 1 (%),  645 (57.2) , 4035 (57.8) , 0.013
+eICU,hx_diabetes = 1 (%),  363 (32.2) , 2165 (31.0) , 0.025
+eICU,hx_ckd = 1 (%),   93 ( 8.2) ,  652 ( 9.3) , 0.039
+eICU,hx_copd = 1 (%),  146 (12.9) ,  839 (12.0) , 0.028
+eICU,hx_pvd = 1 (%),   79 ( 7.0) ,  371 ( 5.3) , 0.070
+eICU,hx_stroke = 1 (%),  132 (11.7) ,  695 (10.0) , 0.056
+eICU,hx_liver = 1 (%),   18 ( 1.6) ,   96 ( 1.4) , 0.018
+eICU,baseline_cr (mean (SD)), 1.08 (0.54), 1.11 (0.54), 0.056
+eICU,baseline_egfr (mean (SD)),76.84 (25.96),75.62 (26.32), 0.047
+eICU,nephrotox_loop_diuretic = 1 (%),  176 (15.6) , 1347 (19.3) , 0.097
+eICU,nephrotox_nsaid = 1 (%),   14 ( 1.2) ,  130 ( 1.9) , 0.050
+eICU,nephrotox_acei_arb = 1 (%),  111 ( 9.8) ,  685 ( 9.8) , 0.001
+eICU,nephrotox_ppi = 1 (%),  146 (12.9) ,  811 (11.6) , 0.040
+eICU,has_betablocker = 1 (%),  411 (36.4) , 1919 (27.5) , 0.193
+eICU,has_steroid = 1 (%),   78 ( 6.9) ,  383 ( 5.5) , 0.059
+eICU,preop_antiarrhythmic = 1 (%),    8 ( 0.7) ,   71 ( 1.0) , 0.033
+eICU,has_vasopressor = 1 (%),  397 (35.2) , 2022 (29.0) , 0.134
+eICU,first_mg_value (mean (SD)), 1.88 (0.45), 2.22 (0.58), 0.656
+eICU,first_k_value (mean (SD)), 3.99 (0.62), 4.10 (0.62), 0.174
+eICU,first_ca_value (mean (SD)), 7.71 (1.45), 7.74 (1.52), 0.021
+eICU,first_hr (mean (SD)),86.43 (19.83),85.37 (18.78), 0.055
+eICU,aki_kdigo1 = 1 (%),  209 (18.5) , 1588 (22.7) , 0.104
+eICU,hosp_mortality = 1 (%),   82 ( 7.3) ,  526 ( 7.5) , 0.010
+MIMIC-IV,n,  647, 3099,
+MIMIC-IV,age_num (mean (SD)),68.56 (14.19),67.03 (14.96), 0.105
+MIMIC-IV,is_female = 1 (%),  287 (44.4) , 1200 (38.7) , 0.115
+MIMIC-IV,bmi (mean (SD)),27.57 (6.06),28.72 (6.52), 0.182
+MIMIC-IV,surgery_type (%),  , , 0.146
+MIMIC-IV,   cabg,  127 (19.6) ,  763 (24.6) ,
+MIMIC-IV,   combined,   19 ( 2.9) ,  125 ( 4.0) ,
+MIMIC-IV,   other_cardiac,  387 (59.8) , 1748 (56.4) ,
+MIMIC-IV,   valve,  114 (17.6) ,  463 (14.9) ,
+MIMIC-IV,hx_chf = 1 (%),  239 (36.9) , 1307 (42.2) , 0.107
+MIMIC-IV,hx_hypertension = 1 (%),  483 (74.7) , 2251 (72.6) , 0.046
+MIMIC-IV,hx_diabetes = 1 (%),  195 (30.1) , 1015 (32.8) , 0.056
+MIMIC-IV,hx_ckd = 1 (%),  107 (16.5) ,  751 (24.2) , 0.192
+MIMIC-IV,hx_copd = 1 (%),  119 (18.4) ,  484 (15.6) , 0.074
+MIMIC-IV,hx_pvd = 1 (%),   53 ( 8.2) ,  220 ( 7.1) , 0.041
+MIMIC-IV,hx_stroke = 1 (%),   28 ( 4.3) ,  174 ( 5.6) , 0.059
+MIMIC-IV,hx_liver = 1 (%),   28 ( 4.3) ,  125 ( 4.0) , 0.015
+MIMIC-IV,baseline_cr (mean (SD)), 1.01 (0.45), 1.19 (0.63), 0.334
+MIMIC-IV,baseline_egfr (mean (SD)),77.83 (25.28),71.66 (28.48), 0.229
+MIMIC-IV,nephrotox_loop_diuretic = 1 (%),   99 (15.3) ,  599 (19.3) , 0.107
+MIMIC-IV,nephrotox_nsaid = 1 (%),   13 ( 2.0) ,   37 ( 1.2) , 0.065
+MIMIC-IV,nephrotox_acei_arb = 1 (%),   34 ( 5.3) ,  228 ( 7.4) , 0.087
+MIMIC-IV,nephrotox_ppi = 1 (%),  175 (27.0) ,  755 (24.4) , 0.061
+MIMIC-IV,has_betablocker = 1 (%),  271 (41.9) , 1077 (34.8) , 0.147
+MIMIC-IV,has_steroid = 1 (%),   41 ( 6.3) ,  262 ( 8.5) , 0.081
+MIMIC-IV,preop_antiarrhythmic = 1 (%),   51 ( 7.9) ,  234 ( 7.6) , 0.012
+MIMIC-IV,has_vasopressor = 1 (%),  237 (36.6) ,  802 (25.9) , 0.234
+MIMIC-IV,first_mg_value (mean (SD)), 1.87 (0.60), 2.14 (0.55), 0.462
+MIMIC-IV,first_k_value (mean (SD)), 4.02 (0.63), 4.23 (0.69), 0.314
+MIMIC-IV,first_ca_value (mean (SD)), 8.33 (0.89), 8.55 (0.80), 0.261
+MIMIC-IV,first_hr (mean (SD)),84.09 (20.39),84.76 (20.52), 0.033
+MIMIC-IV,aki_kdigo1 = 1 (%),  204 (31.5) , 1023 (33.0) , 0.032
+MIMIC-IV,hosp_mortality = 1 (%),   44 ( 6.8) ,  309 (10.0) , 0.115
