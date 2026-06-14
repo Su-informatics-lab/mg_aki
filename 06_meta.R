@@ -6,10 +6,6 @@
 
 suppressPackageStartupMessages({
   library(tidyverse)
-  if (!require(meta, quietly = TRUE)) {
-    install.packages("meta", lib = "~/R/libs", repos = "https://cloud.r-project.org")
-    library(meta)
-  }
 })
 
 RESULTS <- path.expand("~/mg_aki/results")
