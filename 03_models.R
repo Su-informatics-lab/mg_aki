@@ -1,14 +1,10 @@
 #!/usr/bin/env Rscript
 # ─────────────────────────────────────────────────────────────────────
-# Mg → Cardiac Surgery Outcomes (eICU) — v2
-# 03_models.R — Self-validating multi-outcome TTE
+# 03_models.R — Self-validating multi-outcome TTE (eICU)
 #
-#   A. Prognostic: Mg level → AKI
-#   B. Positive control: Mg supplementation → POAF (+ BB stratification)
-#   C. Primary: Mg supplementation → AKI (severity-stratified + BB)
-#   D. Negative controls (bias calibration)
-#   E. Neuro outcomes (exploratory)
-#   F. Secondary (RRT, mortality)
+#   Prognostic: Mg level → AKI
+#   TTE all:    Mg supplementation → outcomes (all patients)
+#   TTE hypoMg: Mg supplementation → outcomes (Mg < 2.0 only)
 # ─────────────────────────────────────────────────────────────────────
 
 local({
@@ -32,12 +28,12 @@ RESULTS <- path.expand("~/mg_aki/results")
 # ─── Load ───────────────────────────────────────────────────────────
 cat("Loading data...\n")
 load(file.path(RESULTS, "02b_analysis_a_prepared.RData"))
-dat_tte_a <- tryCatch(read_csv(file.path(RESULTS, "02d_tte_iptw.csv"),
-                               show_col_types = FALSE), error = function(e) NULL)
-dat_tte_b <- tryCatch(read_csv(file.path(RESULTS, "02e_tteb_iptw.csv"),
-                               show_col_types = FALSE), error = function(e) NULL)
-dat_m_b   <- tryCatch(read_csv(file.path(RESULTS, "02f_tteb_matched.csv"),
-                               show_col_types = FALSE), error = function(e) NULL)
+dat_hypo    <- tryCatch(read_csv(file.path(RESULTS, "02d_hypo_iptw.csv"),
+                                 show_col_types = FALSE), error = function(e) NULL)
+dat_all     <- tryCatch(read_csv(file.path(RESULTS, "02e_all_iptw.csv"),
+                                 show_col_types = FALSE), error = function(e) NULL)
+dat_all_m   <- tryCatch(read_csv(file.path(RESULTS, "02f_all_matched.csv"),
+                                 show_col_types = FALSE), error = function(e) NULL)
 
 add_aki <- function(d) {
   if (!"aki_kdigo1" %in% names(d))
@@ -45,9 +41,9 @@ add_aki <- function(d) {
   d
 }
 dat_a <- add_aki(dat_a)
-if (!is.null(dat_tte_a)) dat_tte_a <- add_aki(dat_tte_a)
-if (!is.null(dat_tte_b)) dat_tte_b <- add_aki(dat_tte_b)
-if (!is.null(dat_m_b))   dat_m_b   <- add_aki(dat_m_b)
+if (!is.null(dat_hypo)) dat_hypo <- add_aki(dat_hypo)
+if (!is.null(dat_all))  dat_all  <- add_aki(dat_all)
+if (!is.null(dat_all_m)) dat_all_m <- add_aki(dat_all_m)
 
 cov_rhs <- paste(c(
   "age_num", "is_female", "bmi", "surgery_type",
@@ -64,7 +60,6 @@ for (v in c("preop_antiarrhythmic", "first_k_value",
 
 results_list <- list()
 
-# ─── Helper: IPTW OR for one outcome ───────────────────────────────
 iptw_or <- function(dat, outcome, label = outcome, wt = "iptw") {
   if (!outcome %in% names(dat)) return(NULL)
   d <- dat %>% filter(!is.na(.data[[outcome]]))
@@ -92,10 +87,10 @@ ptbl <- function(rows, title) {
 }
 
 # =====================================================================
-# A. PROGNOSTIC
+# PROGNOSTIC
 # =====================================================================
 cat("\n", strrep("=", 70), "\n")
-cat("A. PROGNOSTIC: Mg level -> AKI\n")
+cat("PROGNOSTIC: Mg level -> AKI\n")
 cat(strrep("=", 70), "\n")
 
 dat_a$mg_neg <- -dat_a$first_mg_value
@@ -103,7 +98,7 @@ aki_defs <- c(aki_kdigo1 = "KDIGO Stage >=1", aki_primary = "Ratio >=1.5x",
               aki_delta03 = "Delta >=0.3", aki_stage2 = "Stage >=2",
               aki_stage3 = "Stage >=3")
 
-cat("\n  A1: OR per 1 mg/dL Mg increase:\n")
+cat("\n  OR per 1 mg/dL Mg increase:\n")
 cat(sprintf("  %-44s %6s %16s %8s\n", "Outcome", "Events", "OR (95% CI)", "p"))
 cat("  ", strrep("-", 78), "\n")
 for (ov in names(aki_defs)) {
@@ -125,8 +120,7 @@ for (ov in names(aki_defs)) {
   }, error = function(e) cat(sprintf("  %-44s FAILED\n", aki_defs[[ov]])))
 }
 
-# Quartiles
-cat("\n  A2: Mg quartiles (Q4 = ref), KDIGO >=1:\n")
+cat("\n  Mg quartiles (Q4 = ref), KDIGO >=1:\n")
 tryCatch({
   dat_a$mg_q <- relevel(factor(dat_a$mg_quartile), ref = "Q4")
   m <- glm(as.formula(paste("aki_kdigo1 ~ mg_q +", cov_rhs)),
@@ -136,8 +130,7 @@ tryCatch({
   results_list[["A2_quartiles"]] <<- s
 }, error = function(e) cat(sprintf("  Failed: %s\n", e$message)))
 
-# A3: Surgery-type interaction (cardioplegia hypothesis test)
-cat("\n  A3: Surgery-type × Mg interaction (cardioplegia hypothesis):\n")
+cat("\n  Surgery-type × Mg interaction (cardioplegia hypothesis):\n")
 tryCatch({
   dat_a$surg_complex <- ifelse(dat_a$surgery_type %in% c("combined", "valve"),
                                 "complex", "simple")
@@ -152,7 +145,6 @@ tryCatch({
   if (nrow(inter) > 0)
     cat(sprintf("    Interaction (complex × Mg):  OR %.2f (%.2f-%.2f), p=%.4f\n",
                 inter$estimate, inter$conf.low, inter$conf.high, inter$p.value))
-
   for (stype in c("simple", "complex")) {
     dat_sub <- dat_a %>% filter(surg_complex == stype)
     m_sub <- glm(as.formula(paste("aki_kdigo1 ~ first_mg_value +", cov_rhs)),
@@ -166,8 +158,7 @@ tryCatch({
   }
 }, error = function(e) cat(sprintf("  Interaction test failed: %s\n", e$message)))
 
-# A4: APACHE sensitivity
-cat("\n  A4: APACHE sensitivity (mediator bias test):\n")
+cat("\n  APACHE sensitivity (mediator bias test):\n")
 if ("apachescore" %in% names(dat_a)) {
   tryCatch({
     m_no <- glm(as.formula(paste("aki_kdigo1 ~ first_mg_value +", cov_rhs)),
@@ -187,115 +178,98 @@ if ("apachescore" %in% names(dat_a)) {
   }, error = function(e) cat(sprintf("  APACHE sensitivity failed: %s\n", e$message)))
 }
 
-
 # =====================================================================
-# TTE SUITE (runs for both unrestricted and restricted)
+# TTE SUITE
 # =====================================================================
 run_suite <- function(dat, dat_m, title, pfx) {
   if (is.null(dat) || nrow(dat) < 20) {
     cat(sprintf("\n  Skipping %s\n", title)); return() }
   dat <- add_aki(dat)
   if (!is.null(dat_m)) dat_m <- add_aki(dat_m)
-  n_total <- nrow(dat)  # for E-value rare-outcome check
+  n_total <- nrow(dat)
 
   cat("\n", strrep("=", 70), "\n")
   cat(sprintf("%s  [N=%d, trt=%d]\n", title, nrow(dat), sum(dat$trt)))
   cat(strrep("=", 70), "\n")
 
-  # ── A*. PIPELINE CHECK: Serum Mg elevation ──────────────────────
-  cat("\n  A*. PIPELINE CHECK: Serum Mg elevation\n")
+  cat("\n  PIPELINE CHECK: Serum Mg elevation\n")
   if ("delta_mg" %in% names(dat)) {
     dat_mg <- dat %>% filter(!is.na(delta_mg))
-    if (nrow(dat_mg) > 20) {
-      tryCatch({
-        if ("hospitalid" %in% names(dat_mg)) {
-          des <- svydesign(ids = ~hospitalid, weights = ~iptw, data = dat_mg)
-        } else {
-          des <- svydesign(ids = ~1, weights = ~iptw, data = dat_mg)
-        }
-        m <- svyglm(delta_mg ~ trt, design = des)
-        s <- tidy(m, conf.int = TRUE) %>% filter(term == "trt")
-        if (nrow(s) > 0) {
-          cat(sprintf("    IPTW mean diff = %.3f mg/dL (%.3f to %.3f), p = %.4f\n",
-                      s$estimate, s$conf.low, s$conf.high, s$p.value))
-          results_list[[paste0(pfx, "_mg_elevation")]] <<- tibble(
-            model = paste0(pfx, "_mg_elevation"), term = "trt",
-            estimate = s$estimate, conf.low = s$conf.low, conf.high = s$conf.high,
-            p.value = s$p.value, n_events = nrow(dat_mg), label = "Serum Mg elevation (pipeline)")
-        }
-      }, error = function(e) cat(sprintf("    Failed: %s\n", e$message)))
-    }
+    if (nrow(dat_mg) > 20) tryCatch({
+      des <- if ("hospitalid" %in% names(dat_mg))
+        svydesign(ids = ~hospitalid, weights = ~iptw, data = dat_mg)
+      else svydesign(ids = ~1, weights = ~iptw, data = dat_mg)
+      m <- svyglm(delta_mg ~ trt, design = des)
+      s <- tidy(m, conf.int = TRUE) %>% filter(term == "trt")
+      if (nrow(s) > 0) {
+        cat(sprintf("    IPTW mean diff = %.3f mg/dL (%.3f to %.3f), p = %.4f\n",
+                    s$estimate, s$conf.low, s$conf.high, s$p.value))
+        results_list[[paste0(pfx, "_mg_elevation")]] <<- tibble(
+          model = paste0(pfx, "_mg_elevation"), term = "trt",
+          estimate = s$estimate, conf.low = s$conf.low, conf.high = s$conf.high,
+          p.value = s$p.value, n_events = nrow(dat_mg), label = "Serum Mg elevation (pipeline)")
+      }
+    }, error = function(e) cat(sprintf("    Failed: %s\n", e$message)))
   }
 
-  # ── A**. POSITIVE CONTROL: Ventricular arrhythmia (RR 0.52) ───
-  cat("\n  A**. POSITIVE CONTROL: Ventricular arrhythmia (RCT RR=0.52)\n")
+  cat("\n  BOUNDARY: Ventricular arrhythmia\n")
   r_va <- iptw_or(dat, "vent_arrhythmia", "VT/VF (positive control)")
   if (!is.null(r_va)) {
     cat(sprintf("    IPTW OR = %.2f (%.2f-%.2f), p = %.4f  [n_events=%d]\n",
                 r_va$estimate, r_va$conf.low, r_va$conf.high, r_va$p.value, r_va$n_events))
     results_list[[paste0(pfx, "_vent_arrhythmia")]] <<- r_va
-  } else {
-    cat("    Insufficient VT/VF events\n")
   }
 
-  # ── B. POAF (secondary outcome) ──────────────────────────────────
   r_all  <- iptw_or(dat, "poaf", "POAF dx-only (primary)")
   r_cv   <- iptw_or(dat, "poaf_cardioversion", "POAF cardioversion (Yan)")
   r_comp <- iptw_or(dat, "poaf_composite", "POAF composite (sensitivity)")
   r_nobb <- iptw_or(dat %>% filter(has_betablocker == 0), "poaf", "POAF dx (no BB)")
   r_bb   <- iptw_or(dat %>% filter(has_betablocker == 1), "poaf", "POAF dx (with BB)")
-  ptbl(list(r_all, r_cv, r_comp, r_nobb, r_bb), "B. POAF (secondary)")
+  ptbl(list(r_all, r_cv, r_comp, r_nobb, r_bb), "POAF (secondary)")
   for (r in list(r_all, r_nobb, r_bb))
     if (!is.null(r)) results_list[[paste0(pfx, "_", r$label)]] <<- r
 
-  # ── C. AKI severity-stratified ─────────────────────────────────
   aki_oc <- c(aki_delta03="Delta >=0.3", aki_kdigo1="KDIGO >=1",
               aki_primary="Ratio >=1.5x", aki_stage2="Stage >=2",
               aki_stage3="Stage >=3")
   aki_r <- lapply(names(aki_oc), function(o) iptw_or(dat, o, aki_oc[[o]]))
-  ptbl(aki_r, "C. PRIMARY: AKI severity-stratified")
+  ptbl(aki_r, "PRIMARY: AKI severity-stratified")
   for (r in aki_r) if (!is.null(r))
     results_list[[paste0(pfx, "_aki_", r$label)]] <<- r
 
-  # C1b. Time-windowed AKI (ratio >=1.5x within 24h, 48h, 72h)
   tw_oc <- c(aki_primary_24h="AKI 1.5x <=24h", aki_primary_48h="AKI 1.5x <=48h",
              aki_primary_72h="AKI 1.5x <=72h")
   tw_r <- lapply(names(tw_oc), function(o) iptw_or(dat, o, tw_oc[[o]]))
-  ptbl(tw_r, "C1b. Time-windowed AKI")
+  ptbl(tw_r, "Time-windowed AKI")
   for (r in tw_r) if (!is.null(r))
     results_list[[paste0(pfx, "_tw_", r$label)]] <<- r
 
-  # C1c. Peak Cr ratio (continuous outcome)
   if ("peak_cr_ratio" %in% names(dat)) {
     dat_pcr <- dat %>% filter(!is.na(peak_cr_ratio))
-    if (nrow(dat_pcr) > 20) {
-      tryCatch({
-        des <- if ("hospitalid" %in% names(dat_pcr))
-          svydesign(ids=~hospitalid, weights=~iptw, data=dat_pcr)
-        else svydesign(ids=~1, weights=~iptw, data=dat_pcr)
-        m <- svyglm(peak_cr_ratio ~ trt, design=des)
-        s <- tidy(m, conf.int=TRUE) %>% filter(term=="trt")
-        if (nrow(s) > 0) {
-          cat(sprintf("\n  C1c. Peak Cr ratio diff = %.3f (%.3f to %.3f), p=%.4f\n",
-                      s$estimate, s$conf.low, s$conf.high, s$p.value))
-          results_list[[paste0(pfx, "_peak_cr")]] <<- tibble(
-            model=paste0(pfx,"_peak_cr"), term="trt", estimate=s$estimate,
-            conf.low=s$conf.low, conf.high=s$conf.high, p.value=s$p.value,
-            n_events=nrow(dat_pcr), label="Peak Cr ratio diff")
-        }
-      }, error = function(e) cat(sprintf("  Peak Cr failed: %s\n", e$message)))
-    }
+    if (nrow(dat_pcr) > 20) tryCatch({
+      des <- if ("hospitalid" %in% names(dat_pcr))
+        svydesign(ids=~hospitalid, weights=~iptw, data=dat_pcr)
+      else svydesign(ids=~1, weights=~iptw, data=dat_pcr)
+      m <- svyglm(peak_cr_ratio ~ trt, design=des)
+      s <- tidy(m, conf.int=TRUE) %>% filter(term=="trt")
+      if (nrow(s) > 0) {
+        cat(sprintf("\n  Peak Cr ratio diff = %.3f (%.3f to %.3f), p=%.4f\n",
+                    s$estimate, s$conf.low, s$conf.high, s$p.value))
+        results_list[[paste0(pfx, "_peak_cr")]] <<- tibble(
+          model=paste0(pfx,"_peak_cr"), term="trt", estimate=s$estimate,
+          conf.low=s$conf.low, conf.high=s$conf.high, p.value=s$p.value,
+          n_events=nrow(dat_pcr), label="Peak Cr ratio diff")
+      }
+    }, error = function(e) NULL)
   }
 
-  # AKI x BB
   r_nobb <- iptw_or(dat %>% filter(has_betablocker==0), "aki_primary", "AKI 1.5x (no BB)")
   r_bb   <- iptw_or(dat %>% filter(has_betablocker==1), "aki_primary", "AKI 1.5x (with BB)")
-  ptbl(list(r_nobb, r_bb), "C2. AKI x beta-blocker")
+  ptbl(list(r_nobb, r_bb), "AKI x beta-blocker")
   for (r in list(r_nobb, r_bb))
     if (!is.null(r)) results_list[[paste0(pfx, "_", r$label)]] <<- r
 
-  # Sensitivity (Cox, OW, matching) for ratio >=1.5x
-  cat("\n  C3. Sensitivity (ratio >=1.5x):\n")
+  cat("\n  Sensitivity (ratio >=1.5x):\n")
   tryCatch({
     ds <- dat %>% filter(!is.na(time_to_event_hours), time_to_event_hours > 0)
     if (nrow(ds) > 10) {
@@ -323,46 +297,37 @@ run_suite <- function(dat, dat_m, title, pfx) {
     results_list[[paste0(pfx, "_matched")]] <<- s
   }, error = function(e) cat(sprintf("    Match: %s\n", e$message)))
 
-  # ── D. NEGATIVE CONTROLS ───────────────────────────────────────
   nc_oc <- c(nc_fracture="Fracture", nc_skin_infection="Skin infection", nc_uti="UTI")
   nc_r <- lapply(names(nc_oc), function(o) iptw_or(dat, o, nc_oc[[o]]))
-  ptbl(nc_r, "D. NEGATIVE CONTROLS")
+  ptbl(nc_r, "NEGATIVE CONTROLS")
   for (r in nc_r) if (!is.null(r)) results_list[[paste0(pfx, "_nc_", r$label)]] <<- r
 
-  # ── E. NEURO (exploratory) ─────────────────────────────────────
   neuro_oc <- c(neuro_delirium="Delirium", neuro_seizure="Seizure",
                 neuro_stroke_postop="Stroke (postop)", neuro_encephalopathy="Encephalopathy")
   neuro_r <- lapply(names(neuro_oc), function(o) iptw_or(dat, o, neuro_oc[[o]]))
-  ptbl(neuro_r, "E. NEURO (exploratory)")
+  ptbl(neuro_r, "NEURO (exploratory)")
   for (r in neuro_r) if (!is.null(r)) results_list[[paste0(pfx, "_neuro_", r$label)]] <<- r
 
-  # ── F. SECONDARY ───────────────────────────────────────────────
   sec_oc <- c(rrt_7d="RRT 7d", icu_mortality="ICU mortality", hosp_mortality="Hospital mortality")
   sec_r <- lapply(names(sec_oc), function(o) iptw_or(dat, o, sec_oc[[o]]))
-  ptbl(sec_r, "F. SECONDARY")
+  ptbl(sec_r, "SECONDARY")
   for (r in sec_r) if (!is.null(r)) results_list[[paste0(pfx, "_sec_", r$label)]] <<- r
 
-  # ── G. E-VALUES (unmeasured confounding sensitivity) ───────────
-  # FIX (bug #1): compute directly from OR/CI, not from n_total column
   if (HAS_EVALUE) {
-    cat("\n  G. E-VALUES:\n")
-    evalue_targets <- c("KDIGO >=1", "Ratio >=1.5x", "AKI 1.5x <=48h",
-                        "Hospital mortality")
-    for (nm in evalue_targets) {
+    cat("\n  E-VALUES:\n")
+    for (nm in c("KDIGO >=1", "Ratio >=1.5x", "AKI 1.5x <=48h", "Hospital mortality")) {
       for (k in names(results_list)) {
         obj <- results_list[[k]]
         if (!is.null(obj) && is.data.frame(obj) && "label" %in% names(obj) &&
             any(obj$label == nm) && grepl(pfx, k)) {
           row <- obj[obj$label == nm, ]
-          if (nrow(row) > 0 && !is.na(row$estimate[1])) {
-            tryCatch({
-              rare <- (row$n_events[1] / n_total) < 0.15
-              ev <- EValue::evalues.OR(row$estimate[1], row$conf.low[1],
-                                       row$conf.high[1], rare = rare)
-              cat(sprintf("    %s: E-value = %.2f (CI bound: %.2f)\n",
-                          nm, ev["E-values", "point"], ev["E-values", "lower"]))
-            }, error = function(e) NULL)
-          }
+          if (nrow(row) > 0 && !is.na(row$estimate[1])) tryCatch({
+            rare <- (row$n_events[1] / n_total) < 0.15
+            ev <- EValue::evalues.OR(row$estimate[1], row$conf.low[1],
+                                     row$conf.high[1], rare = rare)
+            cat(sprintf("    %s: E-value = %.2f (CI bound: %.2f)\n",
+                        nm, ev["E-values", "point"], ev["E-values", "lower"]))
+          }, error = function(e) NULL)
           break
         }
       }
@@ -370,16 +335,10 @@ run_suite <- function(dat, dat_m, title, pfx) {
   }
 }
 
-# ─── Run both TTE designs ───────────────────────────────────────────
-run_suite(dat_tte_b, dat_m_b,
-          "TTE-B: ALL PATIENTS (unrestricted)", "TTEB")
-run_suite(dat_tte_a, NULL,
-          "TTE-A: HYPOMAGNESEMIA ONLY (Mg < 2.0)", "TTEA")
+run_suite(dat_all, dat_all_m, "TTE ALL PATIENTS", "ALL")
+run_suite(dat_hypo, NULL, "TTE HYPOMAGNESEMIA (Mg < 2.0)", "HYPO")
 
-
-# =====================================================================
-# SAVE
-# =====================================================================
+# ── Save ─────────────────────────────────────────────────────────────
 cat("\n", strrep("=", 70), "\n")
 cat("RESULTS SUMMARY\n")
 cat(strrep("=", 70), "\n")

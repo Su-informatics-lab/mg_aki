@@ -1,73 +1,49 @@
 #!/usr/bin/env Rscript
 # ─────────────────────────────────────────────────────────────────────
-# Mg Reserve → Cardiac Surgery AKI (eICU)
 # 02_psm.R — Propensity score estimation + IPTW / matching
 #
 # Produces:
-#   results/02a_ps_diagnostics.pdf   — overlap plots, SMD
-#   results/02b_iptw_cohort.csv      — Analysis A (GPS for continuous Mg)
-#   results/02c_tte_matched.csv      — Analysis B (1:1 PS matched)
-#   results/02d_tte_iptw.csv         — Analysis B (IPTW weighted)
-#
-# Design:
-#   Analysis A (prognostic): Generalized PS for continuous exposure
-#     OR multivariable regression with hospital clustering
-#   Analysis B (TTE):  ACNU — Mg supplementation vs. none
-#     Primary: IPTW (stabilized, truncated 1/99)
-#     Secondary: 1:1 nearest-neighbor PS matching (caliper 0.2 SD)
-#     Sensitivity: overlap weighting (Li, Morgan, Zaslavsky 2018)
+#   results/02a_ps_diagnostics.pdf
+#   results/02b_analysis_a_prepared.RData
+#   results/02c_hypo_matched.csv     — hypoMg 1:1 PS matched
+#   results/02d_hypo_iptw.csv        — hypoMg IPTW weighted
+#   results/02e_all_iptw.csv         — all-patient IPTW weighted
+#   results/02f_all_matched.csv      — all-patient 1:1 PS matched
 # ─────────────────────────────────────────────────────────────────────
 
-# ─── Auto-install dependencies ──────────────────────────────────────
 local({
   pkgs <- c("tidyverse", "MatchIt", "cobalt", "WeightIt",
             "survey", "survival", "tableone")
   missing <- pkgs[!sapply(pkgs, requireNamespace, quietly = TRUE)]
   if (length(missing) > 0) {
-    cat(sprintf("Installing %d missing packages: %s\n",
-                length(missing), paste(missing, collapse = ", ")))
     install.packages(missing, repos = "https://cloud.r-project.org",
                      quiet = TRUE, Ncpus = parallel::detectCores())
   }
 })
 
 suppressPackageStartupMessages({
-  library(tidyverse)
-  library(MatchIt)
-  library(cobalt)
-  library(WeightIt)
-  library(survey)
-  library(survival)
-  library(tableone)
+  library(tidyverse); library(MatchIt); library(cobalt)
+  library(WeightIt); library(survey); library(survival); library(tableone)
 })
 
 RESULTS <- path.expand("~/mg_aki/results")
 
-# ─── Load cohorts ───────────────────────────────────────────────────
 cat("Loading cohorts...\n")
-cohort_a <- read_csv(file.path(RESULTS, "01_analysis_a_cohort.csv"),
-                     show_col_types = FALSE)
-cohort_b <- tryCatch(
-  read_csv(file.path(RESULTS, "06_tte_cohort.csv"), show_col_types = FALSE),
-  error = function(e) {
-    cat("  No TTE cohort found — skipping Analysis B\n")
-    NULL
-  }
-)
+cohort_a <- read_csv(file.path(RESULTS, "01_analysis_a_cohort.csv"), show_col_types = FALSE)
+cohort_hypo <- tryCatch(
+  read_csv(file.path(RESULTS, "01b_hypo_cohort.csv"), show_col_types = FALSE),
+  error = function(e) { cat("  No hypoMg cohort found\n"); NULL })
 
-cat(sprintf("  Analysis A: %d patients\n", nrow(cohort_a)))
-if (!is.null(cohort_b)) {
-  cat(sprintf("  Analysis B: %d patients (%d treated, %d untreated)\n",
-              nrow(cohort_b),
-              sum(cohort_b$mg_supplementation == 1, na.rm = TRUE),
-              sum(cohort_b$mg_supplementation == 0, na.rm = TRUE)))
-}
+cat(sprintf("  Prognostic: %d patients\n", nrow(cohort_a)))
+if (!is.null(cohort_hypo))
+  cat(sprintf("  TTE hypoMg: %d patients (%d treated, %d untreated)\n",
+              nrow(cohort_hypo),
+              sum(cohort_hypo$mg_supplementation == 1, na.rm = TRUE),
+              sum(cohort_hypo$mg_supplementation == 0, na.rm = TRUE)))
 
-# ─── Covariate formula (shared) ────────────────────────────────────
-# DAG-informed: only pre-Mg-measurement variables
+# ─── Covariate formula ─────────────────────────────────────────────
 cov_formula_rhs <- paste(c(
-  "age_num", "is_female", "bmi",
-  "surgery_type",
+  "age_num", "is_female", "bmi", "surgery_type",
   "hx_chf", "hx_hypertension", "hx_diabetes", "hx_ckd",
   "hx_copd", "hx_pvd", "hx_stroke", "hx_liver",
   "baseline_cr", "baseline_egfr",
@@ -76,23 +52,13 @@ cov_formula_rhs <- paste(c(
   "has_betablocker", "has_steroid"
 ), collapse = " + ")
 
-# Add APACHE predicted mortality (pre-treatment) if available — NOT apacheScore (post-treatment!)
-# apacheScore uses worst values in first 24h → includes post-Mg-supplementation physiology → mediator
-if ("apachescore" %in% names(cohort_a)) {
+if ("apachescore" %in% names(cohort_a))
   cat("  NOTE: Using predicted ICU mortality instead of APACHE score (post-treatment variable)\n")
-}
 
-# Add pre-op antiarrhythmic and potassium if available
-# NOTE: first_lactate (20% available) and first_map (56% available) excluded — too sparse
 for (v in c("preop_antiarrhythmic", "first_k_value",
-            "has_vasopressor", "first_hr",
-            "first_ca_value")) {
-  if (v %in% names(cohort_a)) {
-    cov_formula_rhs <- paste(cov_formula_rhs, "+", v)
-  }
-}
+            "has_vasopressor", "first_hr", "first_ca_value"))
+  if (v %in% names(cohort_a)) cov_formula_rhs <- paste(cov_formula_rhs, "+", v)
 
-# Median-impute continuous covariates with moderate missingness to avoid sample collapse
 for (v in c("first_k_value", "first_hr", "first_ca_value")) {
   if (v %in% names(cohort_a) && any(is.na(cohort_a[[v]]))) {
     med_val <- median(cohort_a[[v]], na.rm = TRUE)
@@ -103,274 +69,165 @@ for (v in c("first_k_value", "first_hr", "first_ca_value")) {
 }
 
 # =====================================================================
-# ANALYSIS A — Prognostic (continuous Mg exposure)
+# PROGNOSTIC
 # =====================================================================
 cat("\n", strrep("=", 70), "\n")
-cat("ANALYSIS A: Prognostic — Mg level as continuous exposure\n")
+cat("PROGNOSTIC: Mg level as continuous exposure\n")
 cat(strrep("=", 70), "\n")
 
-# For continuous exposure: use multivariable regression with hospital
-# clustering rather than GPS (simpler, comparable performance for
-# single-timepoint exposure)
-
-# Prepare data
 dat_a <- cohort_a %>%
-  mutate(
-    surgery_type = factor(surgery_type, levels = c("cabg", "valve",
-                                                    "combined",
-                                                    "other_cardiac")),
-    mg_quartile  = factor(mg_quartile),
-    ethnicity    = factor(replace_na(ethnicity, "Other/Unknown")),
-  ) %>%
+  mutate(surgery_type = factor(surgery_type, levels = c("cabg","valve","combined","other_cardiac")),
+         mg_quartile = factor(mg_quartile),
+         ethnicity = factor(replace_na(ethnicity, "Other/Unknown"))) %>%
   filter(!is.na(baseline_cr), !is.na(age_num)) %>%
-  # Cap implausible BMI (eICU admissionWeight/Height can be junk)
   mutate(bmi = ifelse(!is.na(bmi) & bmi > 10 & bmi < 80, bmi, NA_real_))
 
-cat(sprintf("  Analysis A sample: %d\n", nrow(dat_a)))
+cat(sprintf("  Prognostic sample: %d\n", nrow(dat_a)))
 
-# Primary model: logistic with cluster-robust SE (hospital)
-# (Actual model fitting in 03_models.R; here we do covariate
-#  diagnostics across Mg quartiles)
-cat("\n  Covariate balance across Mg quartiles:\n")
-tab1_vars <- c("age_num", "is_female", "bmi", "surgery_type",
-               "hx_chf", "hx_hypertension", "hx_diabetes", "hx_ckd",
-               "baseline_cr", "baseline_egfr")
-tab1_vars <- intersect(tab1_vars, names(dat_a))
+tab1_vars <- intersect(c("age_num","is_female","bmi","surgery_type",
+  "hx_chf","hx_hypertension","hx_diabetes","hx_ckd",
+  "baseline_cr","baseline_egfr"), names(dat_a))
 if (length(tab1_vars) > 0) {
-  t1 <- CreateTableOne(vars = tab1_vars,
-                       strata = "mg_quartile",
-                       data = dat_a,
-                       test = FALSE)
-  print(t1, smd = TRUE)
+  cat("\n  Covariate balance across Mg quartiles:\n")
+  print(CreateTableOne(vars=tab1_vars, strata="mg_quartile", data=dat_a, test=FALSE), smd=TRUE)
 }
 
 save(dat_a, file = file.path(RESULTS, "02b_analysis_a_prepared.RData"))
-cat("  Saved Analysis A prepared data\n")
+cat("  Saved prognostic prepared data\n")
 
 # =====================================================================
-# ANALYSIS B — TTE (Mg supplementation, binary treatment)
+# TTE HYPOMG (Mg < 2.0)
 # =====================================================================
-if (!is.null(cohort_b) && nrow(cohort_b) > 10) {
+if (!is.null(cohort_hypo) && nrow(cohort_hypo) > 10) {
   cat("\n", strrep("=", 70), "\n")
-  cat("ANALYSIS B: TTE — Mg supplementation vs. none\n")
+  cat("TTE HYPO: Mg supplementation vs. none (Mg < 2.0)\n")
   cat(strrep("=", 70), "\n")
 
-  dat_b <- cohort_b %>%
-    mutate(
-      surgery_type = factor(surgery_type,
-                            levels = c("cabg", "valve", "combined",
-                                       "other_cardiac")),
-      trt = as.integer(mg_supplementation),
-    ) %>%
+  dat_hypo <- cohort_hypo %>%
+    mutate(surgery_type = factor(surgery_type, levels = c("cabg","valve","combined","other_cardiac")),
+           trt = as.integer(mg_supplementation)) %>%
     filter(!is.na(baseline_cr), !is.na(age_num))
 
-  # Median-impute continuous covariates
-  for (v in c("first_k_value", "first_hr", "first_ca_value")) {
-    if (v %in% names(dat_b) && any(is.na(dat_b[[v]]))) {
-      dat_b[[v]][is.na(dat_b[[v]])] <- median(dat_b[[v]], na.rm = TRUE)
-    }
-  }
+  for (v in c("first_k_value","first_hr","first_ca_value"))
+    if (v %in% names(dat_hypo) && any(is.na(dat_hypo[[v]])))
+      dat_hypo[[v]][is.na(dat_hypo[[v]])] <- median(dat_hypo[[v]], na.rm=TRUE)
 
-  # Also include Mg level at time zero (the value triggering eligibility)
-  ps_formula <- as.formula(paste("trt ~", cov_formula_rhs,
-                                 "+ first_mg_value"))
+  ps_formula <- as.formula(paste("trt ~", cov_formula_rhs, "+ first_mg_value"))
+  dat_hypo <- dat_hypo %>% drop_na(any_of(all.vars(ps_formula)))
 
-  # Drop rows with NA in any PS covariate before fitting
-  ps_vars <- all.vars(ps_formula)
-  dat_b <- dat_b %>% drop_na(any_of(ps_vars))
+  cat(sprintf("  TTE hypoMg sample: %d (treated: %d)\n", nrow(dat_hypo), sum(dat_hypo$trt)))
 
-  cat(sprintf("  TTE sample: %d (treated: %d) [after dropping NA covariates]\n",
-              nrow(dat_b), sum(dat_b$trt)))
-
-  # ── PS estimation ──────────────────────────────────────────────
   cat("\n  Fitting propensity score model...\n")
-  ps_model <- glm(ps_formula, data = dat_b, family = binomial())
-  dat_b$ps <- predict(ps_model, type = "response")
-
+  ps_model <- glm(ps_formula, data = dat_hypo, family = binomial())
+  dat_hypo$ps <- predict(ps_model, type = "response")
   cat(sprintf("  PS: mean=%.3f, range=[%.3f, %.3f]\n",
-              mean(dat_b$ps), min(dat_b$ps), max(dat_b$ps)))
+              mean(dat_hypo$ps), min(dat_hypo$ps), max(dat_hypo$ps)))
 
-  # ── 1. IPTW (primary) ─────────────────────────────────────────
   cat("\n  Computing IPTW (stabilized, truncated 1/99)...\n")
-  w_obj <- weightit(ps_formula, data = dat_b, method = "ps",
-                    estimand = "ATE")
-  dat_b$iptw_raw <- w_obj$weights
-
-  # Truncate at 1st/99th percentile
-  q01 <- quantile(dat_b$iptw_raw, 0.01)
-  q99 <- quantile(dat_b$iptw_raw, 0.99)
-  dat_b$iptw <- pmax(pmin(dat_b$iptw_raw, q99), q01)
-
+  w_obj <- weightit(ps_formula, data=dat_hypo, method="ps", estimand="ATE")
+  dat_hypo$iptw_raw <- w_obj$weights
+  q01 <- quantile(dat_hypo$iptw_raw, 0.01); q99 <- quantile(dat_hypo$iptw_raw, 0.99)
+  dat_hypo$iptw <- pmax(pmin(dat_hypo$iptw_raw, q99), q01)
   cat(sprintf("  IPTW: median=%.2f, max=%.2f, ESS=%.0f\n",
-              median(dat_b$iptw), max(dat_b$iptw),
-              (sum(dat_b$iptw))^2 / sum(dat_b$iptw^2)))
+              median(dat_hypo$iptw), max(dat_hypo$iptw),
+              (sum(dat_hypo$iptw))^2/sum(dat_hypo$iptw^2)))
+  cat("\n  Balance (IPTW):\n"); print(bal.tab(w_obj, stats=c("m","v"), thresholds=c(m=0.1)))
 
-  # Balance diagnostics
-  bal_iptw <- bal.tab(w_obj, stats = c("m", "v"), thresholds = c(m = 0.1))
-  cat("\n  Balance (IPTW):\n")
-  print(bal_iptw)
-
-  # ── 2. PS Matching (secondary) ────────────────────────────────
   cat("\n  PS Matching (1:1 nearest-neighbor, caliper 0.2 SD)...\n")
   tryCatch({
-    m_out <- matchit(ps_formula, data = dat_b, method = "nearest",
-                     distance = "glm", caliper = 0.2, ratio = 1)
-    dat_b_matched <- match.data(m_out)
-    cat(sprintf("  Matched: %d pairs (%d total)\n",
-                sum(dat_b_matched$trt == 1), nrow(dat_b_matched)))
+    m_out <- matchit(ps_formula, data=dat_hypo, method="nearest", distance="glm", caliper=0.2, ratio=1)
+    dat_hypo_matched <- match.data(m_out)
+    cat(sprintf("  Matched: %d pairs (%d total)\n", sum(dat_hypo_matched$trt==1), nrow(dat_hypo_matched)))
+    cat("\n  Balance (matched):\n"); print(bal.tab(m_out, stats=c("m","v"), thresholds=c(m=0.1)))
+    write_csv(dat_hypo_matched, file.path(RESULTS, "02c_hypo_matched.csv"))
+  }, error = function(e) cat(sprintf("  Matching failed: %s\n", e$message)))
 
-    bal_match <- bal.tab(m_out, stats = c("m", "v"), thresholds = c(m = 0.1))
-    cat("\n  Balance (matched):\n")
-    print(bal_match)
-
-    write_csv(dat_b_matched, file.path(RESULTS, "02c_tte_matched.csv"))
-  }, error = function(e) {
-    cat(sprintf("  Matching failed: %s\n", e$message))
-    cat("  (Likely insufficient treated/control overlap — expected in demo)\n")
-  })
-
-  # ── 3. Overlap weighting (sensitivity) ────────────────────────
   cat("\n  Computing overlap weights (Li et al. 2018)...\n")
-  dat_b$ow <- ifelse(dat_b$trt == 1, 1 - dat_b$ps, dat_b$ps)
+  dat_hypo$ow <- ifelse(dat_hypo$trt==1, 1-dat_hypo$ps, dat_hypo$ps)
   cat(sprintf("  Overlap weights: median=%.3f, ESS=%.0f\n",
-              median(dat_b$ow),
-              (sum(dat_b$ow))^2 / sum(dat_b$ow^2)))
+              median(dat_hypo$ow), (sum(dat_hypo$ow))^2/sum(dat_hypo$ow^2)))
 
-  # Save IPTW cohort
-  write_csv(dat_b, file.path(RESULTS, "02d_tte_iptw.csv"))
-  cat("  Saved TTE-A IPTW cohort\n")
-
+  write_csv(dat_hypo, file.path(RESULTS, "02d_hypo_iptw.csv"))
+  cat("  Saved TTE hypoMg IPTW cohort\n")
 } else {
-  cat("\n  Skipping TTE-A — insufficient sample\n")
+  cat("\n  Skipping TTE hypoMg — insufficient sample\n")
 }
 
 # =====================================================================
-# TTE-B: UNRESTRICTED (all cardiac surgery, prophylactic question)
+# TTE ALL PATIENTS
 # =====================================================================
 cat("\n", strrep("=", 70), "\n")
-cat("TTE-B: Unrestricted — routine Mg supplementation (all patients)\n")
+cat("TTE ALL: Routine Mg supplementation (all patients)\n")
 cat(strrep("=", 70), "\n")
 
-dat_b2 <- cohort_a %>%
-  mutate(
-    surgery_type = factor(surgery_type,
-                          levels = c("cabg", "valve", "combined",
-                                     "other_cardiac")),
-    trt = as.integer(mg_supplementation),
-  ) %>%
+dat_all <- cohort_a %>%
+  mutate(surgery_type = factor(surgery_type, levels = c("cabg","valve","combined","other_cardiac")),
+         trt = as.integer(mg_supplementation)) %>%
   filter(!is.na(baseline_cr), !is.na(age_num))
 
-# Median-impute continuous covariates
-for (v in c("first_k_value", "first_hr", "first_ca_value")) {
-  if (v %in% names(dat_b2) && any(is.na(dat_b2[[v]]))) {
-    dat_b2[[v]][is.na(dat_b2[[v]])] <- median(dat_b2[[v]], na.rm = TRUE)
-  }
-}
+for (v in c("first_k_value","first_hr","first_ca_value"))
+  if (v %in% names(dat_all) && any(is.na(dat_all[[v]])))
+    dat_all[[v]][is.na(dat_all[[v]])] <- median(dat_all[[v]], na.rm=TRUE)
 
-# PS formula: same covariates + first_mg_value (critical for confounding by indication)
-ps_formula_b2 <- as.formula(paste("trt ~", cov_formula_rhs, "+ first_mg_value"))
+ps_formula_all <- as.formula(paste("trt ~", cov_formula_rhs, "+ first_mg_value"))
+dat_all <- dat_all %>% drop_na(any_of(all.vars(ps_formula_all)))
 
-# Drop NA in PS covariates
-ps_vars_b2 <- all.vars(ps_formula_b2)
-dat_b2 <- dat_b2 %>% drop_na(any_of(ps_vars_b2))
+cat(sprintf("  TTE all sample: %d (treated: %d, untreated: %d)\n",
+            nrow(dat_all), sum(dat_all$trt), sum(dat_all$trt==0)))
 
-cat(sprintf("  TTE-B sample: %d (treated: %d, untreated: %d)\n",
-            nrow(dat_b2), sum(dat_b2$trt), sum(dat_b2$trt == 0)))
-
-if (nrow(dat_b2) > 50 && sum(dat_b2$trt) > 20) {
-  # ── PS estimation ──────────────────────────────────────────────
+if (nrow(dat_all) > 50 && sum(dat_all$trt) > 20) {
   cat("\n  Fitting propensity score model...\n")
-  ps_model_b2 <- glm(ps_formula_b2, data = dat_b2, family = binomial())
-  dat_b2$ps <- predict(ps_model_b2, type = "response")
-
+  ps_model_all <- glm(ps_formula_all, data=dat_all, family=binomial())
+  dat_all$ps <- predict(ps_model_all, type="response")
   cat(sprintf("  PS: mean=%.3f, range=[%.3f, %.3f]\n",
-              mean(dat_b2$ps), min(dat_b2$ps), max(dat_b2$ps)))
+              mean(dat_all$ps), min(dat_all$ps), max(dat_all$ps)))
 
-  # ── IPTW ───────────────────────────────────────────────────────
   cat("\n  Computing IPTW (stabilized, truncated 1/99)...\n")
-  w_obj_b2 <- weightit(ps_formula_b2, data = dat_b2, method = "ps",
-                        estimand = "ATE")
-  dat_b2$iptw_raw <- w_obj_b2$weights
-  q01 <- quantile(dat_b2$iptw_raw, 0.01)
-  q99 <- quantile(dat_b2$iptw_raw, 0.99)
-  dat_b2$iptw <- pmax(pmin(dat_b2$iptw_raw, q99), q01)
-
+  w_obj_all <- weightit(ps_formula_all, data=dat_all, method="ps", estimand="ATE")
+  dat_all$iptw_raw <- w_obj_all$weights
+  q01 <- quantile(dat_all$iptw_raw, 0.01); q99 <- quantile(dat_all$iptw_raw, 0.99)
+  dat_all$iptw <- pmax(pmin(dat_all$iptw_raw, q99), q01)
   cat(sprintf("  IPTW: median=%.2f, max=%.2f, ESS=%.0f\n",
-              median(dat_b2$iptw), max(dat_b2$iptw),
-              (sum(dat_b2$iptw))^2 / sum(dat_b2$iptw^2)))
+              median(dat_all$iptw), max(dat_all$iptw),
+              (sum(dat_all$iptw))^2/sum(dat_all$iptw^2)))
+  cat("\n  Balance (IPTW):\n"); print(bal.tab(w_obj_all, stats=c("m","v"), thresholds=c(m=0.1)))
 
-  # Balance
-  bal_b2 <- bal.tab(w_obj_b2, stats = c("m", "v"), thresholds = c(m = 0.1))
-  cat("\n  Balance (IPTW):\n")
-  print(bal_b2)
+  dat_all$ow <- ifelse(dat_all$trt==1, 1-dat_all$ps, dat_all$ps)
 
-  # ── Overlap weighting ─────────────────────────────────────────
-  dat_b2$ow <- ifelse(dat_b2$trt == 1, 1 - dat_b2$ps, dat_b2$ps)
-
-  # ── PS Matching ────────────────────────────────────────────────
   cat("\n  PS Matching (1:1 nearest-neighbor, caliper 0.2 SD)...\n")
-  dat_b2_matched <- NULL
   tryCatch({
-    m_out_b2 <- matchit(ps_formula_b2, data = dat_b2, method = "nearest",
-                         distance = "glm", caliper = 0.2, ratio = 1)
-    dat_b2_matched <- match.data(m_out_b2)
-    cat(sprintf("  Matched: %d pairs (%d total)\n",
-                sum(dat_b2_matched$trt == 1), nrow(dat_b2_matched)))
-    write_csv(dat_b2_matched, file.path(RESULTS, "02f_tteb_matched.csv"))
-  }, error = function(e) {
-    cat(sprintf("  Matching failed: %s\n", e$message))
-  })
+    m_out_all <- matchit(ps_formula_all, data=dat_all, method="nearest",
+                         distance="glm", caliper=0.2, ratio=1)
+    dat_all_matched <- match.data(m_out_all)
+    cat(sprintf("  Matched: %d pairs (%d total)\n", sum(dat_all_matched$trt==1), nrow(dat_all_matched)))
+    write_csv(dat_all_matched, file.path(RESULTS, "02f_all_matched.csv"))
+  }, error = function(e) cat(sprintf("  Matching failed: %s\n", e$message)))
 
-  write_csv(dat_b2, file.path(RESULTS, "02e_tteb_iptw.csv"))
-  cat("  Saved TTE-B IPTW cohort\n")
-
+  write_csv(dat_all, file.path(RESULTS, "02e_all_iptw.csv"))
+  cat("  Saved TTE all IPTW cohort\n")
 } else {
-  cat("  Skipping TTE-B — insufficient sample\n")
+  cat("  Skipping TTE all — insufficient sample\n")
 }
 
 # ─── PS diagnostics PDF ────────────────────────────────────────────
 cat("\n  Generating PS diagnostics PDF...\n")
 tryCatch({
-  pdf(file.path(RESULTS, "02a_ps_diagnostics.pdf"), width = 10, height = 8)
-
-  # Analysis A: Mg distribution by AKI status
-  if (nrow(dat_a) > 0) {
-    p1 <- ggplot(dat_a, aes(x = first_mg_value, fill = factor(ifelse(aki_primary == 1 | aki_delta03 == 1, 1, 0)))) +
-      geom_density(alpha = 0.5) +
-      labs(title = "Analysis A: Mg distribution by AKI status",
-           x = "First postop Mg (mg/dL)", fill = "AKI (KDIGO ≥1)") +
-      theme_minimal()
-    print(p1)
-  }
-
-  # Analysis B (restricted): PS overlap
-  if (!is.null(cohort_b) && exists("dat_b") && "ps" %in% names(dat_b)) {
-    p2 <- ggplot(dat_b, aes(x = ps, fill = factor(trt))) +
-      geom_density(alpha = 0.5) +
-      labs(title = "TTE-A (hypoMg): PS overlap",
-           x = "Propensity score", fill = "Mg supp") +
-      theme_minimal()
-    print(p2)
-  }
-
-  # TTE-B (unrestricted): PS overlap
-  if (exists("dat_b2") && "ps" %in% names(dat_b2)) {
-    p3 <- ggplot(dat_b2, aes(x = ps, fill = factor(trt))) +
-      geom_density(alpha = 0.5) +
-      labs(title = "TTE-B (all patients): PS overlap",
-           x = "Propensity score", fill = "Mg supp") +
-      theme_minimal()
-    print(p3)
-  }
-
+  pdf(file.path(RESULTS, "02a_ps_diagnostics.pdf"), width=10, height=8)
+  if (nrow(dat_a) > 0)
+    print(ggplot(dat_a, aes(x=first_mg_value,
+      fill=factor(ifelse(aki_primary==1|aki_delta03==1,1,0)))) +
+      geom_density(alpha=0.5) + labs(title="Prognostic: Mg by AKI",
+        x="First postop Mg (mg/dL)", fill="AKI (KDIGO >=1)") + theme_minimal())
+  if (exists("dat_hypo") && "ps" %in% names(dat_hypo))
+    print(ggplot(dat_hypo, aes(x=ps, fill=factor(trt))) + geom_density(alpha=0.5) +
+      labs(title="TTE hypoMg: PS overlap", x="Propensity score", fill="Mg supp") + theme_minimal())
+  if (exists("dat_all") && "ps" %in% names(dat_all))
+    print(ggplot(dat_all, aes(x=ps, fill=factor(trt))) + geom_density(alpha=0.5) +
+      labs(title="TTE all: PS overlap", x="Propensity score", fill="Mg supp") + theme_minimal())
   dev.off()
   cat("  Saved PS diagnostics PDF\n")
-}, error = function(e) {
-  cat(sprintf("  PDF generation failed: %s\n", e$message))
-  try(dev.off(), silent = TRUE)
-})
+}, error = function(e) { cat(sprintf("  PDF failed: %s\n", e$message)); try(dev.off(), silent=TRUE) })
 
 cat("\n", strrep("=", 70), "\n")
-cat("02_psm.R COMPLETE\n")
-cat("Next: Rscript 03_models.R\n")
+cat("02_psm.R COMPLETE\nNext: Rscript 03_models.R\n")
 cat(strrep("=", 70), "\n")
