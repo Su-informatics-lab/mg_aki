@@ -44,7 +44,7 @@ bash run.sh 4 5 6  # subset
 | Step | Script | Output |
 |------|--------|--------|
 | 1 | `01_etl.py` | `results/01_analysis_a_cohort.csv` |
-| 2 | `02_psm.R` | `results/02e_tteb_iptw.csv` |
+| 2 | `02_psm.R` | `results/02e_all_iptw.csv` |
 | 3 | `03_models.R` | `results/03_results_summary.csv` |
 | 4 | `04_mimic_validation.py` | `results/04_mimic_cohort.csv` |
 | 5 | `05_mimic_tte.R` | `results/05_mimic_results_summary.csv` |
