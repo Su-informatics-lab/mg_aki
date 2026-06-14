@@ -5,9 +5,9 @@ source .venv/bin/activate
 module purge && module load R/4.4.2-gfbf-2024a
 SECONDS=0
 
-step() { echo -e "\n──── Step $1/6: $2 ────"; }
+step() { echo -e "\n──── Step $1/8: $2 ────"; }
 
-STEPS=("${@:-1 2 3 4 5 6}")
+STEPS=("${@:-1 2 3 4 5 6 7 8}")
 
 for s in ${STEPS[@]}; do
   case $s in
@@ -17,6 +17,8 @@ for s in ${STEPS[@]}; do
     4) step 4 "MIMIC ETL";     python 04_mimic_validation.py ;;
     5) step 5 "MIMIC TTE";     Rscript 05_mimic_tte.R ;;
     6) step 6 "Meta-analysis"; Rscript 06_meta.R ;;
+    7) step 7 "Tables";        Rscript 07_tables.R ;;
+    8) step 8 "Figures";       Rscript 08_figures.R ;;
     *) echo "Unknown step: $s"; exit 1 ;;
   esac
 done
