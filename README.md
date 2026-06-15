@@ -45,12 +45,12 @@ bash run.sh 4 5 6  # subset
 
 | Step | Script | Output |
 |------|--------|--------|
-| 1 | `01_etl.py` | `results/01_analysis_a_cohort.csv` |
-| 2 | `02_psm.R` | `results/02e_all_iptw.csv` |
-| 3 | `03_models.R` | `results/03_results_summary.csv` |
-| 4 | `04_mimic_validation.py` | `results/04_mimic_cohort.csv` |
-| 5 | `05_mimic_tte.R` | `results/05_mimic_results_summary.csv` |
-| 6 | `06_meta.R` | `results/06_meta_results.csv` |
+| 1 | `01_etl.py` | `results/01_analysis_a_cohort.csv` (incl. K⁺ supp, death timing) |
+| 2 | `02_psm.R` | `results/02e_all_iptw.csv`, `results/02g_ac_iptw.csv` |
+| 3 | `03_models.R` | `results/03_results_summary.csv` (IPTW + AC + landmark + overlap) |
+| 4 | `04_mimic_validation.py` | `results/04_mimic_cohort.csv` (incl. K⁺ supp, death timing) |
+| 5 | `05_mimic_tte.R` | `results/05_mimic_results_summary.csv` (IPTW + AC + landmark) |
+| 6 | `06_meta.R` | `results/06_meta_results.csv` (all-patient + active comparator) |
 
 All phenotype definitions, ICD codes, and lab ranges are in `00_config.py`.
 
@@ -58,11 +58,16 @@ All phenotype definitions, ICD codes, and lab ranges are in `00_config.py`.
 
 Across 11,670 cardiac surgery patients (eICU: 8,109; MIMIC-IV: 3,746):
 
-| Outcome | Pooled OR (95% CI) | *P* | I² |
-|---|---|---|---|
-| AKI (KDIGO ≥ 1) | 0.85 (0.72–0.99) | .037 | 7% |
-| Hospital mortality | 0.66 (0.51–0.85) | .002 | 0% |
-| Fracture (negative control) | 1.04 (0.67–1.61) | .872 | 0% |
+| Analysis | Outcome | eICU OR | Pooled OR (95% CI) | *P* |
+|---|---|---|---|---|
+| All-patient IPTW | AKI KDIGO ≥1 | 0.78 | 0.84 (0.73–0.96) | .012 |
+| Active comparator (Mg+K⁺ vs K⁺) | AKI KDIGO ≥1 | 0.71 | 0.79 (0.65–0.96) | .018 |
+| All-patient IPTW | Mortality (exploratory) | 0.89 | — | NS |
+| All-patient IPTW | Fracture (negative control) | 0.97 | 1.03 (0.67–1.60) | .88 |
+
+The previously reported association between higher serum magnesium and
+worse AKI (Xiong et al. 2023) reflects confounding by cardioplegia volume,
+not magnesium harm.
 
 ## License
 
