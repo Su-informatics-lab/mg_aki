@@ -20,6 +20,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.ticker import NullLocator
 
 # =====================================================================
 # Nature Portfolio rcParams
@@ -276,6 +277,7 @@ def fig2_forest():
     ax.set_xlim(0.25, 4.0)
     ax.set_xticks([0.5, 0.75, 1, 1.5, 2])
     ax.set_xticklabels(["0.50", "0.75", "1.00", "1.50", "2.00"])
+    ax.xaxis.set_minor_locator(NullLocator())
     ax.set_xlabel("Odds ratio (95% CI)")
     ax.set_ylim(-1.5, fd["y"].max() + 1)
     ax.set_yticks([])
@@ -347,8 +349,8 @@ def fig2_forest():
 # =====================================================================
 # FIGURE 3: Surgery-Type Interaction (cardioplegia hypothesis)
 # =====================================================================
-def fig3_interaction():
-    print("Figure 3: Surgery-type interaction")
+def efig1_interaction():
+    print("eFigure 1: Surgery-type interaction")
 
     data = pd.DataFrame(
         {
@@ -393,24 +395,25 @@ def fig3_interaction():
     ax.legend(loc="upper left", fontsize=6)
 
     # Annotation: cardioplegia arrow
+    # eICU Complex is at x = 1 + offset(-0.12) = 0.88, OR = 1.74
     ax.annotate(
         "More cardioplegia →\nhigher Mg + more AKI",
-        xy=(1.12, 1.74),
-        xytext=(1.25, 1.45),
+        xy=(0.88, 1.74),
+        xytext=(0.40, 2.10),
         fontsize=5.5,
         color=C_GRAY,
         style="italic",
         arrowprops=dict(arrowstyle="->", color=C_GRAY, lw=0.5),
     )
 
-    save(fig, "fig3_interaction")
+    save(fig, "efig1_interaction")
 
 
 # =====================================================================
 # eFIGURE 1: Subgroup Forest (downstream analysis — who benefits)
 # =====================================================================
-def efig1_subgroups():
-    print("eFigure 1: Subgroup forest")
+def fig3_subgroups():
+    print("Figure 3: Subgroup forest")
 
     sub = pd.read_csv(os.path.join(RESULTS, "etables_4_5_subgroups.csv"))
     # Focus on eICU AC results (where signal is clearest)
@@ -463,27 +466,16 @@ def efig1_subgroups():
         ax.plot([r["lo"], r["hi"]], [y, y], color=color, linewidth=1.0)
         ax.plot(r["or"], y, "s", color=color, markersize=6, markeredgewidth=0, zorder=5)
 
-        # OR text
+        # OR text with sample size
         star = "*" if sig else ""
         ax.text(
             2.5,
             y,
-            f"{r['or']:.2f} ({r['lo']:.2f}–{r['hi']:.2f}){star}",
+            f"{r['or']:.2f} ({r['lo']:.2f}–{r['hi']:.2f}){star}  n={int(r['n'])}",
             va="center",
             ha="left",
             fontsize=5.5,
             color="#333333",
-        )
-
-        # N annotation
-        ax.text(
-            0.22,
-            y,
-            f"n={int(r['n'])}",
-            va="center",
-            ha="right",
-            fontsize=5,
-            color=C_GRAY,
         )
 
         y_positions.append(y)
@@ -497,6 +489,7 @@ def efig1_subgroups():
     ax.set_xlim(0.2, 3.5)
     ax.set_xticks([0.5, 0.75, 1, 1.5, 2])
     ax.set_xticklabels(["0.50", "0.75", "1.00", "1.50", "2.00"])
+    ax.xaxis.set_minor_locator(NullLocator())
     ax.set_xlabel("Odds ratio (95% CI)")
     ax.set_ylim(-1, y + 0.5)
     ax.spines["left"].set_visible(False)
@@ -512,7 +505,7 @@ def efig1_subgroups():
     ax.text(0.55, -0.7, "← Favors Mg+K⁺", fontsize=5, color=C_GRAY, style="italic")
     ax.text(1.5, -0.7, "Favors K⁺-only →", fontsize=5, color=C_GRAY, style="italic")
 
-    save(fig, "efig1_subgroups")
+    save(fig, "fig3_subgroups")
 
 
 # =====================================================================
@@ -531,7 +524,7 @@ if __name__ == "__main__":
     print("Generating publication figures")
     print("=" * 50)
     fig2_forest()
-    fig3_interaction()
-    efig1_subgroups()
+    efig1_interaction()
+    fig3_subgroups()
     efig2_ps_overlap()
     print("\nDone. Check figs/ directory.")
