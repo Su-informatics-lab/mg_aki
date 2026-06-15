@@ -19,6 +19,9 @@ for s in ${STEPS[@]}; do
     5)  step 5 "Tables";            Rscript 05_tables.R ;;
     6)  step 6 "Figures";           Rscript 06_figures.R ;;
     7)  step 7 "E-values";          python 07_evalues.py ;;
+    7b) step 7b "Prognostic";       Rscript 07b_prognostic.R ;;
+    7c) step 7c "MICE stability";   Rscript 07c_mice_stability.R ;;
+    7d) step 7d "AC Table 1";       Rscript 07d_ac_table1.R ;;
     *)  echo "Unknown step: $s (valid: 1 1b 2 3 4 5 6 7)"; exit 1 ;;
   esac
 done
