@@ -5,21 +5,20 @@ source .venv/bin/activate
 module purge && module load R/4.4.2-gfbf-2024a
 SECONDS=0
 
-step() { echo -e "\n──── Step $1/8: $2 ────"; }
+step() { echo -e "\n──── Step $1: $2 ────"; }
 
-STEPS=("${@:-1 2 3 4 5 6 7 8}")
+STEPS=("${@:-1 2 3 4 5 6}")
 
 for s in ${STEPS[@]}; do
   case $s in
-    1) step 1 "eICU ETL";      python 01_etl.py ;;
-    2) step 2 "eICU PS/IPTW";  Rscript 02_psm.R ;;
-    3) step 3 "eICU Models";   Rscript 03_models.R ;;
-    4) step 4 "MIMIC ETL";     python 04_mimic_validation.py ;;
-    5) step 5 "MIMIC TTE";     Rscript 05_mimic_tte.R ;;
-    6) step 6 "Meta-analysis"; Rscript 06_meta.R ;;
-    7) step 7 "Tables";        Rscript 07_tables.R ;;
-    8) step 8 "Figures";       Rscript 08_figures.R ;;
-    *) echo "Unknown step: $s"; exit 1 ;;
+    1)  step 1 "eICU ETL";          python 01_etl.py ;;
+    1b) step 1b "MIMIC ETL";        python 01b_mimic_etl.py ;;
+    2)  step 2 "Primary Analysis";   Rscript 02_analysis.R ;;
+    3)  step 3 "Augment Cohorts";    python 03_augment.py ;;
+    4)  step 4 "Subgroup/Safety";    Rscript 04_subgroups.R ;;
+    5)  step 5 "Tables";            Rscript 05_tables.R ;;
+    6)  step 6 "Figures";           Rscript 06_figures.R ;;
+    *)  echo "Unknown step: $s (valid: 1 1b 2 3 4 5 6)"; exit 1 ;;
   esac
 done
 
