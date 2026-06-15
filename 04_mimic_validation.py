@@ -623,6 +623,7 @@ def main():
     for lab_ids, col, lo, hi in [
         (LAB_K, "first_k_value", 1.5, 8.0),
         (LAB_CA, "first_ca_value", 4.0, 15.0),
+        (LAB_LAC, "first_lactate", 0.1, 30.0),
     ]:
         elec = labs[
             labs.itemid.isin(lab_ids)
@@ -862,6 +863,7 @@ def main():
         "first_hr",
         "has_vasopressor",
         "first_mg_value",
+        "first_lactate",
     ]
     avail = sum(1 for v in ps_vars if v in cohort.columns)
     print(f"  PS covariates matched: {avail}/{len(ps_vars)}")
