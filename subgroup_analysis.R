@@ -270,6 +270,15 @@ subgroups <- list(
   list(tbl="5c", var="first_mg_value", cuts=list(
     list(label="Mg <2.0 (hypo)", expr=quote(first_mg_value < 2.0)),
     list(label="Mg >=2.0", expr=quote(first_mg_value >= 2.0))
+  )),
+  # eTable 5d: Individual MDS components (Yan request)
+  list(tbl="5d", var="depletion_risk", cuts=list(
+    list(label="PPI user", expr=quote(ppi == 1)),
+    list(label="No PPI", expr=quote(ppi == 0)),
+    list(label="Loop diuretic", expr=quote(loop_diuretics == 1)),
+    list(label="No loop diuretic", expr=quote(loop_diuretics == 0)),
+    list(label="eGFR <60", expr=quote(egfr < 60)),
+    list(label="eGFR >=60", expr=quote(egfr >= 60))
   ))
 )
 
@@ -387,7 +396,7 @@ cat(sprintf("\n%s\nSUMMARY\n%s\n", strrep("=",60), strrep("=",60)))
 cat("  All subgroup analyses use full-sample OW weights (downstream).\n")
 cat("  Balance checked within each subgroup (max_smd column).\n\n")
 cat("  Files:\n")
-cat("    etables_4_5_subgroups.csv — surgery, MDS, age, baseline Mg\n")
+cat("    etables_4_5_subgroups.csv — surgery, MDS, age, baseline Mg, PPI/diuretic/eGFR\n")
 cat("    etable6_safety.csv — ICU LOS, vent, HR, max Mg, IABP/ECMO\n\n")
 cat("  Key predictions:\n")
 cat("    Mg <2.0 effect > Mg >=2.0 → 'repletion benefits the depleted'\n")
