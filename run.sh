@@ -18,7 +18,8 @@ for s in ${STEPS[@]}; do
     4)  step 4 "Subgroup/Safety";    Rscript 04_subgroups.R ;;
     5)  step 5 "Tables";            Rscript 05_tables.R ;;
     6)  step 6 "Figures";           Rscript 06_figures.R ;;
-    *)  echo "Unknown step: $s (valid: 1 1b 2 3 4 5 6)"; exit 1 ;;
+    7)  step 7 "E-values";          python 07_evalues.py ;;
+    *)  echo "Unknown step: $s (valid: 1 1b 2 3 4 5 6 7)"; exit 1 ;;
   esac
 done
 
