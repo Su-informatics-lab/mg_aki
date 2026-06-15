@@ -63,17 +63,30 @@ cat(sprintf("  Dose (mg MgSO4): median=%.0f, IQR=[%.0f, %.0f], range=[%.0f, %.0f
     quantile(trt$mg_total_dose, 0.75), min(trt$mg_total_dose), max(trt$mg_total_dose)))
 cat(sprintf("  AKI rate in supplemented: %.1f%%\n", 100*mean(trt$aki_kdigo1)))
 
-# ── Dose tertiles ────────────────────────────────────────────────────
-trt$dose_tertile <- cut(trt$mg_total_dose,
-  breaks=quantile(trt$mg_total_dose, c(0, 1/3, 2/3, 1), na.rm=TRUE),
-  labels=c("T1 (low)", "T2 (mid)", "T3 (high)"),
-  include.lowest=TRUE)
+# ── Dose categories (robust to concentrated distributions) ────────
+# Many MIMIC patients get a standard dose; tertiles may fail
+dose_breaks <- unique(quantile(trt$mg_total_dose, c(0, 1/3, 2/3, 1), na.rm=TRUE))
+if (length(dose_breaks) >= 4) {
+  trt$dose_cat <- cut(trt$mg_total_dose, breaks=dose_breaks,
+    labels=c("T1 (low)","T2 (mid)","T3 (high)"), include.lowest=TRUE)
+  dose_labels <- c("T1 (low)","T2 (mid)","T3 (high)")
+} else {
+  # Fallback: below / at / above modal dose
+  modal_dose <- as.numeric(names(sort(table(trt$mg_total_dose), decreasing=TRUE))[1])
+  cat(sprintf("  Modal dose: %.0f (tertiles not unique → using below/at/above modal)\n", modal_dose))
+  trt$dose_cat <- ifelse(trt$mg_total_dose < modal_dose, "Below standard",
+                  ifelse(trt$mg_total_dose == modal_dose, "Standard",
+                         "Above standard"))
+  trt$dose_cat <- factor(trt$dose_cat, levels=c("Below standard","Standard","Above standard"))
+  dose_labels <- levels(trt$dose_cat)
+}
 
-cat(sprintf("\n%s\n1. DOSE TERTILE ANALYSIS\n%s\n", strrep("-",65), strrep("-",65)))
-for (tert in c("T1 (low)", "T2 (mid)", "T3 (high)")) {
-  sub <- trt[trt$dose_tertile == tert, ]
-  cat(sprintf("  %-12s N=%3d  dose: %.0f–%.0f mg  AKI=%.1f%%  Mg: %.2f±%.2f\n",
-      tert, nrow(sub),
+cat(sprintf("\n%s\n1. DOSE CATEGORY ANALYSIS\n%s\n", strrep("-",65), strrep("-",65)))
+for (lbl in dose_labels) {
+  sub <- trt[trt$dose_cat == lbl, ]
+  if (nrow(sub) == 0) next
+  cat(sprintf("  %-18s N=%3d  dose: %.0f–%.0f  AKI=%.1f%%  Mg: %.2f±%.2f\n",
+      lbl, nrow(sub),
       min(sub$mg_total_dose), max(sub$mg_total_dose),
       100*mean(sub$aki_kdigo1),
       mean(sub$first_mg_value), sd(sub$first_mg_value)))
@@ -117,18 +130,21 @@ tryCatch({
                     "No significant dose-response"))))
 }, error=function(e) cat(sprintf("  FAILED: %s\n", e$message)))
 
-# Tertile contrasts (T3 vs T1, adjusted)
-cat(sprintf("\n  Tertile contrasts:\n"))
-trt_cc$dose_t3 <- as.integer(trt_cc$dose_tertile == "T3 (high)")
-trt_t1t3 <- trt_cc[trt_cc$dose_tertile %in% c("T1 (low)", "T3 (high)"),]
-if (nrow(trt_t1t3) > 30) {
-  fml_t <- as.formula(paste("aki_kdigo1 ~ dose_t3 +", paste(adj_vars, collapse="+")))
+# Extreme contrast (highest vs lowest category, adjusted)
+cat(sprintf("\n  Extreme dose contrast:\n"))
+hi_label <- dose_labels[length(dose_labels)]
+lo_label <- dose_labels[1]
+trt_cc$dose_hi <- as.integer(trt_cc$dose_cat == hi_label)
+trt_hilo <- trt_cc[trt_cc$dose_cat %in% c(lo_label, hi_label),]
+if (nrow(trt_hilo) > 30 && sum(trt_hilo$dose_hi) >= 5 && sum(trt_hilo$dose_hi==0) >= 5) {
+  fml_t <- as.formula(paste("aki_kdigo1 ~ dose_hi +", paste(adj_vars, collapse="+")))
   tryCatch({
-    fit_t <- glm(fml_t, data=trt_t1t3, family=binomial())
+    fit_t <- glm(fml_t, data=trt_hilo, family=binomial())
     ct_t <- coeftest(fit_t, vcov.=vcovHC(fit_t, type="HC1"))
     or_t <- exp(ct_t[2,1]); lo_t <- exp(ct_t[2,1]-1.96*ct_t[2,2])
     hi_t <- exp(ct_t[2,1]+1.96*ct_t[2,2]); p_t <- 2*pnorm(-abs(ct_t[2,1]/ct_t[2,2]))
-    cat(sprintf("  T3 (high) vs T1 (low): OR %.3f (%.3f–%.3f) P=%.4f\n", or_t, lo_t, hi_t, p_t))
+    cat(sprintf("  %s vs %s: OR %.3f (%.3f–%.3f) P=%.4f\n",
+        hi_label, lo_label, or_t, lo_t, hi_t, p_t))
   }, error=function(e) cat(sprintf("  FAILED: %s\n", e$message)))
 }
 
@@ -140,11 +156,11 @@ if ("followup_mg_value" %in% names(trt)) {
   trt_fu <- trt[!is.na(trt$followup_mg_value),]
   cat(sprintf("  Patients with follow-up Mg (6-48h): %d\n", nrow(trt_fu)))
 
-  for (tert in c("T1 (low)", "T2 (mid)", "T3 (high)")) {
-    sub <- trt_fu[trt_fu$dose_tertile == tert,]
+  for (lbl in dose_labels) {
+    sub <- trt_fu[trt_fu$dose_cat == lbl,]
     if (nrow(sub) > 5) {
-      cat(sprintf("  %-12s N=%3d  follow-up Mg: %.2f±%.2f  delta_Mg: %+.2f\n",
-          tert, nrow(sub),
+      cat(sprintf("  %-18s N=%3d  follow-up Mg: %.2f±%.2f  delta_Mg: %+.2f\n",
+          lbl, nrow(sub),
           mean(sub$followup_mg_value), sd(sub$followup_mg_value),
           mean(sub$delta_mg, na.rm=TRUE)))
     }
