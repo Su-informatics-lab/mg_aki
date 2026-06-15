@@ -61,8 +61,9 @@ pairs <- list(
   list("Stage >=3",              "ALL_aki_Stage >=3",         "ALL_aki_Stage >=3"),
   list("AKI 1.5x <=48h",        "ALL_tw_AKI 1.5x <=48h",    "ALL_tw_AKI 1.5x <=48h"),
   list("AKI 1.5x <=72h",        "ALL_tw_AKI 1.5x <=72h",    "ALL_tw_AKI 1.5x <=72h"),
-  list("Mortality (all+all)",    "ALL_sec_Hospital mortality", "ALL_sec_Hospital mortality"),
-  list("Mortality (hypo+all)",   "HYPO_sec_Hospital mortality","ALL_sec_Hospital mortality"),
+  list("Mortality (exploratory)","ALL_sec_Hospital mortality", "ALL_sec_Hospital mortality"),
+  list("AKI KDIGO >=1 (AC)",     "AC_aki_KDIGO >=1",          "AC_aki_KDIGO >=1"),
+  list("Fracture NC (AC)",       "AC_nc_Fracture",            "AC_nc_Fracture"),
   list("Fracture (neg ctrl)",    "ALL_nc_Fracture",           "ALL_nc_Fracture"),
   list("Encephalopathy",         "ALL_neuro_Encephalopathy",  "ALL_neuro_Encephalopathy")
 )

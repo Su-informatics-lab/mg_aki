@@ -53,7 +53,12 @@ sections <- list(
   list(section = "Mortality",
        outcomes = list(
          list("Hospital mortality (all+all)", "ALL_sec_Hospital mortality", "Mortality (all+all)"),
-         list("Hospital mortality (hypo+all)", "HYPO_sec_Hospital mortality", "Mortality (hypo+all)")
+         list("Hospital mortality (exploratory)", "ALL_sec_Hospital mortality", "Mortality (exploratory)")
+       )),
+  list(section = "Active Comparator",
+       outcomes = list(
+         list("AKI KDIGO >=1 (Mg+K⁺ vs K⁺-only)", "AC_aki_KDIGO >=1", "AKI KDIGO >=1 (AC)"),
+         list("Fracture NC (Mg+K⁺ vs K⁺-only)", "AC_nc_Fracture", "Fracture NC (AC)")
        )),
   list(section = "Control Outcomes",
        outcomes = list(
@@ -219,9 +224,9 @@ consort_text <- tribble(
   "All-patient TTE (complete covariates)", "7,924", "3,746",
   "  Supplemented", "1,104 (13.9%)", "647 (17.3%)",
   "  Not supplemented", "6,820", "3,099",
-  "HypoMg TTE (Mg <2.0, complete)", "3,068", "1,780",
-  "  Supplemented", "759 (24.7%)", "509 (28.6%)",
-  "  Not supplemented", "2,309", "1,271"
+  "Active comparator (K⁺-repleted)", "1,986", "844",
+  "  Mg+K⁺", "557", "280",
+  "  K⁺-only", "1,429", "564"
 )
 
 out_consort <- file.path(RESULTS, "08_fig1_consort.csv")

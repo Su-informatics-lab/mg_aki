@@ -28,7 +28,7 @@ RESULTS <- path.expand("~/mg_aki/results")
 # ─── Load ───────────────────────────────────────────────────────────
 cat("Loading data...\n")
 load(file.path(RESULTS, "02b_analysis_a_prepared.RData"))
-dat_hypo    <- tryCatch(read_csv(file.path(RESULTS, "02d_hypo_iptw.csv"),
+dat_ac      <- tryCatch(read_csv(file.path(RESULTS, "02g_ac_iptw.csv"),
                                  show_col_types = FALSE), error = function(e) NULL)
 dat_all     <- tryCatch(read_csv(file.path(RESULTS, "02e_all_iptw.csv"),
                                  show_col_types = FALSE), error = function(e) NULL)
@@ -41,7 +41,7 @@ add_aki <- function(d) {
   d
 }
 dat_a <- add_aki(dat_a)
-if (!is.null(dat_hypo)) dat_hypo <- add_aki(dat_hypo)
+if (!is.null(dat_ac))  dat_ac  <- add_aki(dat_ac)
 if (!is.null(dat_all))  dat_all  <- add_aki(dat_all)
 if (!is.null(dat_all_m)) dat_all_m <- add_aki(dat_all_m)
 
@@ -336,7 +336,44 @@ run_suite <- function(dat, dat_m, title, pfx) {
 }
 
 run_suite(dat_all, dat_all_m, "TTE ALL PATIENTS", "ALL")
-run_suite(dat_hypo, NULL, "TTE HYPOMAGNESEMIA (Mg < 2.0)", "HYPO")
+# ── ACTIVE COMPARATOR: Mg+K⁺ vs K⁺-only ──────────────────────────
+run_suite(dat_ac, NULL, "ACTIVE COMPARATOR (Mg+K⁺ vs K⁺-only)", "AC")
+
+# ── LANDMARK 6h SENSITIVITY ──────────────────────────────────────
+cat("\n", strrep("=", 70), "\n")
+cat("LANDMARK 6h: Restrict to patients surviving 6h\n")
+cat(strrep("=", 70), "\n")
+if (!is.null(dat_all) && "death_offset_min" %in% names(dat_all)) {
+  dat_lm6 <- dat_all %>% filter(is.na(death_offset_min) | death_offset_min > 360)
+  n_excl <- nrow(dat_all) - nrow(dat_lm6)
+  cat(sprintf("  Excluded %d patients who died within 6h (%.2f%%)\n",
+              n_excl, 100*n_excl/nrow(dat_all)))
+  run_suite(dat_lm6, NULL, "LANDMARK 6h (all patients)", "LM6")
+}
+
+# ── OVERLAP WEIGHTING SENSITIVITY ────────────────────────────────
+cat("\n", strrep("=", 70), "\n")
+cat("OVERLAP WEIGHTING (ATO estimand)\n")
+cat(strrep("=", 70), "\n")
+if (!is.null(dat_all) && "ow" %in% names(dat_all)) {
+  # Re-run key outcomes with OW instead of IPTW
+  for (ov in c("aki_kdigo1", "hosp_mortality", "nc_fracture")) {
+    if (!ov %in% names(dat_all)) next
+    nev <- sum(dat_all[[ov]], na.rm=TRUE)
+    if (nev < 5) next
+    tryCatch({
+      des <- svydesign(ids=~1, weights=~ow, data=dat_all)
+      m <- svyglm(as.formula(paste(ov, "~ trt")), design=des, family=quasibinomial())
+      s <- tidy(m, conf.int=TRUE, exponentiate=TRUE) %>% filter(term=="trt")
+      if (nrow(s) > 0) {
+        cat(sprintf("  OW %-20s OR=%.3f (%.3f-%.3f) P=%.4f\n",
+                    ov, s$estimate, s$conf.low, s$conf.high, s$p.value))
+        s$n_events <- nev; s$label <- paste0("OW_", ov)
+        results_list[[paste0("OW_", ov)]] <<- s
+      }
+    }, error = function(e) NULL)
+  }
+}
 
 # ── Save ─────────────────────────────────────────────────────────────
 cat("\n", strrep("=", 70), "\n")

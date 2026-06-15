@@ -233,60 +233,76 @@ if ("mg_total_dose" %in% names(dat_clean)) {
 }
 
 # =====================================================================
+# =====================================================================
+# ACTIVE COMPARATOR: Mg+K⁺ vs K⁺-only
+# =====================================================================
 cat("\n", strrep("=", 70), "\n")
-cat("TTE HYPOMAGNESEMIA (Mg < 2.0)\n")
+cat("ACTIVE COMPARATOR: Mg+K⁺ vs K⁺-only\n")
 cat(strrep("=", 70), "\n")
 
-dat_hypo <- dat_clean %>% filter(first_mg_value < 2.0)
-cat(sprintf("TTE hypoMg: N=%d (treated: %d)\n", nrow(dat_hypo), sum(dat_hypo$trt)))
+if ("ac_group" %in% names(dat_clean)) {
+  dat_ac <- dat_clean %>% filter(ac_group %in% c("mg_k", "k_only"))
+  cat(sprintf("  Mg+K⁺: %d, K⁺-only: %d\n", sum(dat_ac$trt), sum(dat_ac$trt==0)))
 
-if (sum(dat_hypo$trt) >= 30) {
-  tryCatch({
-    w_h <- weightit(ps_formula, data = dat_hypo, method = "ps", estimand = "ATE")
-    dat_hypo$iptw_raw <- w_h$weights
-    q01h <- quantile(dat_hypo$iptw_raw, 0.01); q99h <- quantile(dat_hypo$iptw_raw, 0.99)
-    dat_hypo$iptw <- pmax(pmin(dat_hypo$iptw_raw, q99h), q01h)
-
-    aki_h <- lapply(names(aki_oc), function(o) iptw_or(dat_hypo, o, aki_oc[[o]]))
-    ptbl(aki_h, "HypoMg AKI")
-    for (r in aki_h) store(paste0("HYPO_aki_", r$label), r)
-
-    tw_h <- lapply(names(tw_oc), function(o) iptw_or(dat_hypo, o, tw_oc[[o]]))
-    ptbl(tw_h, "HypoMg Time-windowed AKI")
-    for (r in tw_h) store(paste0("HYPO_tw_", r$label), r)
-
-    r_mort_h <- iptw_or(dat_hypo, "hosp_mortality", "Hospital mortality")
-    store("HYPO_sec_Hospital mortality", r_mort_h)
-    ptbl(list(r_mort_h), "HypoMg Mortality")
-
-    nc_h <- list(iptw_or(dat_hypo, "nc_fracture", "Fracture"),
-                 iptw_or(dat_hypo, "nc_uti", "UTI"))
-    ptbl(nc_h, "HypoMg Negative controls")
-    for (r in nc_h) store(paste0("HYPO_nc_", r$label), r)
-
+  if (sum(dat_ac$trt) >= 30) {
     tryCatch({
-      m_h <- matchit(ps_formula, data = dat_hypo, method = "nearest",
-                     distance = "glm", caliper = 0.2, ratio = 1)
-      dat_mh <- match.data(m_h)
-      cat(sprintf("\n  HypoMg matched: %d pairs\n", sum(dat_mh$trt)))
-      for (ov in c("aki_kdigo1", "aki_primary", "aki_stage2", "hosp_mortality")) {
-        if (ov %in% names(dat_mh)) tryCatch({
-          m <- glm(as.formula(paste(ov, "~ trt")), data = dat_mh,
-                   family = binomial(), weights = weights)
-          s <- tidy(m, conf.int=TRUE, exponentiate=TRUE) %>% filter(term=="trt")
-          lbl <- if (ov=="hosp_mortality") "Hospital mortality" else aki_oc[[ov]]
-          if (nrow(s)>0) {
-            cat(sprintf("    %s: OR %.2f (%.2f-%.2f), p=%.4f\n",
-                        lbl, s$estimate, s$conf.low, s$conf.high, s$p.value))
-            s$n_events <- sum(dat_mh[[ov]], na.rm=TRUE)
-            s$label <- lbl; s$n_total <- nrow(dat_mh)
-            results_list[[paste0("HYPO_matched_", lbl)]] <- s
-          }
-        }, error = function(e) NULL)
-      }
-    }, error = function(e) cat(sprintf("  HypoMg matching failed: %s\n", e$message)))
+      w_ac <- weightit(ps_formula, data=dat_ac, method="ps", estimand="ATE")
+      dat_ac$iptw_raw <- w_ac$weights
+      q01 <- quantile(dat_ac$iptw_raw, 0.01); q99 <- quantile(dat_ac$iptw_raw, 0.99)
+      dat_ac$iptw <- pmax(pmin(dat_ac$iptw_raw, q99), q01)
+      dat_ac$ps_ac <- predict(glm(ps_formula, data=dat_ac, family=binomial()), type="response")
+      dat_ac$ow <- ifelse(dat_ac$trt==1, 1-dat_ac$ps_ac, dat_ac$ps_ac)
+      cat("\n  Balance (AC IPTW):\n"); print(bal.tab(w_ac, stats="m", thresholds=c(m=0.1)))
 
-  }, error = function(e) cat(sprintf("TTE hypoMg failed: %s\n", e$message)))
+      aki_ac <- lapply(names(aki_oc), function(o) iptw_or(dat_ac, o, aki_oc[[o]]))
+      ptbl(aki_ac, "AC: AKI")
+      for (r in aki_ac) store(paste0("AC_aki_", r$label), r)
+
+      r_mort_ac <- iptw_or(dat_ac, "hosp_mortality", "Hospital mortality")
+      store("AC_sec_Hospital mortality", r_mort_ac)
+      ptbl(list(r_mort_ac), "AC: Mortality")
+
+      nc_ac <- list(iptw_or(dat_ac, "nc_fracture", "Fracture"),
+                    iptw_or(dat_ac, "nc_uti", "UTI"))
+      ptbl(nc_ac, "AC: Negative controls")
+      for (r in nc_ac) store(paste0("AC_nc_", r$label), r)
+    }, error = function(e) cat(sprintf("  AC failed: %s\n", e$message)))
+  }
+}
+
+# ── LANDMARK 6h SENSITIVITY ──────────────────────────────────────
+cat("\n", strrep("=", 70), "\n")
+cat("LANDMARK 6h\n")
+cat(strrep("=", 70), "\n")
+
+if ("death_offset_min" %in% names(dat_clean)) {
+  dat_lm6 <- dat_clean %>% filter(is.na(death_offset_min) | death_offset_min > 360)
+  n_excl <- nrow(dat_clean) - nrow(dat_lm6)
+  cat(sprintf("  Excluded %d (%.2f%%) who died within 6h\n",
+              n_excl, 100*n_excl/nrow(dat_clean)))
+  if (nrow(dat_lm6) > 50) {
+    tryCatch({
+      w_lm <- weightit(ps_formula, data=dat_lm6, method="ps", estimand="ATE")
+      dat_lm6$iptw <- pmax(pmin(w_lm$weights, quantile(w_lm$weights,.99)),
+                           quantile(w_lm$weights,.01))
+      r_aki_lm <- iptw_or(dat_lm6, "aki_kdigo1", "KDIGO >=1 (LM6)")
+      r_mort_lm <- iptw_or(dat_lm6, "hosp_mortality", "Mortality (LM6)")
+      ptbl(list(r_aki_lm, r_mort_lm), "Landmark 6h")
+      store("LM6_aki", r_aki_lm); store("LM6_mort", r_mort_lm)
+    }, error = function(e) cat(sprintf("  Landmark failed: %s\n", e$message)))
+  }
+}
+
+# ── OVERLAP WEIGHTING ────────────────────────────────────────────
+cat("\n", strrep("=", 70), "\n")
+cat("OVERLAP WEIGHTING\n")
+cat(strrep("=", 70), "\n")
+if ("ow" %in% names(dat_clean)) {
+  r_aki_ow <- iptw_or(dat_clean, "aki_kdigo1", "KDIGO >=1 (OW)", wt="ow")
+  r_mort_ow <- iptw_or(dat_clean, "hosp_mortality", "Mortality (OW)", wt="ow")
+  r_nc_ow <- iptw_or(dat_clean, "nc_fracture", "Fracture (OW)", wt="ow")
+  ptbl(list(r_aki_ow, r_mort_ow, r_nc_ow), "Overlap weighting")
+  store("OW_aki", r_aki_ow); store("OW_mort", r_mort_ow); store("OW_nc", r_nc_ow)
 }
 
 # ── Surgery-type interaction ────────────────────────────────────────
