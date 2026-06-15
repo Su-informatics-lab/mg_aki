@@ -107,6 +107,20 @@ MG_SUPP_DRUG_PATTERNS = [
 MG_SUPP_GRACE_HOURS = 6  # supplementation within 6h of time zero
 MG_SUPP_GRACE_MIN = MG_SUPP_GRACE_HOURS * 60
 
+# Active comparator: K⁺ supplementation within same window
+K_SUPP_DRUG_PATTERNS = [
+    "potassium chloride",
+    "potassium phosphate",
+    "potassium acetate",
+    "kcl",
+    "k-rider",
+    "k rider",
+    "k+ rider",
+    "potassium",
+]
+K_SUPP_ITEMS_MIMIC = [225166, 225168, 222139, 227521, 227522]  # MIMIC inputevents
+
+
 # =====================================================================
 # COVARIATES
 # =====================================================================

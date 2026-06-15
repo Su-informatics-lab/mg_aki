@@ -631,6 +631,46 @@ def build_covariates(t, cohort):
         f"{cohort.mg_supplementation.sum()}"
     )
 
+    # ── K⁺ supplementation (active comparator) ──────────────────────
+    print("\n  Active comparator: K⁺ supplementation:")
+    k_supp_pids = set()
+    if len(med_elig) > 0:
+        k_meds = med_elig[matches_any(med_elig.drugname, cfg.K_SUPP_DRUG_PATTERNS)]
+        k_early = k_meds[
+            (k_meds.drugstartoffset >= 0)
+            & (k_meds.drugstartoffset <= cfg.MG_SUPP_GRACE_MIN)
+        ]
+        k_supp_pids |= set(k_early.patientunitstayid)
+    # Also check infusion table
+    inf = t["infusionDrug"]
+    if len(inf) > 0 and "drugname" in inf.columns:
+        inf_elig_k = inf[inf.patientunitstayid.isin(pids)]
+        k_inf = inf_elig_k[
+            matches_any(inf_elig_k.drugname, cfg.K_SUPP_DRUG_PATTERNS)
+            & (inf_elig_k.infusionoffset >= 0)
+            & (inf_elig_k.infusionoffset <= cfg.MG_SUPP_GRACE_MIN)
+        ]
+        k_supp_pids |= set(k_inf.patientunitstayid)
+    cohort["k_supp"] = cohort.patientunitstayid.isin(k_supp_pids).astype(int)
+    print(
+        f"    K⁺ supplementation within {cfg.MG_SUPP_GRACE_HOURS}h: {cohort.k_supp.sum()}"
+    )
+
+    # Active comparator groups
+    cohort["ac_group"] = "neither"
+    cohort.loc[(cohort.mg_supplementation == 1) & (cohort.k_supp == 1), "ac_group"] = (
+        "mg_k"
+    )
+    cohort.loc[(cohort.mg_supplementation == 1) & (cohort.k_supp == 0), "ac_group"] = (
+        "mg_only"
+    )
+    cohort.loc[(cohort.mg_supplementation == 0) & (cohort.k_supp == 1), "ac_group"] = (
+        "k_only"
+    )
+    for g in ["mg_k", "mg_only", "k_only", "neither"]:
+        n = (cohort.ac_group == g).sum()
+        print(f"    {g}: {n} ({100*n/len(cohort):.1f}%)")
+
     # ── RRT detection ────────────────────────────────────────────
     tx = t["treatment"]
     rrt_pids = set()
@@ -656,6 +696,15 @@ def build_covariates(t, cohort):
     ).astype(int)
     print(f"  ICU mortality: {cohort.icu_mortality.sum()}")
     print(f"  Hospital mortality: {cohort.hosp_mortality.sum()}")
+
+    # ── Death timing (for landmark analysis) ──────────────────────────
+    cohort["death_offset_min"] = np.where(
+        cohort.hospitaldischargestatus.str.lower() == "expired",
+        cohort.hospitaldischargeoffset,
+        np.nan,
+    )
+    n_death_timing = cohort.death_offset_min.notna().sum()
+    print(f"  Death timing available: {n_death_timing}")
 
     # ── β-blocker detection (effect modifier for POAF) ────────────
     print("\n  Effect modifiers:")
@@ -1111,43 +1160,6 @@ def build_covariates(t, cohort):
 
 
 # =====================================================================
-# STEP 6: Build TTE cohort (Analysis B)
-# =====================================================================
-def build_tte_cohort(cohort):
-    """
-    TTE: Hypomagnesemia subgroup: Among hypomagnesemic patients (Mg < 2.0),
-    does Mg supplementation within 6h reduce AKI?
-
-    ACNU design (Hernán & Robins 2016):
-    - Time zero: first Mg lab showing < 2.0
-    - Treatment: Mg supplementation within grace period
-    - Comparator: No Mg supplementation
-    """
-    print("\n" + "=" * 70)
-    print("STEP 6: TTE Cohort (Analysis B — Mg supplementation)")
-    print("=" * 70)
-
-    tte = cohort[cohort.first_mg_value < cfg.MG_HYPO_THRESHOLD].copy()
-    print(f"  Hypomagnesemia (Mg < {cfg.MG_HYPO_THRESHOLD}): {len(tte):,}")
-    print(f"  Treated (Mg supplementation): {tte.mg_supplementation.sum()}")
-    print(f"  Untreated: {(tte.mg_supplementation == 0).sum()}")
-    if len(tte) > 0:
-        print(
-            f"  AKI in treated: "
-            f"{tte[tte.mg_supplementation==1].aki_primary.sum()} / "
-            f"{tte.mg_supplementation.sum()}"
-        )
-        print(
-            f"  AKI in untreated: "
-            f"{tte[tte.mg_supplementation==0].aki_primary.sum()} / "
-            f"{(tte.mg_supplementation==0).sum()}"
-        )
-
-    save(tte, "01b_hypo_cohort.csv")
-    return tte
-
-
-# =====================================================================
 # MAIN
 # =====================================================================
 def main():
@@ -1220,17 +1232,14 @@ def main():
     # Full cohort (Analysis A + covariates)
     save(cohort, "01_analysis_a_cohort.csv")
 
-    # Step 6: TTE cohort (Analysis B)
-    tte = build_tte_cohort(cohort)
-
     # Column summary
     print("\n  CONSORT flowchart:")
     for _, row in consort_df.iterrows():
         print(f"    {row['step']:35s} {row['n']:>8,}")
 
     print(f"\n  Final cohort: {len(cohort):,} rows, {cohort.shape[1]} cols")
-    print(f"  Analysis A (prognostic): {len(cohort):,}")
-    print(f"  TTE hypoMg (Mg<{cfg.MG_HYPO_THRESHOLD}): {len(tte):,}")
+    n_ac = (cohort.ac_group == "mg_k").sum() + (cohort.ac_group == "k_only").sum()
+    print(f"  Active comparator population (K⁺-repleted): {n_ac:,}")
     print(f"\n  Next: Rscript 02_psm.R && Rscript 03_models.R")
 
 

@@ -48,6 +48,13 @@ VITAL_HEIGHT = [226730]  # height cm
 
 VASO_ITEMS = [221906, 221289, 222315, 221749, 221662, 221653, 221986]
 MG_SUPP_ITEMS = [222011, 227523]  # MgSO4 + bolus (exclude 227524 OB-GYN)
+K_SUPP_ITEMS = [
+    225166,
+    225168,
+    222139,
+    227521,
+    227522,
+]  # KCl, KPhos, KAcetate, KCl bolus
 AMIO_ITEMS = [221347, 228339, 229654, 230034]
 METO_ITEMS = [225974]
 
@@ -711,6 +718,30 @@ def main():
         cohort = cohort.merge(dose, on="stay_id", how="left")
         cohort["mg_total_dose"] = cohort.mg_total_dose.fillna(0)
 
+    # ── 5i-bis. K⁺ supplementation (active comparator) ───────────
+    k_supp = ie_early[ie_early.itemid.isin(K_SUPP_ITEMS)]
+    k_supp_stays = set(k_supp.stay_id)
+    cohort["k_supp"] = cohort.stay_id.isin(k_supp_stays).astype(int)
+    print(
+        f"  K⁺ supplementation: {cohort.k_supp.sum()} "
+        f"({cohort.k_supp.mean()*100:.1f}%)"
+    )
+
+    # Active comparator groups
+    cohort["ac_group"] = "neither"
+    cohort.loc[(cohort.mg_supplementation == 1) & (cohort.k_supp == 1), "ac_group"] = (
+        "mg_k"
+    )
+    cohort.loc[(cohort.mg_supplementation == 1) & (cohort.k_supp == 0), "ac_group"] = (
+        "mg_only"
+    )
+    cohort.loc[(cohort.mg_supplementation == 0) & (cohort.k_supp == 1), "ac_group"] = (
+        "k_only"
+    )
+    for g in ["mg_k", "mg_only", "k_only", "neither"]:
+        n = (cohort.ac_group == g).sum()
+        print(f"    {g}: {n} ({100*n/len(cohort):.1f}%)")
+
     # ── 5j. Mortality ─────────────────────────────────────────────
     adm = admissions[["hadm_id", "hospital_expire_flag"]]
     cohort = cohort.merge(adm, on="hadm_id", how="left")
@@ -718,6 +749,18 @@ def main():
     print(
         f"  Hospital mortality: {cohort.hosp_mortality.sum()} ({cohort.hosp_mortality.mean()*100:.1f}%)"
     )
+
+    # ── 5j-bis. Death timing (for landmark analysis) ──────────────
+    adm_death = admissions[["hadm_id", "deathtime", "dischtime"]].copy()
+    adm_death["deathtime"] = pd.to_datetime(adm_death["deathtime"], errors="coerce")
+    cohort_dt = cohort[["stay_id", "hadm_id", "intime"]].merge(
+        adm_death, on="hadm_id", how="left"
+    )
+    cohort["death_offset_min"] = (
+        (cohort_dt.deathtime - cohort_dt.intime).dt.total_seconds() / 60
+    ).values
+    n_dt = cohort.death_offset_min.notna().sum()
+    print(f"  Death timing available: {n_dt}")
 
     # ── 5k. POAF (dx-only) ───────────────────────────────────────
     preexist_af = matches_icd(dx, hadms, COMORB_ICD["hx_afib"])
