@@ -1,15 +1,19 @@
 #!/usr/bin/env Rscript
 # ============================================================================
-# subgroup_analysis.R — Subgroup + Safety eTables
+# subgroup_analysis.R — Downstream subgroup + safety analyses
 #
-#   eTable 3: AC subgroup baseline characteristics
-#   eTable 4: Treatment effect by surgery type
-#   eTable 5: Treatment effect by MDS score (modified, 0-4)
-#   eTable 6: Safety outcomes (ICU LOS, vent duration, max Mg, HR, IABP/ECMO)
+# Approach: PS + OW estimated ONCE on full sample, then subgroup analyses
+# use existing weights (standard clinical approach, per Yan).
+#
+# Outputs:
+#   eTable 3:  AC subgroup baseline characteristics
+#   eTable 4:  Treatment effect by surgery type
+#   eTable 5:  Treatment effect by MDS score
+#   eTable 5b: Treatment effect by age (≥60 vs <60)
+#   eTable 5c: Treatment effect by baseline Mg
+#   eTable 6:  Safety outcomes
 #
 # Run: Rscript subgroup_analysis.R
-# Input: results/*_enriched.csv (from subgroup_extract.py)
-#        Falls back to results/01_analysis_a_cohort.csv if enriched not found
 # ============================================================================
 
 suppressPackageStartupMessages({
@@ -18,7 +22,7 @@ suppressPackageStartupMessages({
 
 RESULTS <- path.expand("~/mg_aki/results")
 
-# ── Load (prefer enriched, fall back to original) ─────────────────────────
+# ── Load ──────────────────────────────────────────────────────────────────
 load_cohort <- function(enriched, original) {
   f <- if (file.exists(file.path(RESULTS, enriched))) enriched else original
   cat(sprintf("  Loading %s\n", f))
@@ -29,7 +33,7 @@ cat("Loading cohorts...\n")
 dat_e <- load_cohort("01_analysis_a_cohort_enriched.csv", "01_analysis_a_cohort.csv")
 dat_m <- load_cohort("04_mimic_cohort_enriched.csv", "04_mimic_cohort.csv")
 
-# ── Standardize (same mapping as test_r2.R) ───────────────────────────────
+# ── Standardize ───────────────────────────────────────────────────────────
 stdz <- function(d) {
   rmap <- c(mg_supplementation="mg_supp", hosp_mortality="hospital_mortality",
             age_num="age", baseline_egfr="egfr", baseline_cr="baseline_creatinine",
@@ -52,55 +56,62 @@ stdz <- function(d) {
 }
 dat_e <- stdz(dat_e); dat_m <- stdz(dat_m)
 
-# ── Compute MDS score ─────────────────────────────────────────────────────
-compute_mds <- function(d) {
-  d$mds <- 0L
-  if ("loop_diuretics" %in% names(d)) d$mds <- d$mds + d$loop_diuretics
-  if ("ppi" %in% names(d)) d$mds <- d$mds + d$ppi
-  if ("alcohol_history" %in% names(d)) d$mds <- d$mds + d$alcohol_history
-  if ("egfr" %in% names(d)) {
-    d$mds <- d$mds + ifelse(!is.na(d$egfr) & d$egfr < 60, 2L,
-                            ifelse(!is.na(d$egfr) & d$egfr < 90, 1L, 0L))
-  }
-  d$mds_high <- as.integer(d$mds >= 2)
-  cat(sprintf("    MDS: mean=%.1f, >=2: %d/%d (%.1f%%)\n",
-              mean(d$mds), sum(d$mds_high), nrow(d), 100*mean(d$mds_high)))
-  d
-}
-
-cat("\neICU MDS:\n"); dat_e <- compute_mds(dat_e)
-cat("MIMIC MDS:\n"); dat_m <- compute_mds(dat_m)
-
-# ── Weighted GLM helper ───────────────────────────────────────────────────
-wglm <- function(fml, d, w, cluster=NULL) {
-  d$.w <- w
-  fit <- glm(fml, data=d, weights=.w, family=quasibinomial())
-  vc <- if (!is.null(cluster) && length(unique(cluster))>1) vcovCL(fit, cluster=cluster)
-        else vcovHC(fit, type="HC1")
-  ct <- coeftest(fit, vcov.=vc)
-  tr <- 2  # treatment coefficient row
-  list(logOR=ct[tr,1], se=ct[tr,2], or=exp(ct[tr,1]),
-       lo=exp(ct[tr,1]-1.96*ct[tr,2]), hi=exp(ct[tr,1]+1.96*ct[tr,2]),
-       p=2*pnorm(-abs(ct[tr,1]/ct[tr,2])))
-}
-
-wlm <- function(fml, d, w, cluster=NULL) {
-  d$.w <- w
-  fit <- lm(fml, data=d, weights=.w)
-  vc <- if (!is.null(cluster) && length(unique(cluster))>1) vcovCL(fit, cluster=cluster)
-        else vcovHC(fit, type="HC1")
-  ct <- coeftest(fit, vcov.=vc)
-  tr <- 2
-  list(est=ct[tr,1], se=ct[tr,2],
-       lo=ct[tr,1]-1.96*ct[tr,2], hi=ct[tr,1]+1.96*ct[tr,2],
-       p=2*pnorm(-abs(ct[tr,1]/ct[tr,2])))
-}
-
+# ── Helpers ───────────────────────────────────────────────────────────────
 fmt_or <- function(r) sprintf("OR %.2f (%.2f-%.2f) P=%.3f", r$or, r$lo, r$hi, r$p)
 fmt_d  <- function(r) sprintf("diff %.2f (%.2f to %.2f) P=%.3f", r$est, r$lo, r$hi, r$p)
 
-# ── Quick PS + OW for a given subset ──────────────────────────────────────
-run_ow <- function(d, trt_var, outcome, db_name, cluster=NULL) {
+smd_w <- function(x, trt, w) {
+  m1 <- weighted.mean(x[trt==1], w[trt==1], na.rm=TRUE)
+  m0 <- weighted.mean(x[trt==0], w[trt==0], na.rm=TRUE)
+  sp <- sqrt((var(x[trt==1],na.rm=TRUE) + var(x[trt==0],na.rm=TRUE))/2)
+  if (sp < 1e-10) return(0)
+  abs(m1 - m0) / sp
+}
+
+wglm_sub <- function(outcome, trt_var, d, w, cluster=NULL) {
+  if (!outcome %in% names(d)) return(NULL)
+  d <- d[!is.na(d[[outcome]]),]
+  if (sum(d[[outcome]],na.rm=TRUE) < 5) return(NULL)
+  d$.w <- w[!is.na(d[[outcome]])]  # align weights
+  # Safer: re-index
+  d$.w <- d[[paste0(trt_var, "_ow")]]
+  if (is.null(d$.w) || all(is.na(d$.w))) return(NULL)
+  tryCatch({
+    fit <- glm(as.formula(paste(outcome, "~", trt_var)), data=d, weights=.w,
+               family=quasibinomial())
+    vc <- if (!is.null(cluster) && length(unique(cluster[!is.na(d[[outcome]])])) > 1)
+      vcovCL(fit, cluster=cluster[!is.na(d[[outcome]])]) else vcovHC(fit, type="HC1")
+    ct <- coeftest(fit, vcov.=vc)
+    tr <- 2
+    list(or=exp(ct[tr,1]), lo=exp(ct[tr,1]-1.96*ct[tr,2]),
+         hi=exp(ct[tr,1]+1.96*ct[tr,2]), p=2*pnorm(-abs(ct[tr,1]/ct[tr,2])))
+  }, error=function(e) NULL)
+}
+
+wlm_sub <- function(outcome, trt_var, d, cluster=NULL) {
+  if (!outcome %in% names(d)) return(NULL)
+  d <- d[!is.na(d[[outcome]]),]
+  d$.w <- d[[paste0(trt_var, "_ow")]]
+  if (is.null(d$.w)) return(NULL)
+  tryCatch({
+    fit <- lm(as.formula(paste(outcome, "~", trt_var)), data=d, weights=.w)
+    vc <- if (!is.null(cluster) && length(unique(cluster[!is.na(d[[outcome]])])) > 1)
+      vcovCL(fit, cluster=cluster[!is.na(d[[outcome]])]) else vcovHC(fit, type="HC1")
+    ct <- coeftest(fit, vcov.=vc)
+    tr <- 2
+    list(est=ct[tr,1], lo=ct[tr,1]-1.96*ct[tr,2], hi=ct[tr,1]+1.96*ct[tr,2],
+         p=2*pnorm(-abs(ct[tr,1]/ct[tr,2])))
+  }, error=function(e) NULL)
+}
+
+# ============================================================================
+# STEP 1: Estimate PS + OW ONCE on full sample (per database)
+# ============================================================================
+cat("\n", strrep("=",60), "\n")
+cat("STEP 1: Full-sample PS + OW estimation\n")
+cat(strrep("=",60), "\n")
+
+fit_full_ps <- function(d, db_name) {
   ps_vars <- intersect(c("age","is_female","bmi",
     "heart_failure","hypertension","diabetes","ckd","copd","pvd","stroke","liver_disease",
     "baseline_creatinine","egfr","loop_diuretics","nsaids","acei_arb","ppi",
@@ -113,23 +124,106 @@ run_ow <- function(d, trt_var, outcome, db_name, cluster=NULL) {
     d$s_combined <- as.integer(d$surgery_type=="combined")
     ps_vars <- c(ps_vars, "s_cabg","s_valve","s_combined")
   }
-  # Median-impute remaining NAs for quick subgroup analysis
-  for (v in ps_vars) if (v %in% names(d) && any(is.na(d[[v]])))
+  # Median-impute for PS estimation
+  for (v in ps_vars) if (any(is.na(d[[v]])))
     d[[v]][is.na(d[[v]])] <- median(d[[v]], na.rm=TRUE)
 
-  fml <- as.formula(paste(trt_var, "~", paste(ps_vars, collapse="+")))
-  d <- d[complete.cases(d[,c(ps_vars, trt_var, outcome)]),]
-  if (sum(d[[trt_var]]) < 10 || sum(d[[trt_var]]==0) < 10) return(NULL)
+  # All-patient PS
+  fml <- as.formula(paste("mg_supp ~", paste(ps_vars, collapse="+")))
+  d <- d[complete.cases(d[,ps_vars]),]
+  ps_fit <- glm(fml, data=d, family=binomial())
+  d$ps_all <- pmax(pmin(fitted(ps_fit), 0.99), 0.01)
+  d$mg_supp_ow <- ifelse(d$mg_supp==1, 1-d$ps_all, d$ps_all)
+
+  smds <- sapply(ps_vars, function(v) if(is.numeric(d[[v]])) smd_w(d[[v]], d$mg_supp, d$mg_supp_ow) else NA)
+  cat(sprintf("  %s all-patient: N=%d, max SMD=%.4f\n", db_name, nrow(d), max(smds,na.rm=TRUE)))
+
+  # AC PS (within K+-repleted)
+  if ("ac_group" %in% names(d)) {
+    d$ac_trt <- NA_integer_
+    d$ac_trt[d$ac_group == "mg_k"] <- 1L
+    d$ac_trt[d$ac_group == "k_only"] <- 0L
+    d_ac <- d[!is.na(d$ac_trt),]
+    ac_fml <- as.formula(paste("ac_trt ~", paste(ps_vars, collapse="+")))
+    tryCatch({
+      ac_fit <- glm(ac_fml, data=d_ac, family=binomial())
+      d_ac$ps_ac <- pmax(pmin(fitted(ac_fit), 0.99), 0.01)
+      d_ac$ac_trt_ow <- ifelse(d_ac$ac_trt==1, 1-d_ac$ps_ac, d_ac$ps_ac)
+      # Write AC weights back
+      d$ac_trt_ow <- NA_real_
+      d$ac_trt_ow[match(rownames(d_ac), rownames(d))] <- d_ac$ac_trt_ow
+      d$ps_ac <- NA_real_
+      d$ps_ac[match(rownames(d_ac), rownames(d))] <- d_ac$ps_ac
+      ac_smds <- sapply(ps_vars, function(v) if(is.numeric(d_ac[[v]])) smd_w(d_ac[[v]], d_ac$ac_trt, d_ac$ac_trt_ow) else NA)
+      cat(sprintf("  %s AC: N=%d (trt=%d), max SMD=%.4f, Mg SMD=%.4f\n",
+                  db_name, nrow(d_ac), sum(d_ac$ac_trt), max(ac_smds,na.rm=TRUE),
+                  ac_smds["first_mg_value"]))
+    }, error=function(e) cat(sprintf("  AC PS failed: %s\n", e$message)))
+  }
+
+  # MDS score
+  d$mds <- 0L
+  if ("loop_diuretics" %in% names(d)) d$mds <- d$mds + d$loop_diuretics
+  if ("ppi" %in% names(d)) d$mds <- d$mds + d$ppi
+  if ("alcohol_history" %in% names(d)) d$mds <- d$mds + d$alcohol_history
+  if ("egfr" %in% names(d)) d$mds <- d$mds + ifelse(!is.na(d$egfr) & d$egfr<60, 2L,
+                                                      ifelse(!is.na(d$egfr) & d$egfr<90, 1L, 0L))
+  d$mds_high <- as.integer(d$mds >= 2)
+  cat(sprintf("  %s MDS >=2: %d/%d (%.1f%%)\n", db_name, sum(d$mds_high), nrow(d), 100*mean(d$mds_high)))
+
+  # ICU LOS
+  if (!"icu_los_h" %in% names(d)) {
+    if ("unitdischargeoffset" %in% names(d)) d$icu_los_h <- d$unitdischargeoffset / 60
+    else if ("outtime" %in% names(d) && "intime" %in% names(d)) {
+      d$icu_los_h <- as.numeric(difftime(as.POSIXct(d$outtime), as.POSIXct(d$intime), units="hours"))
+    }
+  }
+
+  d
+}
+
+dat_e <- fit_full_ps(dat_e, "eICU")
+dat_m <- fit_full_ps(dat_m, "MIMIC")
+
+# ============================================================================
+# HELPER: Run downstream subgroup (uses existing weights, checks balance)
+# ============================================================================
+run_subgroup <- function(d, subset_idx, trt_var, outcome, db_name, cluster=NULL) {
+  d_sub <- d[subset_idx,]
+  n_total <- nrow(d_sub)
+  n_trt <- sum(d_sub[[trt_var]], na.rm=TRUE)
+  if (n_trt < 10 || (n_total - n_trt) < 10) return(NULL)
+
+  wt_col <- paste0(trt_var, "_ow")
+  if (!wt_col %in% names(d_sub) || all(is.na(d_sub[[wt_col]]))) return(NULL)
+
+  # Check balance within subgroup
+  d_bal <- d_sub[!is.na(d_sub[[wt_col]]),]
+  check_vars <- intersect(c("age","is_female","bmi","baseline_creatinine","egfr",
+                             "first_mg_value","first_potassium"), names(d_bal))
+  smds <- sapply(check_vars, function(v)
+    if (is.numeric(d_bal[[v]])) smd_w(d_bal[[v]], d_bal[[trt_var]], d_bal[[wt_col]]) else NA)
+  max_smd <- max(smds, na.rm=TRUE)
+
+  # Outcome model
+  d_sub$.w <- d_sub[[wt_col]]
+  d_sub <- d_sub[!is.na(d_sub$.w) & !is.na(d_sub[[outcome]]),]
+  if (sum(d_sub[[outcome]]) < 5) return(NULL)
+
+  cl <- if (!is.null(cluster)) cluster[subset_idx][!is.na(d[subset_idx, wt_col]) & !is.na(d[subset_idx, outcome])] else NULL
+
   tryCatch({
-    ps_fit <- glm(fml, data=d, family=binomial())
-    d$ps <- pmax(pmin(fitted(ps_fit), 0.99), 0.01)
-    d$ow <- ifelse(d[[trt_var]]==1, 1-d$ps, d$ps)
-    wglm(as.formula(paste(outcome, "~", trt_var)), d, d$ow, cluster)
+    fit <- glm(as.formula(paste(outcome, "~", trt_var)), data=d_sub, weights=.w,
+               family=quasibinomial())
+    vc <- if (!is.null(cl) && length(unique(cl))>1) vcovCL(fit, cluster=cl) else vcovHC(fit, type="HC1")
+    ct <- coeftest(fit, vcov.=vc)
+    list(or=exp(ct[2,1]), lo=exp(ct[2,1]-1.96*ct[2,2]), hi=exp(ct[2,1]+1.96*ct[2,2]),
+         p=2*pnorm(-abs(ct[2,1]/ct[2,2])), n=n_total, n_trt=n_trt, max_smd=max_smd)
   }, error=function(e) NULL)
 }
 
 # ============================================================================
-# eTABLE 3: AC Subgroup Baseline Characteristics
+# eTABLE 3: AC Subgroup Baseline
 # ============================================================================
 cat("\n", strrep("=",60), "\n")
 cat("eTABLE 3: AC Subgroup Baseline\n")
@@ -137,276 +231,145 @@ cat(strrep("=",60), "\n")
 
 for (db in list(list(d=dat_e, nm="eICU"), list(d=dat_m, nm="MIMIC"))) {
   d <- db$d
-  if (!"ac_group" %in% names(d)) next
-  d_ac <- d[d$ac_group %in% c("mg_k","k_only"),]
-  d_ac$trt_label <- ifelse(d_ac$mg_supp==1, "Mg+K", "K-only")
+  if (!"ac_trt" %in% names(d)) next
+  d_ac <- d[!is.na(d$ac_trt),]
+  d_ac$trt_label <- ifelse(d_ac$ac_trt==1, "Mg+K", "K-only")
   vars <- intersect(c("age","is_female","bmi","surgery_type",
     "heart_failure","hypertension","diabetes","ckd","baseline_creatinine","egfr",
-    "loop_diuretics","ppi","first_mg_value","aki_kdigo1","hospital_mortality"), names(d_ac))
-  cat(sprintf("\n  %s AC subgroup (N=%d):\n", db$nm, nrow(d_ac)))
+    "loop_diuretics","ppi","first_mg_value","mds","aki_kdigo1","hospital_mortality"), names(d_ac))
+  cat(sprintf("\n  %s AC (N=%d):\n", db$nm, nrow(d_ac)))
   tryCatch({
     t1 <- CreateTableOne(vars=vars, strata="trt_label", data=d_ac, test=FALSE)
     print(t1, smd=TRUE, printToggle=TRUE)
-  }, error=function(e) cat(sprintf("  Table failed: %s\n", e$message)))
+  }, error=function(e) cat(sprintf("  Failed: %s\n", e$message)))
 }
 
 # ============================================================================
-# eTABLE 4: Treatment Effect by Surgery Type
+# eTABLES 4-5c: All subgroup analyses (downstream, existing weights)
 # ============================================================================
-cat("\n", strrep("=",60), "\n")
-cat("eTABLE 4: Effect by Surgery Type\n")
-cat(strrep("=",60), "\n")
 
-t4_rows <- list()
-for (stype in c("cabg","valve","combined","other_cardiac")) {
-  for (db in list(list(d=dat_e, nm="eICU", cl=TRUE), list(d=dat_m, nm="MIMIC", cl=FALSE))) {
-    d_sub <- db$d[db$d$surgery_type == stype,]
-    n_trt <- sum(d_sub$mg_supp, na.rm=TRUE)
-    n_total <- nrow(d_sub)
-    if (n_trt < 10 || n_total < 50) {
-      cat(sprintf("  %s %s: N=%d (trt=%d) — skipped\n", db$nm, stype, n_total, n_trt))
-      next
-    }
-    cl <- if (db$cl && "hospitalid" %in% names(d_sub)) d_sub$hospitalid else NULL
-    r <- run_ow(d_sub, "mg_supp", "aki_kdigo1", db$nm, cl)
-    if (!is.null(r)) {
-      cat(sprintf("  %s %s (N=%d, trt=%d): %s\n", db$nm, stype, n_total, n_trt, fmt_or(r)))
-      t4_rows[[length(t4_rows)+1]] <- data.frame(
-        db=db$nm, surgery=stype, n=n_total, n_trt=n_trt,
-        or=round(r$or,3), lo=round(r$lo,3), hi=round(r$hi,3), p=round(r$p,4))
-    }
-  }
-}
-if (length(t4_rows) > 0) {
-  t4 <- do.call(rbind, t4_rows)
-  write.csv(t4, file.path(RESULTS, "etable4_surgery_subgroups.csv"), row.names=FALSE)
-  cat("  Saved etable4_surgery_subgroups.csv\n")
-}
+subgroups <- list(
+  # eTable 4: Surgery type
+  list(tbl="4", var="surgery_type", cuts=list(
+    list(label="CABG", expr=quote(surgery_type=="cabg")),
+    list(label="Valve", expr=quote(surgery_type=="valve")),
+    list(label="Combined", expr=quote(surgery_type=="combined")),
+    list(label="Other cardiac", expr=quote(surgery_type=="other_cardiac"))
+  )),
+  # eTable 5: MDS
+  list(tbl="5", var="mds_high", cuts=list(
+    list(label="MDS 0-1", expr=quote(mds_high==0)),
+    list(label="MDS >=2", expr=quote(mds_high==1))
+  )),
+  # eTable 5b: Age
+  list(tbl="5b", var="age", cuts=list(
+    list(label="Age <60", expr=quote(age < 60)),
+    list(label="Age >=60", expr=quote(age >= 60))
+  )),
+  # eTable 5c: Baseline Mg
+  list(tbl="5c", var="first_mg_value", cuts=list(
+    list(label="Mg <2.0 (hypo)", expr=quote(first_mg_value < 2.0)),
+    list(label="Mg >=2.0", expr=quote(first_mg_value >= 2.0))
+  ))
+)
 
-# ============================================================================
-# eTABLE 5: Treatment Effect by MDS Score
-# ============================================================================
-cat("\n", strrep("=",60), "\n")
-cat("eTABLE 5: Effect by MDS Score\n")
-cat(strrep("=",60), "\n")
+all_sub_rows <- list()
 
-t5_rows <- list()
-for (mds_level in list(list(label="MDS 0-1", val=0), list(label="MDS >=2", val=1))) {
-  for (db in list(list(d=dat_e, nm="eICU", cl=TRUE), list(d=dat_m, nm="MIMIC", cl=FALSE))) {
-    d_sub <- db$d[db$d$mds_high == mds_level$val,]
-    n_trt <- sum(d_sub$mg_supp, na.rm=TRUE)
+for (sg in subgroups) {
+  cat(sprintf("\n%s\neTABLE %s: Subgroup by %s\n%s\n", strrep("=",60), sg$tbl, sg$var, strrep("=",60)))
+  for (cut in sg$cuts) {
+    for (db in list(list(d=dat_e, nm="eICU", cl=TRUE), list(d=dat_m, nm="MIMIC", cl=FALSE))) {
+      idx <- tryCatch(eval(cut$expr, db$d), error=function(e) rep(FALSE, nrow(db$d)))
+      idx[is.na(idx)] <- FALSE
+      cl <- if (db$cl && "hospitalid" %in% names(db$d)) db$d$hospitalid else NULL
 
-    # All-patient OW
-    cl <- if (db$cl && "hospitalid" %in% names(d_sub)) d_sub$hospitalid else NULL
-    r <- run_ow(d_sub, "mg_supp", "aki_kdigo1", db$nm, cl)
-    if (!is.null(r)) {
-      cat(sprintf("  %s %s (N=%d, trt=%d): %s\n", db$nm, mds_level$label, nrow(d_sub), n_trt, fmt_or(r)))
-      t5_rows[[length(t5_rows)+1]] <- data.frame(
-        db=db$nm, mds=mds_level$label, analysis="all_ow", n=nrow(d_sub), n_trt=n_trt,
-        or=round(r$or,3), lo=round(r$lo,3), hi=round(r$hi,3), p=round(r$p,4))
-    }
+      # All-patient OW
+      r <- run_subgroup(db$d, idx, "mg_supp", "aki_kdigo1", db$nm, cl)
+      if (!is.null(r)) {
+        cat(sprintf("  %s %-20s OW:  N=%d trt=%d %s [bal %.3f]\n",
+                    db$nm, cut$label, r$n, r$n_trt, fmt_or(r), r$max_smd))
+        all_sub_rows[[length(all_sub_rows)+1]] <- data.frame(
+          etable=sg$tbl, db=db$nm, subgroup=cut$label, analysis="all_ow",
+          n=r$n, n_trt=r$n_trt, or=round(r$or,3), lo=round(r$lo,3),
+          hi=round(r$hi,3), p=round(r$p,4), max_smd=round(r$max_smd,4))
+      }
 
-    # AC within subgroup
-    if ("ac_group" %in% names(d_sub)) {
-      d_ac <- d_sub[d_sub$ac_group %in% c("mg_k","k_only"),]
-      d_ac$ac_trt <- as.integer(d_ac$ac_group == "mg_k")
-      r_ac <- run_ow(d_ac, "ac_trt", "aki_kdigo1", db$nm, NULL)
+      # AC OW (downstream)
+      r_ac <- run_subgroup(db$d, idx & !is.na(db$d$ac_trt), "ac_trt", "aki_kdigo1", db$nm, NULL)
       if (!is.null(r_ac)) {
-        cat(sprintf("    AC: %s\n", fmt_or(r_ac)))
-        t5_rows[[length(t5_rows)+1]] <- data.frame(
-          db=db$nm, mds=mds_level$label, analysis="ac_ow", n=nrow(d_ac),
-          n_trt=sum(d_ac$ac_trt), or=round(r_ac$or,3), lo=round(r_ac$lo,3),
-          hi=round(r_ac$hi,3), p=round(r_ac$p,4))
+        cat(sprintf("  %s %-20s AC:  N=%d trt=%d %s [bal %.3f]\n",
+                    db$nm, cut$label, r_ac$n, r_ac$n_trt, fmt_or(r_ac), r_ac$max_smd))
+        all_sub_rows[[length(all_sub_rows)+1]] <- data.frame(
+          etable=sg$tbl, db=db$nm, subgroup=cut$label, analysis="ac_ow",
+          n=r_ac$n, n_trt=r_ac$n_trt, or=round(r_ac$or,3), lo=round(r_ac$lo,3),
+          hi=round(r_ac$hi,3), p=round(r_ac$p,4), max_smd=round(r_ac$max_smd,4))
       }
     }
   }
 }
-if (length(t5_rows) > 0) {
-  t5 <- do.call(rbind, t5_rows)
-  write.csv(t5, file.path(RESULTS, "etable5_mds_subgroups.csv"), row.names=FALSE)
-  cat("  Saved etable5_mds_subgroups.csv\n")
-}
 
-# ============================================================================
-# eTABLE 5b: Treatment Effect by Age (≥60 vs <60)
-# ============================================================================
-cat("\n", strrep("=",60), "\n")
-cat("eTABLE 5b: Effect by Age\n")
-cat(strrep("=",60), "\n")
-
-t5b_rows <- list()
-for (age_cut in list(list(label="Age <60", lo=-Inf, hi=60),
-                     list(label="Age >=60", lo=60, hi=Inf))) {
-  for (db in list(list(d=dat_e, nm="eICU", cl=TRUE), list(d=dat_m, nm="MIMIC", cl=FALSE))) {
-    d_sub <- db$d[db$d$age >= age_cut$lo & db$d$age < age_cut$hi,]
-    n_trt <- sum(d_sub$mg_supp, na.rm=TRUE)
-    cl <- if (db$cl && "hospitalid" %in% names(d_sub)) d_sub$hospitalid else NULL
-    r <- run_ow(d_sub, "mg_supp", "aki_kdigo1", db$nm, cl)
-    if (!is.null(r)) {
-      cat(sprintf("  %s %s (N=%d, trt=%d): %s\n", db$nm, age_cut$label, nrow(d_sub), n_trt, fmt_or(r)))
-      t5b_rows[[length(t5b_rows)+1]] <- data.frame(
-        db=db$nm, subgroup=age_cut$label, analysis="all_ow", n=nrow(d_sub),
-        n_trt=n_trt, or=round(r$or,3), lo=round(r$lo,3), hi=round(r$hi,3), p=round(r$p,4))
-    }
-    # AC within age subgroup
-    if ("ac_group" %in% names(d_sub)) {
-      d_ac <- d_sub[d_sub$ac_group %in% c("mg_k","k_only"),]
-      d_ac$ac_trt <- as.integer(d_ac$ac_group == "mg_k")
-      r_ac <- run_ow(d_ac, "ac_trt", "aki_kdigo1", db$nm, NULL)
-      if (!is.null(r_ac)) {
-        cat(sprintf("    AC: %s\n", fmt_or(r_ac)))
-        t5b_rows[[length(t5b_rows)+1]] <- data.frame(
-          db=db$nm, subgroup=age_cut$label, analysis="ac_ow", n=nrow(d_ac),
-          n_trt=sum(d_ac$ac_trt), or=round(r_ac$or,3), lo=round(r_ac$lo,3),
-          hi=round(r_ac$hi,3), p=round(r_ac$p,4))
-      }
-    }
-  }
-}
-if (length(t5b_rows) > 0) {
-  t5b <- do.call(rbind, t5b_rows)
-  write.csv(t5b, file.path(RESULTS, "etable5b_age_subgroups.csv"), row.names=FALSE)
-  cat("  Saved etable5b_age_subgroups.csv\n")
-}
-
-# ============================================================================
-# eTABLE 5c: Treatment Effect by Baseline Serum Mg
-# ============================================================================
-cat("\n", strrep("=",60), "\n")
-cat("eTABLE 5c: Effect by Baseline Serum Mg\n")
-cat(strrep("=",60), "\n")
-
-t5c_rows <- list()
-for (db in list(list(d=dat_e, nm="eICU", cl=TRUE), list(d=dat_m, nm="MIMIC", cl=FALSE))) {
-  d <- db$d
-  if (!"first_mg_value" %in% names(d)) next
-  mg_med <- median(d$first_mg_value, na.rm=TRUE)
-  cat(sprintf("  %s: Mg median = %.2f mg/dL\n", db$nm, mg_med))
-
-  for (mg_cut in list(
-    list(label=sprintf("Mg <%.1f (below median)", mg_med), lo=-Inf, hi=mg_med),
-    list(label=sprintf("Mg >=%.1f (above median)", mg_med), lo=mg_med, hi=Inf),
-    list(label="Mg <2.0 (hypoMg)", lo=-Inf, hi=2.0),
-    list(label="Mg >=2.0 (normal+)", lo=2.0, hi=Inf)
-  )) {
-    d_sub <- d[d$first_mg_value >= mg_cut$lo & d$first_mg_value < mg_cut$hi,]
-    n_trt <- sum(d_sub$mg_supp, na.rm=TRUE)
-    cl <- if (db$cl && "hospitalid" %in% names(d_sub)) d_sub$hospitalid else NULL
-    r <- run_ow(d_sub, "mg_supp", "aki_kdigo1", db$nm, cl)
-    if (!is.null(r)) {
-      cat(sprintf("  %s %s (N=%d, trt=%d): %s\n", db$nm, mg_cut$label, nrow(d_sub), n_trt, fmt_or(r)))
-      t5c_rows[[length(t5c_rows)+1]] <- data.frame(
-        db=db$nm, subgroup=mg_cut$label, n=nrow(d_sub),
-        n_trt=n_trt, or=round(r$or,3), lo=round(r$lo,3), hi=round(r$hi,3), p=round(r$p,4))
-    }
-  }
-}
-if (length(t5c_rows) > 0) {
-  t5c <- do.call(rbind, t5c_rows)
-  write.csv(t5c, file.path(RESULTS, "etable5c_mg_subgroups.csv"), row.names=FALSE)
-  cat("  Saved etable5c_mg_subgroups.csv\n")
+if (length(all_sub_rows) > 0) {
+  sub_df <- do.call(rbind, all_sub_rows)
+  write.csv(sub_df, file.path(RESULTS, "etables_4_5_subgroups.csv"), row.names=FALSE)
+  cat(sprintf("\n✓ Saved etables_4_5_subgroups.csv (%d rows)\n", nrow(sub_df)))
 }
 
 # ============================================================================
 # eTABLE 6: Safety Outcomes
 # ============================================================================
-cat("\n", strrep("=",60), "\n")
-cat("eTABLE 6: Safety Outcomes\n")
-cat(strrep("=",60), "\n")
+cat(sprintf("\n%s\neTABLE 6: Safety Outcomes\n%s\n", strrep("=",60), strrep("=",60)))
 
 t6_rows <- list()
-
 for (db in list(list(d=dat_e, nm="eICU", cl=TRUE), list(d=dat_m, nm="MIMIC", cl=FALSE))) {
   d <- db$d
   cl <- if (db$cl && "hospitalid" %in% names(d)) d$hospitalid else NULL
-
-  # Quick PS + OW for all patients (median impute for speed)
-  ps_vars <- intersect(c("age","is_female","bmi","heart_failure","hypertension","diabetes","ckd",
-    "copd","pvd","stroke","liver_disease","baseline_creatinine","egfr",
-    "loop_diuretics","nsaids","acei_arb","ppi","beta_blockers","steroids","antiarrhythmics",
-    "first_potassium","first_calcium","first_heartrate","vasopressor_6h","first_mg_value"), names(d))
-  if ("surgery_type" %in% names(d)) {
-    d$s_cabg <- as.integer(d$surgery_type=="cabg")
-    d$s_valve <- as.integer(d$surgery_type=="valve")
-    d$s_combined <- as.integer(d$surgery_type=="combined")
-    ps_vars <- c(ps_vars, "s_cabg","s_valve","s_combined")
-  }
-  for (v in ps_vars) if (v %in% names(d) && any(is.na(d[[v]])))
-    d[[v]][is.na(d[[v]])] <- median(d[[v]], na.rm=TRUE)
-  d <- d[complete.cases(d[,ps_vars]),]
-
-  tryCatch({
-    fml <- as.formula(paste("mg_supp ~", paste(ps_vars, collapse="+")))
-    ps_fit <- glm(fml, data=d, family=binomial())
-    d$ps <- pmax(pmin(fitted(ps_fit), 0.99), 0.01)
-    d$ow <- ifelse(d$mg_supp==1, 1-d$ps, d$ps)
-  }, error=function(e) { cat(sprintf("  %s PS failed: %s\n", db$nm, e$message)); return() })
-
   cat(sprintf("\n  %s (N=%d):\n", db$nm, nrow(d)))
 
-  # ── ICU LOS (continuous, OW-weighted) ───────────────────────────
-  if ("icu_los_h" %in% names(d)) {
-    d_los <- d[!is.na(d$icu_los_h),]
-    r <- wlm(icu_los_h ~ mg_supp, d_los, d_los$ow, cl)
-    cat(sprintf("    ICU LOS: %s\n", fmt_d(r)))
-    # Descriptive
-    trt <- d_los$icu_los_h[d_los$mg_supp==1]; ctrl <- d_los$icu_los_h[d_los$mg_supp==0]
-    cat(sprintf("      Trt: median %.1fh (IQR %.1f-%.1f), Ctrl: %.1fh (%.1f-%.1f)\n",
-                median(trt), quantile(trt,.25), quantile(trt,.75),
-                median(ctrl), quantile(ctrl,.25), quantile(ctrl,.75)))
-    t6_rows[[length(t6_rows)+1]] <- data.frame(
-      db=db$nm, outcome="ICU LOS (h)", est=round(r$est,2),
-      lo=round(r$lo,2), hi=round(r$hi,2), p=round(r$p,4), type="continuous")
-  }
-
-  # ── Vent duration ───────────────────────────────────────────────
-  if ("vent_duration_h" %in% names(d)) {
-    d_v <- d[!is.na(d$vent_duration_h),]
-    if (nrow(d_v) > 50) {
-      r <- wlm(vent_duration_h ~ mg_supp, d_v, d_v$ow, cl)
-      cat(sprintf("    Vent duration: %s\n", fmt_d(r)))
+  # Continuous outcomes (OW-weighted linear model)
+  for (oc in c("icu_los_h", "vent_duration_h", "post_hr_6h")) {
+    if (!oc %in% names(d) || sum(!is.na(d[[oc]])) < 50) next
+    d_oc <- d[!is.na(d[[oc]]) & !is.na(d$mg_supp_ow),]
+    d_oc$.w <- d_oc$mg_supp_ow
+    tryCatch({
+      fit <- lm(as.formula(paste(oc, "~ mg_supp")), data=d_oc, weights=.w)
+      vc <- if (!is.null(cl)) vcovCL(fit, cluster=cl[!is.na(d[[oc]]) & !is.na(d$mg_supp_ow)]) else vcovHC(fit, type="HC1")
+      ct <- coeftest(fit, vcov.=vc)
+      r <- list(est=ct[2,1], lo=ct[2,1]-1.96*ct[2,2], hi=ct[2,1]+1.96*ct[2,2],
+                p=2*pnorm(-abs(ct[2,1]/ct[2,2])))
+      cat(sprintf("    %-20s %s\n", oc, fmt_d(r)))
+      # Descriptive
+      trt_v <- d_oc[[oc]][d_oc$mg_supp==1]; ctrl_v <- d_oc[[oc]][d_oc$mg_supp==0]
+      cat(sprintf("      Trt: median %.1f, Ctrl: median %.1f\n", median(trt_v), median(ctrl_v)))
       t6_rows[[length(t6_rows)+1]] <- data.frame(
-        db=db$nm, outcome="Vent duration (h)", est=round(r$est,2),
-        lo=round(r$lo,2), hi=round(r$hi,2), p=round(r$p,4), type="continuous")
-    }
+        db=db$nm, outcome=oc, est=round(r$est,2), lo=round(r$lo,2),
+        hi=round(r$hi,2), p=round(r$p,4), type="continuous")
+    }, error=function(e) cat(sprintf("    %-20s failed: %s\n", oc, e$message)))
   }
 
-  # ── Post-treatment HR ───────────────────────────────────────────
-  if ("post_hr_6h" %in% names(d)) {
-    d_hr <- d[!is.na(d$post_hr_6h),]
-    if (nrow(d_hr) > 50) {
-      r <- wlm(post_hr_6h ~ mg_supp, d_hr, d_hr$ow, cl)
-      cat(sprintf("    Post-6h HR: %s\n", fmt_d(r)))
-      t6_rows[[length(t6_rows)+1]] <- data.frame(
-        db=db$nm, outcome="Post-6h HR (bpm)", est=round(r$est,2),
-        lo=round(r$lo,2), hi=round(r$hi,2), p=round(r$p,4), type="continuous")
-    }
-  }
-
-  # ── Max post-treatment Mg (descriptive + safety flag) ───────────
+  # Max post-treatment Mg (descriptive safety)
   if ("max_posttreat_mg" %in% names(d)) {
     d_mg <- d[!is.na(d$max_posttreat_mg),]
     trt_mg <- d_mg$max_posttreat_mg[d_mg$mg_supp==1]
     ctrl_mg <- d_mg$max_posttreat_mg[d_mg$mg_supp==0]
-    cat(sprintf("    Max post-Mg: Trt median %.2f (max %.2f), Ctrl median %.2f (max %.2f)\n",
+    cat(sprintf("    Max post-Mg:       Trt median %.2f (max %.2f), Ctrl median %.2f (max %.2f)\n",
                 median(trt_mg), max(trt_mg), median(ctrl_mg), max(ctrl_mg)))
-    cat(sprintf("      >4.8 mg/dL: Trt %d/%d, Ctrl %d/%d\n",
-                sum(trt_mg>4.8), length(trt_mg), sum(ctrl_mg>4.8), length(ctrl_mg)))
-    cat(sprintf("      >6.0 mg/dL: Trt %d/%d, Ctrl %d/%d\n",
-                sum(trt_mg>6.0), length(trt_mg), sum(ctrl_mg>6.0), length(ctrl_mg)))
+    cat(sprintf("      >4.8: Trt %d/%d (%.1f%%), Ctrl %d/%d (%.1f%%)\n",
+                sum(trt_mg>4.8), length(trt_mg), 100*mean(trt_mg>4.8),
+                sum(ctrl_mg>4.8), length(ctrl_mg), 100*mean(ctrl_mg>4.8)))
     t6_rows[[length(t6_rows)+1]] <- data.frame(
-      db=db$nm, outcome="Max Mg >4.8 mg/dL (trt)", est=sum(trt_mg>4.8),
-      lo=length(trt_mg), hi=round(100*mean(trt_mg>4.8),1), p=NA, type="count")
+      db=db$nm, outcome="max_mg_gt4.8_trt_pct", est=round(100*mean(trt_mg>4.8),1),
+      lo=length(trt_mg), hi=sum(trt_mg>4.8), p=NA, type="descriptive")
   }
 
-  # ── IABP / ECMO ────────────────────────────────────────────────
+  # Binary outcomes (OW-weighted)
   for (oc in c("has_iabp", "has_ecmo")) {
-    if (oc %in% names(d) && sum(d[[oc]], na.rm=TRUE) >= 5) {
-      r <- wglm(as.formula(paste(oc, "~ mg_supp")), d, d$ow, cl)
-      cat(sprintf("    %s: %s  [events=%d]\n", oc, fmt_or(r), sum(d[[oc]])))
+    if (!oc %in% names(d) || sum(d[[oc]],na.rm=TRUE) < 3) next
+    r <- run_subgroup(d, rep(TRUE, nrow(d)), "mg_supp", oc, db$nm, cl)
+    if (!is.null(r)) {
+      cat(sprintf("    %-20s %s [events=%d]\n", oc, fmt_or(r), sum(d[[oc]],na.rm=TRUE)))
       t6_rows[[length(t6_rows)+1]] <- data.frame(
-        db=db$nm, outcome=oc, est=round(r$or,3),
-        lo=round(r$lo,3), hi=round(r$hi,3), p=round(r$p,4), type="binary")
+        db=db$nm, outcome=oc, est=round(r$or,3), lo=round(r$lo,3),
+        hi=round(r$hi,3), p=round(r$p,4), type="binary")
     }
   }
 }
@@ -414,27 +377,21 @@ for (db in list(list(d=dat_e, nm="eICU", cl=TRUE), list(d=dat_m, nm="MIMIC", cl=
 if (length(t6_rows) > 0) {
   t6 <- do.call(rbind, t6_rows)
   write.csv(t6, file.path(RESULTS, "etable6_safety.csv"), row.names=FALSE)
-  cat("\n  Saved etable6_safety.csv\n")
+  cat("\n✓ Saved etable6_safety.csv\n")
 }
 
-# ── Summary ───────────────────────────────────────────────────────────────
+# ============================================================================
+# SUMMARY
+# ============================================================================
 cat(sprintf("\n%s\nSUMMARY\n%s\n", strrep("=",60), strrep("=",60)))
-cat("  eTable 3: AC baseline characteristics — printed above\n")
-cat("  eTable 4: Surgery-type subgroups — etable4_surgery_subgroups.csv\n")
-cat("  eTable 5: MDS subgroups — etable5_mds_subgroups.csv\n")
-cat("  eTable 5b: Age subgroups — etable5b_age_subgroups.csv\n")
-cat("  eTable 5c: Baseline Mg subgroups — etable5c_mg_subgroups.csv\n")
-cat("  eTable 6: Safety outcomes — etable6_safety.csv\n")
-cat("\n  Key clinical predictions:\n")
-cat("  - If Mg <2.0 shows stronger effect → 'repletion benefits the depleted'\n")
-cat("  - If age >=60 shows stronger effect → 'age-related Mg depletion' story\n")
-cat("  - If MDS >=2 shows stronger effect → composite risk score guides therapy\n")
-cat("  - If none differ → effect generalizes (also fine)\n")
-cat("\n  Manuscript sentence if all safety outcomes null:\n")
-cat("  'Subgroup analyses by surgery type and magnesium depletion risk\n")
-cat("   did not identify significant effect modification (eTables 4-5).\n")
-cat("   Magnesium supplementation was not associated with prolonged ICU\n")
-cat("   stay, prolonged mechanical ventilation, or bradycardia, and\n")
-cat("   post-treatment serum magnesium remained below symptomatic\n")
-cat("   thresholds in all patients (eTable 6).'\n")
+cat("  All subgroup analyses use full-sample OW weights (downstream).\n")
+cat("  Balance checked within each subgroup (max_smd column).\n\n")
+cat("  Files:\n")
+cat("    etables_4_5_subgroups.csv — surgery, MDS, age, baseline Mg\n")
+cat("    etable6_safety.csv — ICU LOS, vent, HR, max Mg, IABP/ECMO\n\n")
+cat("  Key predictions:\n")
+cat("    Mg <2.0 effect > Mg >=2.0 → 'repletion benefits the depleted'\n")
+cat("    Age >=60 effect > Age <60 → age-related Mg depletion\n")
+cat("    MDS >=2 effect > MDS 0-1 → composite risk guides therapy\n")
+cat("    Safety null across the board → 'no harm at these doses'\n")
 cat("\nsubgroup_analysis.R COMPLETE\n")
