@@ -7,7 +7,7 @@
 #   F. Quantitative bias analysis: deterministic adjustment for
 #      unmeasured CPB time confounding (replaces E-value reassurance)
 #
-# Output: results/09_robustness.csv
+# Output: results/09_lactate_sensitivity.csv, results/09_qba.csv
 # Run:    Rscript 09_robustness.R
 # ============================================================================
 
@@ -201,23 +201,16 @@ all_rows <- c(all_rows, list(lac_e), list(lac_m))
 #
 # Bias factor = (OR_UY * p1 + (1-p1)) / (OR_UY * p0 + (1-p0))
 # Adjusted OR = Observed OR / Bias factor
-#
-# Literature anchors:
-#   CPB time >120 min → AKI: OR ~1.5–3.0 (Karkouti 2009, Sgouralis 2015)
-#   Cross-clamp time → AKI: OR ~1.5–2.5 per 30-min increment
-#   Supplemented patients have lower serum Mg (1.88 vs 2.22) suggesting
-#   simpler surgery → P(complex | treated) < P(complex | untreated)
 # ============================================================================
 cat(sprintf("\n%s\nF. QUANTITATIVE BIAS ANALYSIS\n%s\n",
             strrep("=", 65), strrep("=", 65)))
 
 # Grid of assumptions
-or_uy_grid <- c(1.5, 2.0, 2.5, 3.0)   # OR of complex surgery → AKI
-p0_grid    <- c(0.35, 0.40, 0.45)       # P(complex | untreated)
-delta_grid <- c(0.05, 0.10, 0.15)       # prevalence difference (p0 - p1)
+or_uy_grid <- c(1.5, 2.0, 2.5, 3.0)
+p0_grid    <- c(0.35, 0.40, 0.45)
+delta_grid <- c(0.05, 0.10, 0.15)
 
-# Observed estimates to adjust
-# Load from existing results
+# Observed estimates — defaults overwritten from CSVs below
 observed <- list(
   list(label = "AC primary (eICU)",     or = 0.75),
   list(label = "IPTW (eICU)",           or = 0.76),
@@ -226,7 +219,7 @@ observed <- list(
   list(label = "2.6-3.0 subband",       or = 0.35)
 )
 
-# Try loading actual values from CSVs
+# Load actual values from pipeline CSVs
 res_path <- file.path(RESULTS, "02_results.csv")
 if (file.exists(res_path)) {
   res <- read.csv(res_path, stringsAsFactors = FALSE)
@@ -247,6 +240,18 @@ if (file.exists(mg_path)) {
                 mg$analysis == "ac_ow", mg_or_col]
   if (length(gt23_ac) > 0) observed[[4]]$or <- gt23_ac[1]
 }
+# Load 2.6-3.0 subband from hospital RE results
+re_path <- file.path(RESULTS, "08b_hospital_re.csv")
+if (file.exists(re_path)) {
+  re <- read.csv(re_path, stringsAsFactors = FALSE)
+  re_or_col <- if ("or" %in% names(re)) "or" else "or_"
+  sb26 <- re[re$stratum == ">2.3:2.6-3.0" & re$model == "fixed_subband",
+             re_or_col]
+  if (length(sb26) > 0) {
+    observed[[5]]$or <- sb26[1]
+    cat(sprintf("  2.6-3.0 subband OR loaded from CSV: %.3f\n", sb26[1]))
+  }
+}
 
 cat("  Assumptions:\n")
 cat("    U = complex surgery (long CPB / cross-clamp)\n")
@@ -260,18 +265,15 @@ qba_rows <- list()
 for (obs in observed) {
   cat(sprintf("  ── %s (observed OR = %.3f) ──\n", obs$label, obs$or))
 
-  # For stratified analyses, reduce delta (complexity held ~constant)
   is_stratified <- grepl(">2.3|2.6-3.0", obs$label)
 
   for (or_uy in or_uy_grid) {
     for (p0 in p0_grid) {
       for (delta in delta_grid) {
-        # For stratified analyses, halve the prevalence difference
         eff_delta <- if (is_stratified) delta / 2 else delta
         p1 <- p0 - eff_delta
-        if (p1 < 0.05) next  # implausible
+        if (p1 < 0.05) next
 
-        # Bias factor (Lin, Psaty, Kronmal 1998)
         bf <- (or_uy * p1 + (1 - p1)) / (or_uy * p0 + (1 - p0))
         adj_or <- obs$or / bf
         survives <- adj_or < 1.0
@@ -292,7 +294,6 @@ for (obs in observed) {
     }
   }
 
-  # Summary for this estimate
   qba_sub <- do.call(rbind, qba_rows[sapply(qba_rows, function(x)
     x$analysis[1] == obs$label)])
   if (!is.null(qba_sub) && nrow(qba_sub) > 0) {
@@ -330,9 +331,8 @@ cat(sprintf("  approximately constant by stratification, so the prevalence\n"))
 cat(sprintf("  difference shrinks → bias factor approaches 1 → adjusted\n"))
 cat(sprintf("  estimate stays protective.\n"))
 
-# ── Combine and save ─────────────────────────────────────────────
+# ── Save ─────────────────────────────────────────────────────
 qba_df <- do.call(rbind, qba_rows)
-# ── Save separately ──────────────────────────────────────────────
 lac_df <- do.call(rbind, all_rows)
 write.csv(lac_df, file.path(RESULTS, "09_lactate_sensitivity.csv"),
           row.names = FALSE)
