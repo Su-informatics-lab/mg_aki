@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-gen_figures.py — Publication figures (Nature Portfolio style)
+gen_figures.py — Publication figures (Nature Portfolio style, v4)
 
   Figure 1:  Forest plot (AC primary + sensitivity + controls)
              → figs/fig2_forest.pdf
@@ -133,12 +133,36 @@ def fig1_forest():
             ],
         ),
         (
-            "Control",
+            "Negative Control: Transfusion",
             [
-                ("Fracture (negative control)", "ow_frac"),
+                ("Active comparator (OW)", "nc_transfusion_ac"),
+                ("All-patient OW", "nc_transfusion_ow"),
             ],
         ),
     ]
+
+    # Inject transfusion NC (from probe_complexity_nc.R, eICU only)
+    transfusion_rows = pd.DataFrame(
+        [
+            {
+                "db": "eICU",
+                "analysis": "nc_transfusion_ow",
+                or_col: 0.756,
+                "lo": 0.614,
+                "hi": 0.931,
+                "p": 0.009,
+            },
+            {
+                "db": "eICU",
+                "analysis": "nc_transfusion_ac",
+                or_col: 0.951,
+                "lo": 0.763,
+                "hi": 1.187,
+                "p": 0.659,
+            },
+        ]
+    )
+    res = pd.concat([res, transfusion_rows], ignore_index=True)
 
     # Build rows bottom-to-top for matplotlib y-axis
     rows = []
@@ -148,23 +172,24 @@ def fig1_forest():
             e = res[(res["db"] == "eICU") & (res["analysis"] == key)]
             m = res[(res["db"] == "MIMIC") & (res["analysis"] == key)]
             p = res[(res["db"] == "Pooled") & (res["analysis"] == key)]
-            if len(p) == 0:
+            if len(p) == 0 and len(e) == 0:
                 continue
 
             # Pooled
-            rows.append(
-                dict(
-                    y=y,
-                    label="  Pooled",
-                    or_=p[or_col].values[0],
-                    lo=p["lo"].values[0],
-                    hi=p["hi"].values[0],
-                    source="Pooled",
-                    section=sec_label,
-                    is_header=False,
+            if len(p) > 0:
+                rows.append(
+                    dict(
+                        y=y,
+                        label="  Pooled",
+                        or_=p[or_col].values[0],
+                        lo=p["lo"].values[0],
+                        hi=p["hi"].values[0],
+                        source="Pooled",
+                        section=sec_label,
+                        is_header=False,
+                    )
                 )
-            )
-            y += 1
+                y += 1
             # MIMIC
             if len(m) > 0:
                 rows.append(
@@ -858,7 +883,7 @@ def efig2_interaction():
 # =====================================================================
 if __name__ == "__main__":
     print("=" * 55)
-    print("Generating publication figures")
+    print("Generating publication figures (v4 — threshold narrative)")
     print("=" * 55)
 
     fig1_forest()
