@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 # ============================================================================
-# run.sh — Full pipeline for mg_aki project (v4: threshold narrative)
+# run.sh — Full pipeline for mg_aki (v4: threshold narrative)
 #
 # Usage:
 #   bash run.sh              # all steps
 #   bash run.sh 1 2 7        # subset
 #
 # Steps:
-#   1   → 01_etl.py             eICU cohort construction
-#   1b  → 01b_mimic_etl.py      MIMIC-IV cohort construction
-#   8e  → 08e_fix_mimic_poaf.py Fix MIMIC POAF phenotype (before step 2)
+#   1   → 01_etl.py             Cohort construction (eICU + MIMIC)
 #   2   → 02_analysis.R         Primary analysis (MICE + OW/IPTW/PSM/AC)
 #   3   → 03_augment.py         Tier 2 variables (vent, IABP, etc.)
 #   4   → 04_subgroups.R        Subgroup + safety analyses
@@ -22,42 +20,33 @@
 set -euo pipefail
 cd ~/mg_aki
 
-# Activate Python venv
-if [ -f .venv/bin/activate ]; then
-  source .venv/bin/activate
-fi
-
-# Load R module (Tempest HPC)
+if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi
 if command -v module &>/dev/null; then
   module purge 2>/dev/null && module load R/4.4.2-gfbf-2024a 2>/dev/null || true
 fi
 
 SECONDS=0
 mkdir -p results figs
-
 step() { echo -e "\n──── Step $1: $2 ────"; }
 
-# Default: all steps in order
 if [ $# -eq 0 ]; then
-  STEPS=(1 1b 8e 2 3 4 5 6 7 8 fig)
+  STEPS=(1 2 3 4 5 6 7 8 fig)
 else
   STEPS=("$@")
 fi
 
 for s in "${STEPS[@]}"; do
   case $s in
-    1)   step 1   "eICU ETL";          python 01_etl.py ;;
-    1b)  step 1b  "MIMIC ETL";         python 01b_mimic_etl.py ;;
-    8e)  step 8e  "Fix MIMIC POAF";    python 08e_fix_mimic_poaf.py ;;
-    2)   step 2   "Primary Analysis";  Rscript 02_analysis.R ;;
-    3)   step 3   "Augment Cohorts";   python 03_augment.py ;;
-    4)   step 4   "Subgroup/Safety";   Rscript 04_subgroups.R ;;
-    5)   step 5   "Tables";           Rscript 05_tables.R ;;
-    6)   step 6   "Figures (R)";      Rscript 06_figures.R ;;
-    7)   step 7   "Sensitivity";      Rscript 07_sensitivity.R ;;
-    8)   step 8   "Stratified + RE";  Rscript 08_stratified.R ;;
-    fig) step fig "Figures (Python)"; python gen_figures.py ;;
-    *)   echo "Unknown step: $s"; echo "Valid: 1 1b 8e 2 3 4 5 6 7 8 fig"; exit 1 ;;
+    1)   step 1   "ETL (eICU + MIMIC)"; python 01_etl.py ;;
+    2)   step 2   "Primary Analysis";   Rscript 02_analysis.R ;;
+    3)   step 3   "Augment Cohorts";    python 03_augment.py ;;
+    4)   step 4   "Subgroup/Safety";    Rscript 04_subgroups.R ;;
+    5)   step 5   "Tables";            Rscript 05_tables.R ;;
+    6)   step 6   "Figures (R)";       Rscript 06_figures.R ;;
+    7)   step 7   "Sensitivity";       Rscript 07_sensitivity.R ;;
+    8)   step 8   "Stratified + RE";   Rscript 08_stratified.R ;;
+    fig) step fig "Figures (Python)";  python gen_figures.py ;;
+    *)   echo "Unknown step: $s"; echo "Valid: 1 2 3 4 5 6 7 8 fig"; exit 1 ;;
   esac
 done
 
