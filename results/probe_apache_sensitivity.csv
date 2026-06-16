@@ -1,0 +1,7 @@
+"db","analysis","n","or","lo","hi","p"
+"eICU_no_apache","ow_aki1",8109,0.8542,0.6726,1.085,0.19649
+"eICU_no_apache","iptw_aki1",8109,0.7645,0.6065,0.9637,0.02302
+"eICU_no_apache","ac_aki1",1986,0.7489,0.5813,0.9649,0.0253
+"eICU_with_apache","ow_aki1",8109,0.8451,0.664,1.0756,0.17141
+"eICU_with_apache","iptw_aki1",8109,0.7575,0.6013,0.9542,0.01836
+"eICU_with_apache","ac_aki1",1986,0.7506,0.5827,0.9671,0.02648

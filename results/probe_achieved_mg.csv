@@ -1,0 +1,5 @@
+db,group,n,bl_mean,bl_median,fu_mean,fu_median,delta_mean,delta_median,pct_fu_gt_2.0,pct_fu_gt_2.3,pct_fu_gt_2.6,pct_fu_gt_3.0
+eICU,Supplemented,955,1.869,1.8,2.15,2.1,0.282,0.3,58.4,25.2,6.1,2.5
+eICU,Unsupplemented,5473,2.235,2.1,2.133,2.1,-0.103,-0.1,55.5,23.4,8.6,2.3
+MIMIC,Supplemented,636,1.873,1.7,2.28,2.2,0.407,0.5,72.6,39.0,13.8,3.3
+MIMIC,Unsupplemented,2996,2.138,2.0,2.137,2.1,-0.002,0.0,53.4,22.7,9.7,3.6

@@ -1,0 +1,14 @@
+metric,value
+n_total,8109
+n_bmi_available,7939
+pct_available,97.9
+mean_raw,57.8
+median_raw,28.4
+sd_raw,2383.6
+max_raw,212270.1
+n_outside_10_80,22
+n_above_80,19
+n_above_100,15
+mean_capped,29.5
+median_capped,28.4
+sd_capped,7.2
