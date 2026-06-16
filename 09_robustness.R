@@ -332,16 +332,8 @@ cat(sprintf("  estimate stays protective.\n"))
 
 # ── Combine and save ─────────────────────────────────────────────
 qba_df <- do.call(rbind, qba_rows)
-# Add lactate results
+# ── Save separately ──────────────────────────────────────────────
 lac_df <- do.call(rbind, all_rows)
-
-out <- rbind(
-  data.frame(lac_df, or_uy = NA, p0_untreated = NA, p1_treated = NA,
-             delta = NA, bias_factor = NA, adjusted_or = NA,
-             survives = NA, observed_or = NA),
-  data.frame(qba_df, db = NA, model = NA, lo = NA, hi = NA, p = NA)
-)
-# Simpler: save separately
 write.csv(lac_df, file.path(RESULTS, "09_lactate_sensitivity.csv"),
           row.names = FALSE)
 write.csv(qba_df, file.path(RESULTS, "09_qba.csv"), row.names = FALSE)

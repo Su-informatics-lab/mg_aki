@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# run.sh — Full pipeline for mg_aki
+# run.sh — Full pipeline for mg_aki (v4: threshold narrative)
 #
 # Usage:
 #   bash run.sh              # all steps
@@ -15,7 +15,8 @@
 #   6   → 06_figures.R          R-based figures (CONSORT CSV)
 #   7   → 07_sensitivity.R      E-values + prognostic + MICE + AC table1
 #   8   → 08_stratified.R       Mg-stratified + hospital RE
-#   fig → gen_figures.py        Python figures
+#   9   → 09_robustness.R       Lactate sensitivity + QBA
+#   fig → gen_figures.py         Python figures (Nature style)
 # ============================================================================
 set -euo pipefail
 cd ~/mg_aki
@@ -30,7 +31,7 @@ mkdir -p results figs
 step() { echo -e "\n──── Step $1: $2 ────"; }
 
 if [ $# -eq 0 ]; then
-  STEPS=(1 2 3 4 5 6 7 8 fig)
+  STEPS=(1 2 3 4 5 6 7 8 9 fig)
 else
   STEPS=("$@")
 fi
@@ -45,8 +46,9 @@ for s in "${STEPS[@]}"; do
     6)   step 6   "Figures (R)";       Rscript 06_figures.R ;;
     7)   step 7   "Sensitivity";       Rscript 07_sensitivity.R ;;
     8)   step 8   "Stratified + RE";   Rscript 08_stratified.R ;;
+    9)   step 9   "Robustness";        Rscript 09_robustness.R ;;
     fig) step fig "Figures (Python)";  python gen_figures.py ;;
-    *)   echo "Unknown step: $s"; echo "Valid: 1 2 3 4 5 6 7 8 fig"; exit 1 ;;
+    *)   echo "Unknown step: $s"; echo "Valid: 1 2 3 4 5 6 7 8 9 fig"; exit 1 ;;
   esac
 done
 
