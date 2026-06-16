@@ -42,8 +42,7 @@ constant at the top of `01_etl.py` (MIMIC-IV).
 ## Pipeline
 
 ```bash
-bash run.sh          # full pipeline (9 steps)
-bash run.sh 1 2 8    # subset
+bash run.sh
 ```
 
 | Step | Script | Output |
@@ -73,10 +72,6 @@ Across 11,855 cardiac surgery patients (eICU: 8,109; MIMIC-IV: 3,746):
 | Sub-band 2.6–3.0 mg/dL | 0.35 (0.16–0.76) | .008 |
 | Fracture negative control | 0.98 (0.55–1.76) | .95 |
 
-The previously reported association between higher serum magnesium and
-worse AKI (Xiong 2023, OR 1.45) was reproduced in eICU and shown to
-reflect confounding by cardioplegia volume (null in single-center
-MIMIC-IV: OR 1.01).
 
 ## License
 
