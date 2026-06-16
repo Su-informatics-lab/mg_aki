@@ -545,6 +545,15 @@ def run_eicu():
         cohort.admissionweight / (cohort.admissionheight / 100) ** 2,
         np.nan,
     )
+    # ── BMI plausibility cap ─────────────────────────────────────
+    # 22 outliers (0.27%) from height-in-inches and data entry errors
+    # across 16 hospitals (sporadic, not systematic). Root cause:
+    #   8 height_in_inches, 5 height_data_error, 5 weight_possibly_lbs,
+    #   4 height_ambiguous_short. Probe: |ΔOR| = 0.0009.
+    # Matches MIMIC ETL's existing cap.
+    n_bmi_out = int(cohort.bmi.notna().sum() - cohort.bmi.between(10, 80).sum())
+    cohort.loc[cohort.bmi.notna() & ~cohort.bmi.between(10, 80), "bmi"] = np.nan
+    print(f"  BMI: capped {n_bmi_out} outliers outside [10, 80] to NaN")
 
     # Comorbidities
     ph_elig = ph[ph.patientunitstayid.isin(pids)] if len(ph) > 0 else pd.DataFrame()
