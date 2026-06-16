@@ -59,19 +59,6 @@ bash run.sh
 All phenotype definitions, ICD codes, and lab ranges are in
 `00_config.py`.
 
-## Key results
-
-Across 11,855 cardiac surgery patients (eICU: 8,109; MIMIC-IV: 3,746):
-
-| Analysis | eICU OR (95% CI) | P |
-|---|---|---|
-| Active comparator (Mg+K⁺ vs K⁺-only) | 0.75 (0.58–0.96) | .02 |
-| All-patient IPTW | 0.76 (0.61–0.96) | .02 |
-| Mg-stratified >2.3 mg/dL (OW) | 0.53 (0.35–0.80) | .003 |
-| Sub-band 2.6–3.0 mg/dL | 0.35 (0.16–0.76) | .008 |
-| Fracture negative control | 0.98 (0.55–1.76) | .95 |
-
-
 ## License
 
 MIT. Datasets governed by PhysioNet data use agreements.
