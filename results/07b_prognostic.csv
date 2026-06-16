@@ -1,0 +1,15 @@
+"db","outcome","surgery","or","lo","hi","p"
+"eICU","KDIGO stage >=1","All",1.433,1.285,1.598,0
+"eICU","Cr ratio >=1.5x","All",1.456,1.281,1.655,0
+"eICU","Delta Cr >=0.3/48h","All",1.286,1.149,1.439,0
+"eICU","KDIGO stage >=2","All",1.209,1.007,1.453,0.0423
+"eICU","KDIGO stage >=3","All",1.231,0.939,1.614,0.1322
+"eICU","KDIGO stage >=1","Simple",1.346,1.173,1.544,0
+"eICU","KDIGO stage >=1","Complex",1.72,1.426,2.074,0
+"MIMIC","KDIGO stage >=1","All",0.985,0.857,1.133,0.835
+"MIMIC","Cr ratio >=1.5x","All",0.977,0.84,1.137,0.7659
+"MIMIC","Delta Cr >=0.3/48h","All",1.119,0.966,1.297,0.1345
+"MIMIC","KDIGO stage >=2","All",1.073,0.879,1.311,0.4896
+"MIMIC","KDIGO stage >=3","All",0.992,0.723,1.363,0.9623
+"MIMIC","KDIGO stage >=1","Simple",0.971,0.817,1.155,0.7427
+"MIMIC","KDIGO stage >=1","Complex",1.039,0.785,1.375,0.7909

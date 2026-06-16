@@ -1,0 +1,6 @@
+"analysis","label","or","lo","hi","e_point","e_ci_limit"
+"ac_aki1","Primary: AC AKI",0.811,0.665,0.99,1.77,1.11
+"iptw_aki1","Sensitivity: IPTW AKI",0.833,0.712,0.975,1.69,1.19
+"ow_aki1","Sensitivity: OW AKI",0.9,0.774,1.046,1.46,1.27
+"ow_enceph","Exploratory: Enceph",0.646,0.464,0.899,2.47,1.47
+"ow_frac","Control: Fracture",0.937,0.63,1.394,1.34,2.14
