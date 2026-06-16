@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-gen_figures.py — Publication figures (Nature Portfolio style, v4)
+gen_figures.py — Publication figures (Nature Portfolio style)
 
   Figure 1:  Forest plot (AC primary + sensitivity + controls)
              → figs/fig2_forest.pdf
@@ -858,7 +858,7 @@ def efig2_interaction():
 # =====================================================================
 if __name__ == "__main__":
     print("=" * 55)
-    print("Generating publication figures (v4 — threshold narrative)")
+    print("Generating publication figures")
     print("=" * 55)
 
     fig1_forest()

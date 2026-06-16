@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# run.sh — Full pipeline for mg_aki (v4: threshold narrative)
+# run.sh — Full pipeline for mg_aki
 #
 # Usage:
 #   bash run.sh              # all steps
@@ -15,7 +15,7 @@
 #   6   → 06_figures.R          R-based figures (CONSORT CSV)
 #   7   → 07_sensitivity.R      E-values + prognostic + MICE + AC table1
 #   8   → 08_stratified.R       Mg-stratified + hospital RE
-#   fig → gen_figures.py         Python figures (Nature style)
+#   fig → gen_figures.py        Python figures
 # ============================================================================
 set -euo pipefail
 cd ~/mg_aki
