@@ -3,8 +3,7 @@
 Target trial emulation evaluating the association between postoperative
 IV magnesium supplementation and AKI after cardiac surgery, with
 serum magnesium–stratified analysis revealing a pharmacological
-threshold. eICU-CRD (208 US hospitals, primary) and MIMIC-IV (BIDMC,
-validation).
+threshold. eICU-CRD (primary) and MIMIC-IV (validation).
 
 ## Key finding
 
