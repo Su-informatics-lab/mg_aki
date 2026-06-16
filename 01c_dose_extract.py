@@ -282,14 +282,8 @@ def extract_mimic():
     print(f"  Loading inputevents...")
     ie = pd.read_csv(
         ie_path,
-        usecols=[
-            "stay_id",
-            "itemid",
-            "amount",
-            "amountuom",
-            "starttime",
-            "cancelreason",
-        ],
+        usecols=lambda c: c
+        in {"stay_id", "itemid", "amount", "amountuom", "starttime", "cancelreason"},
         low_memory=False,
     )
 
