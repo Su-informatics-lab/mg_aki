@@ -91,82 +91,78 @@ def gz(path):
 # =====================================================================
 def compute_kdigo_uo(uo_df, weight_kg, mg_offset_h, max_h=FOLLOWUP_HOURS):
     """
-    Compute KDIGO UO staging for a single patient.
+    Compute KDIGO UO staging — measurement-span-aware (NO zero-fill).
 
-    Args:
-        uo_df: DataFrame with columns [offset_h, value_ml]
-               offset_h = hours from ICU admission
-        weight_kg: patient weight in kg
-        mg_offset_h: offset of Mg measurement (hours from admission)
-                     — UO events before this are excluded (same as Cr)
-        max_h: maximum follow-up hours
+    Only applies KDIGO criteria when actual UO measurements span the
+    required window duration, following MIT-LCP/mimic-code kdigo_stages.sql:
+      Stage 1: <0.5 mL/kg/h, measurements spanning >=6h
+      Stage 2: <0.5 mL/kg/h, measurements spanning >=12h
+      Stage 3: <0.3 mL/kg/h spanning >=24h OR anuria spanning >=12h
 
-    Returns:
-        dict with n_uo, uo_total, aki_uo_stage
+    Rate = total_UO_in_window / (weight_kg × nominal_window_hours).
+    Rates are only computed when the earliest and latest measurements
+    in the lookback window are ≥ window_hours apart.
     """
     if weight_kg is None or np.isnan(weight_kg) or weight_kg <= 10:
         return {"n_uo": 0, "uo_total": 0, "aki_uo_stage": np.nan}
 
     # Filter to follow-up window (after Mg measurement, up to max_h)
-    fu = uo_df[
-        (uo_df.offset_h > mg_offset_h) & (uo_df.offset_h <= mg_offset_h + max_h)
-    ].copy()
+    fu = (
+        uo_df[(uo_df.offset_h > mg_offset_h) & (uo_df.offset_h <= mg_offset_h + max_h)]
+        .sort_values("offset_h")
+        .reset_index(drop=True)
+    )
 
-    if len(fu) == 0:
-        return {"n_uo": 0, "uo_total": 0, "aki_uo_stage": np.nan}
+    if len(fu) < 2:
+        return {
+            "n_uo": len(fu),
+            "uo_total": fu.value_ml.sum() if len(fu) > 0 else 0,
+            "aki_uo_stage": np.nan,
+        }
 
     n_uo = len(fu)
     uo_total = fu.value_ml.sum()
+    times = fu.offset_h.values
+    cumuo = np.cumsum(fu.value_ml.values)
 
-    # ── Hourly binning ───────────────────────────────────────────
-    # Bin relative to Mg measurement
-    fu["rel_h"] = fu.offset_h - mg_offset_h
-    fu["hour_bin"] = np.floor(fu.rel_h).astype(int)
-
-    # Sum UO per hour
-    hourly = fu.groupby("hour_bin").value_ml.sum()
-
-    # Create complete hourly grid (missing hours = 0 UO if patient
-    # is in ICU; this is conservative — assumes nurse would have
-    # charted if patient was producing urine)
-    max_hour = min(int(hourly.index.max()) + 1, int(max_h))
-    min_hour = max(0, int(hourly.index.min()))
-    full_idx = range(min_hour, max_hour)
-    hourly = hourly.reindex(full_idx, fill_value=0.0)
-
-    if len(hourly) < 6:
-        # Need at least 6 hours for Stage 1
-        return {"n_uo": n_uo, "uo_total": uo_total, "aki_uo_stage": 0}
-
-    # ── Rolling rates ────────────────────────────────────────────
     max_stage = 0
 
-    # Stage 1: <0.5 mL/kg/h for ≥6h
-    if len(hourly) >= 6:
-        roll_6 = hourly.rolling(6, min_periods=6).sum()
-        rate_6 = roll_6 / (weight_kg * 6)
-        if (rate_6.dropna() < KDIGO_STAGE1_RATE).any():
-            max_stage = max(max_stage, 1)
+    # Check each measurement time as a potential window endpoint
+    for i in range(1, len(times)):
+        t_now = times[i]
 
-    # Stage 2: <0.5 mL/kg/h for ≥12h
-    if len(hourly) >= 12:
-        roll_12 = hourly.rolling(12, min_periods=12).sum()
-        rate_12 = roll_12 / (weight_kg * 12)
-        if (rate_12.dropna() < KDIGO_STAGE2_RATE).any():
-            max_stage = max(max_stage, 2)
+        # Check 6h / 12h / 24h windows
+        for window_h, rate_thresh, stage in [
+            (6, KDIGO_STAGE1_RATE, 1),
+            (12, KDIGO_STAGE2_RATE, 2),
+            (24, KDIGO_STAGE3_RATE, 3),
+        ]:
+            if stage <= max_stage:
+                continue  # already reached this or higher stage
 
-    # Stage 3: <0.3 mL/kg/h for ≥24h
-    if len(hourly) >= 24:
-        roll_24 = hourly.rolling(24, min_periods=24).sum()
-        rate_24 = roll_24 / (weight_kg * 24)
-        if (rate_24.dropna() < KDIGO_STAGE3_RATE).any():
-            max_stage = max(max_stage, 3)
+            t_start = t_now - window_h
+            # Find first measurement at or after window start
+            j = np.searchsorted(times[: i + 1], t_start, side="left")
 
-    # Stage 3 (alt): anuria for ≥12h
-    if len(hourly) >= 12:
-        roll_12_total = hourly.rolling(12, min_periods=12).sum()
-        if (roll_12_total.dropna() == 0).any():
-            max_stage = max(max_stage, 3)
+            if j <= i:
+                span = t_now - times[j]
+                if span >= window_h:
+                    # Total UO from measurement j to i (inclusive)
+                    uo_win = cumuo[i] - (cumuo[j - 1] if j > 0 else 0)
+                    rate = uo_win / (weight_kg * window_h)
+                    if rate < rate_thresh:
+                        max_stage = max(max_stage, stage)
+
+        # Stage 3 alternative: anuria for ≥12h
+        if max_stage < 3:
+            t_12 = t_now - 12
+            j12 = np.searchsorted(times[: i + 1], t_12, side="left")
+            if j12 <= i:
+                span12 = t_now - times[j12]
+                if span12 >= 12:
+                    uo_12 = cumuo[i] - (cumuo[j12 - 1] if j12 > 0 else 0)
+                    if uo_12 == 0:
+                        max_stage = 3
 
     return {"n_uo": n_uo, "uo_total": round(uo_total, 1), "aki_uo_stage": max_stage}
 
