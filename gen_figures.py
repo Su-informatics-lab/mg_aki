@@ -377,7 +377,7 @@ def fig1_forest():
 #
 # Design:
 #   Panel a: 4 serum Mg strata × 2 databases (forest)
-#   Panel b: Narrow sub-bands within >2.3 (eICU only) + Khalili ref
+#   Panel b: Narrow sub-bands within >2.3 (eICU only, Firth penalized)
 # =====================================================================
 def fig_mg_stratified():
     print("Figure 2: Mg-stratified forest (core finding)")
@@ -412,7 +412,10 @@ def fig_mg_stratified():
             re = pd.read_csv(re_path)
             re_or_col = "or" if "or" in re.columns else "or_"
             for sb in [">2.3:2.3-2.6", ">2.3:2.6-3.0", ">2.3:>3.0"]:
-                r = re[(re["stratum"] == sb) & (re["model"] == "fixed_subband")]
+                r = re[
+                    (re["stratum"] == sb)
+                    & (re["model"].isin(["firth_subband", "fixed_subband"]))
+                ]
                 if len(r) > 0:
                     r = r.iloc[0]
                     sub_bands.append(
@@ -444,15 +447,15 @@ def fig_mg_stratified():
             dict(or_=0.92, lo=0.58, hi=1.47, p=0.73),
         ]
         sub_bands = [
-            dict(or_=0.83, lo=0.49, hi=1.39, p=0.47),
-            dict(or_=0.35, lo=0.16, hi=0.76, p=0.008),
-            dict(or_=0.34, lo=0.12, hi=0.97, p=0.044),
+            dict(or_=0.90, lo=0.52, hi=1.49, p=0.69),
+            dict(or_=0.44, lo=0.21, hi=0.82, p=0.008),
+            dict(or_=0.50, lo=0.19, hi=1.15, p=0.10),
         ]
         int_p_eicu = 0.005
         int_p_mimic = 0.12
 
-    # Khalili RCT reference (target ~3.0 mg/dL, adj OR 0.26)
-    KHALILI_OR = 0.26
+    # (Khalili reference line removed in v6 — 10 events insufficient
+    #  for comparison with RCT at same concentration)
 
     strata_labels = ["<1.8", "1.8\u20132.0", "2.0\u20132.3", ">2.3"]
     sub_labels = ["2.3\u20132.6", "2.6\u20133.0", ">3.0"]
@@ -623,21 +626,6 @@ def fig_mg_stratified():
     # ── Panel b: Narrow sub-bands within >2.3 (eICU only) ───────
     ax = ax_b
     ax.axvline(1, color=C_GRAY, linestyle="--", linewidth=0.5, zorder=0)
-
-    # Khalili reference line
-    ax.axvline(
-        KHALILI_OR, color=C_GREEN, linestyle=":", linewidth=0.8, zorder=0, alpha=0.7
-    )
-    ax.text(
-        KHALILI_OR * 0.85,
-        -0.4,
-        f"Khalili RCT\nOR {KHALILI_OR}",
-        fontsize=5,
-        color=C_GREEN,
-        ha="right",
-        va="top",
-        style="italic",
-    )
 
     y_sub = []
     y_sub_labels = []

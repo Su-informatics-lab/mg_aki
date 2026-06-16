@@ -14,7 +14,7 @@
 # ============================================================================
 
 suppressPackageStartupMessages({
-  library(sandwich); library(lmtest); library(lme4)
+  library(sandwich); library(lmtest); library(lme4); library(logistf)
 })
 RESULTS <- path.expand("~/mg_aki/results")
 
@@ -380,39 +380,44 @@ if ("B" %in% sections) {
       }, error = function(e) cat("    Hospital RE FAILED\n"))
     }
 
-    # ── Narrow sub-bands within >2.3 ────────────────────────────
-    cat(sprintf("\n  ── Narrow sub-bands within >2.3 ──\n"))
+    # ── Narrow sub-bands within >2.3 (Firth penalized) ───────────
+    cat(sprintf("\n  ── Narrow sub-bands within >2.3 (Firth, 3 covariates) ──\n"))
     d_hi <- dat[dat$mg_stratum == ">2.3", ]
     d_hi$mg_subband <- cut(d_hi$first_mg_value,
       breaks = c(2.3, 2.6, 3.0, Inf),
       labels = c("2.3-2.6", "2.6-3.0", ">3.0"),
       right = FALSE, include.lowest = TRUE)
 
+    firth_covars <- intersect(c("age", "is_female", "baseline_creatinine"),
+                              names(d_hi))
+    firth_fml <- as.formula(paste("aki_kdigo1 ~ mg_supp +",
+                                   paste(firth_covars, collapse = "+")))
+
     for (sb in c("2.3-2.6", "2.6-3.0", ">3.0")) {
       d_sb <- d_hi[d_hi$mg_subband == sb, ]
       n_trt <- sum(d_sb$mg_supp)
       n_ctrl <- nrow(d_sb) - n_trt
-      if (n_trt < 10 || n_ctrl < 10) next
-      fml <- as.formula(paste("aki_kdigo1 ~ mg_supp +", cov_str))
+      n_events_trt <- sum(d_sb$aki_kdigo1[d_sb$mg_supp == 1])
+      n_events_ctrl <- sum(d_sb$aki_kdigo1[d_sb$mg_supp == 0])
+      if (n_trt < 5 || n_ctrl < 5) next
       tryCatch({
-        fit <- glm(fml, data = d_sb, family = binomial())
-        ct <- coeftest(fit, vcov. = vcovHC(fit, type = "HC1"))
-        or <- exp(ct[2, 1])
-        lo <- exp(ct[2, 1] - 1.96 * ct[2, 2])
-        hi <- exp(ct[2, 1] + 1.96 * ct[2, 2])
-        p  <- 2 * pnorm(-abs(ct[2, 1] / ct[2, 2]))
+        fit <- logistf(firth_fml, data = d_sb)
+        idx <- which(names(coef(fit)) == "mg_supp")
+        or <- exp(coef(fit)[idx])
+        ci <- exp(confint(fit)[idx, ])
+        lo <- ci[1]; hi <- ci[2]
+        p <- fit$prob[idx]
         sig <- ifelse(p < 0.05, " *", "")
-        cat(sprintf("    %-10s N=%4d trt=%3d OR %.3f (%.3f-%.3f) P=%.4f  AKI: trt=%.0f%% ctrl=%.0f%%%s\n",
-            sb, nrow(d_sb), n_trt, or, lo, hi, p,
-            100 * mean(d_sb$aki_kdigo1[d_sb$mg_supp == 1]),
-            100 * mean(d_sb$aki_kdigo1[d_sb$mg_supp == 0]), sig))
+        cat(sprintf("    %-10s N=%4d trt=%3d(%d events) ctrl=%4d(%d events) Firth OR %.3f (%.3f-%.3f) P=%.4f%s\n",
+            sb, nrow(d_sb), n_trt, n_events_trt, n_ctrl, n_events_ctrl,
+            or, lo, hi, p, sig))
         results_b[[length(results_b) + 1]] <- data.frame(
-          stratum = paste0(">2.3:", sb), model = "fixed_subband",
+          stratum = paste0(">2.3:", sb), model = "firth_subband",
           n = nrow(d_sb), n_trt = n_trt,
           n_hosp = length(unique(d_sb$hospitalid)),
           or = round(or, 3), lo = round(lo, 3), hi = round(hi, 3),
           p = round(p, 4))
-      }, error = function(e) cat(sprintf("    %-10s FAILED\n", sb)))
+      }, error = function(e) cat(sprintf("    %-10s Firth FAILED: %s\n", sb, e$message)))
     }
 
     # ── Within-hospital meta-analysis (>2.3) ────────────────────
