@@ -98,7 +98,7 @@ RENAME_MAP = {
     "neuro_encephalopathy": "encephalopathy",
 }
 
-# ◆ 31 covariates (matches 02_analysis.R)
+# ◆ 30 PS covariates (egfr replaces baseline_creatinine)
 PS_COVARS = [
     "age",
     "is_female",
@@ -147,7 +147,6 @@ COVAR_LABELS = {
     "pvd": "PVD",
     "stroke": "Stroke",
     "liver_disease": "Liver disease",
-    "baseline_creatinine": "Baseline Cr",
     "egfr": "eGFR",
     "loop_diuretics": "Loop diuretics",
     "nsaids": "NSAIDs",
@@ -164,8 +163,6 @@ COVAR_LABELS = {
     "first_mg_value": "First serum Mg",
     "first_lactate": "First lactate",
     "lactate_missing": "Lactate missing",
-    "alcohol_history": "Alcohol history",
-    "preexisting_af": "Pre-existing AF",
 }
 
 
@@ -571,17 +568,12 @@ def fit_ps_weights(d, trt_col, covars):
 
 def plot_love(ax, d, trt_col, covars, title=""):
     available = [c for c in covars if c in d.columns]
-    extra_vars = [
-        v
-        for v in ["alcohol_history", "preexisting_af"]
-        if v in d.columns and v not in available
-    ]
     ow, iptw, mask = fit_ps_weights(d, trt_col, available)
     d_cc = d[mask].copy()
     trt = d_cc[trt_col].values
     ow_cc = ow[mask]
     iptw_cc = iptw[mask]
-    smd_raw, smd_ow, smd_iptw, labels, in_model = [], [], [], [], []
+    smd_raw, smd_ow, smd_iptw, labels = [], [], [], []
     for v in available:
         if not np.issubdtype(d_cc[v].dtype, np.number):
             continue
@@ -589,27 +581,16 @@ def plot_love(ax, d, trt_col, covars, title=""):
         smd_ow.append(compute_smd(d_cc[v].values, trt, ow_cc))
         smd_iptw.append(compute_smd(d_cc[v].values, trt, iptw_cc))
         labels.append(COVAR_LABELS.get(v, v))
-        in_model.append(True)
-    for v in extra_vars:
-        if not np.issubdtype(d_cc[v].dtype, np.number) or d_cc[v].isna().all():
-            continue
-        smd_raw.append(compute_smd(d_cc[v].values, trt))
-        smd_ow.append(compute_smd(d_cc[v].values, trt, ow_cc))
-        smd_iptw.append(compute_smd(d_cc[v].values, trt, iptw_cc))
-        labels.append(f"* {COVAR_LABELS.get(v, v)}")
-        in_model.append(False)
     smd_raw = np.array(smd_raw)
     smd_ow = np.array(smd_ow)
     smd_iptw = np.array(smd_iptw)
     labels = np.array(labels)
-    in_model = np.array(in_model)
     order = np.argsort(smd_raw)
-    smd_raw, smd_ow, smd_iptw, labels, in_model = (
+    smd_raw, smd_ow, smd_iptw, labels = (
         smd_raw[order],
         smd_ow[order],
         smd_iptw[order],
         labels[order],
-        in_model[order],
     )
     y = np.arange(len(labels))
     ax.axvline(0.10, color=C_GRAY, linestyle="--", linewidth=0.5, alpha=0.7)
@@ -655,8 +636,6 @@ def plot_love(ax, d, trt_col, covars, title=""):
             linewidth=0.2,
             zorder=1,
         )
-        if not in_model[i]:
-            ax.axhspan(y[i] - 0.4, y[i] + 0.4, color="#f0f0f0", zorder=0)
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=5)
     ax.set_xlabel("|Standardized mean difference|")
@@ -664,36 +643,14 @@ def plot_love(ax, d, trt_col, covars, title=""):
     ax.legend(loc="lower right", fontsize=5, markerscale=0.8, handletextpad=0.3)
     if title:
         ax.set_title(title, fontsize=7, fontweight="bold")
-    n_in = in_model.sum()
-    max_ow_in = max(smd_ow[in_model]) if n_in > 0 else 0
     print(f"    {title}")
     print(
-        f"      In-model ({n_in}):  raw max={max(smd_raw[in_model]):.3f}, OW max={max_ow_in:.4f}"
+        f"      {len(labels)} covariates: raw max={max(smd_raw):.3f}, OW max={max(smd_ow):.4f}"
     )
-    if (~in_model).sum() > 0:
-        print(
-            f"      Out-of-model ({(~in_model).sum()}): OW max={max(smd_ow[~in_model]):.4f}"
-        )
 
 
 def run_love(d_e, d_m):
     print(f"\n{'='*65}\nLOVE PLOTS (raw vs IPTW vs OW)\n{'='*65}")
-    for fname, target in [
-        ("01_analysis_a_cohort_enriched.csv", "d_e"),
-        ("04_mimic_cohort_enriched.csv", "d_m"),
-    ]:
-        path = os.path.join(RESULTS, fname)
-        if os.path.exists(path):
-            enriched = standardize(pd.read_csv(path))
-            tgt = d_e if target == "d_e" else d_m
-            if len(enriched) == len(tgt):
-                new_cols = [c for c in enriched.columns if c not in tgt.columns]
-                if new_cols:
-                    if target == "d_e":
-                        d_e = d_e.join(enriched[new_cols])
-                    else:
-                        d_m = d_m.join(enriched[new_cols])
-                    print(f"  Loaded {len(new_cols)} extra vars from enriched {target}")
 
     fig, axes = plt.subplots(2, 2, figsize=(W_DOUBLE, 8.0))
     fig.subplots_adjust(hspace=0.35, wspace=0.50)
