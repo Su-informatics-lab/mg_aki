@@ -61,8 +61,8 @@ mpl.rcParams["savefig.bbox"] = "tight"
 mpl.rcParams["savefig.pad_inches"] = 0.02
 
 # Wong/Okabe-Ito palette
-C_BLUE = "#0072B2"  # eICU
-C_VERMILLION = "#D55E00"  # MIMIC
+C_BLUE = "#0072B2"  # MIMIC
+C_VERMILLION = "#D55E00"  # eICU
 C_BLACK = "#000000"  # Pooled / reference
 C_SKYBLUE = "#56B4E9"
 C_GREEN = "#009E73"
@@ -228,7 +228,7 @@ def fig1_forest():
     for _, r in fd.iterrows():
         if np.isnan(r["or_"]):
             continue
-        color = {"eICU": C_BLUE, "MIMIC-IV": C_VERMILLION, "Pooled": C_BLACK}.get(
+        color = {"eICU": C_VERMILLION, "MIMIC-IV": C_BLUE, "Pooled": C_BLACK}.get(
             r["source"], C_GRAY
         )
         marker = "D" if r["source"] == "Pooled" else "s"
@@ -310,7 +310,7 @@ def fig1_forest():
             [0],
             marker="s",
             color="w",
-            markerfacecolor=C_BLUE,
+            markerfacecolor=C_VERMILLION,
             markersize=6,
             label="eICU-CRD",
         ),
@@ -319,7 +319,7 @@ def fig1_forest():
             [0],
             marker="s",
             color="w",
-            markerfacecolor=C_VERMILLION,
+            markerfacecolor=C_BLUE,
             markersize=6,
             label="MIMIC-IV",
         ),
@@ -463,7 +463,7 @@ def fig_mg_stratified():
             ax.plot(
                 [s_m["lo"], s_m["hi"]],
                 [y, y],
-                color=C_VERMILLION,
+                color=C_BLUE,
                 linewidth=1.0,
                 solid_capstyle="round",
             )
@@ -471,7 +471,7 @@ def fig_mg_stratified():
                 s_m["or_"],
                 y,
                 "s",
-                color=C_VERMILLION,
+                color=C_BLUE,
                 markersize=5,
                 markeredgewidth=0,
                 zorder=5,
@@ -484,7 +484,7 @@ def fig_mg_stratified():
                 va="center",
                 ha="left",
                 fontsize=5,
-                color=C_VERMILLION,
+                color=C_BLUE,
             )
         y_mimic = y
         y += 2 * offset_db
@@ -494,7 +494,7 @@ def fig_mg_stratified():
             ax.plot(
                 [s_e["lo"], s_e["hi"]],
                 [y, y],
-                color=C_BLUE,
+                color=C_VERMILLION,
                 linewidth=1.0,
                 solid_capstyle="round",
             )
@@ -502,7 +502,7 @@ def fig_mg_stratified():
                 s_e["or_"],
                 y,
                 "s",
-                color=C_BLUE,
+                color=C_VERMILLION,
                 markersize=5,
                 markeredgewidth=0,
                 zorder=5,
@@ -515,7 +515,7 @@ def fig_mg_stratified():
                 va="center",
                 ha="left",
                 fontsize=5,
-                color=C_BLUE,
+                color=C_VERMILLION,
             )
         y_eicu = y
 
@@ -576,7 +576,7 @@ def fig_mg_stratified():
             [0],
             marker="s",
             color="w",
-            markerfacecolor=C_BLUE,
+            markerfacecolor=C_VERMILLION,
             markersize=5,
             label="eICU-CRD",
         ),
@@ -585,7 +585,7 @@ def fig_mg_stratified():
             [0],
             marker="s",
             color="w",
-            markerfacecolor=C_VERMILLION,
+            markerfacecolor=C_BLUE,
             markersize=5,
             label="MIMIC-IV",
         ),
@@ -799,7 +799,7 @@ def efig2_interaction():
     ax.axhline(1, color=C_GRAY, linestyle="--", linewidth=0.5, zorder=0)
 
     offsets = {"eICU-CRD": -0.12, "MIMIC-IV": 0.12}
-    colors = {"eICU-CRD": C_BLUE, "MIMIC-IV": C_VERMILLION}
+    colors = {"eICU-CRD": C_VERMILLION, "MIMIC-IV": C_BLUE}
     markers = {"eICU-CRD": "s", "MIMIC-IV": "^"}
 
     for db in ["eICU-CRD", "MIMIC-IV"]:
@@ -857,8 +857,8 @@ def efig_spline():
     fig, ax = plt.subplots(figsize=(W_SINGLE, W_SINGLE * 0.75))
 
     for db, color, label in [
-        ("eICU", C_BLUE, "eICU-CRD"),
-        ("MIMIC", C_VERMILLION, "MIMIC-IV"),
+        ("eICU", C_VERMILLION, "eICU-CRD"),
+        ("MIMIC", C_BLUE, "MIMIC-IV"),
     ]:
         g = grid[grid.db == db].sort_values("mg")
         ax.fill_between(g.mg, g.lo, g.hi, alpha=0.12, color=color, linewidth=0)
