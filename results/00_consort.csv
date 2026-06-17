@@ -4,5 +4,9 @@ adults,200234
 cardiac_surgery,34249
 first_stay,26715
 has_mg,9379
-has_baseline_cr,8650
-eligible_final,8109
+has_baseline_cr,5101
+eligible_pre_landmark,4769
+landmark_excluded,42
+eligible_post_landmark,4727
+excluded_prevalent_aki,95
+eligible_final,4632

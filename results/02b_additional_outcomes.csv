@@ -1,0 +1,13 @@
+"db","analysis","or","lo","hi","p"
+"eICU","ow_composite",0.884,0.715,1.092,0.253
+"eICU","iptw_composite",0.815,0.638,1.041,0.1007
+"eICU","ac_poaf",1.41,0.791,2.516,0.2444
+"eICU","ac_composite",0.813,0.57,1.16,0.2534
+"eICU","ow_transfusion",0.877,0.604,1.274,0.4915
+"eICU","ac_transfusion",0.994,0.69,1.431,0.9737
+"MIMIC","ow_composite",1.002,0.726,1.385,0.9881
+"MIMIC","iptw_composite",1.067,0.75,1.518,0.7192
+"MIMIC","ac_poaf",0.711,0.417,1.211,0.2089
+"MIMIC","ac_composite",0.842,0.503,1.411,0.5147
+"MIMIC","ow_transfusion",1.097,0.814,1.477,0.5432
+"MIMIC","ac_transfusion",1.246,0.781,1.989,0.3552
