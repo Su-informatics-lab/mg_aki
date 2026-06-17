@@ -335,10 +335,12 @@ def fig1_forest():
     ]
     ax.legend(
         handles=legend_elements,
-        loc="upper left",
-        bbox_to_anchor=(0.40, 1.0),
+        loc="upper center",
+        bbox_to_anchor=(0.55, 1.02),
+        ncol=3,
         fontsize=6,
         handletextpad=0.3,
+        columnspacing=1.0,
         borderpad=0.2,
         frameon=False,
     )
