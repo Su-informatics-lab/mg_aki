@@ -25,29 +25,6 @@ suppressPackageStartupMessages({
 SEED <- 42
 M_IMP <- 5  # number of MICE imputations
 
-# ── Helper: Rubin's rules for log-OR ──────────────────────────────────────
-rubin_pool <- function(ests, ses) {
-  # ests: vector of point estimates (log-OR) across imputations
-  # ses:  vector of standard errors across imputations
-  m <- length(ests)
-  qbar <- mean(ests)                          # pooled estimate
-  ubar <- mean(ses^2)                         # within-imputation variance
-  b    <- var(ests)                            # between-imputation variance
-  tv   <- ubar + (1 + 1/m) * b               # total variance
-  se   <- sqrt(tv)
-  # Barnard-Rubin df
-  lambda <- (b + b/m) / tv
-  df_old <- (m - 1) / lambda^2
-  df_obs <- ubar / tv * (nrow(dat) - length(coef(ps_fit_template)) - 1) # approximate
-  # Use simpler df
-  df <- df_old
-  or  <- exp(qbar)
-  lo  <- exp(qbar - 1.96 * se)
-  hi  <- exp(qbar + 1.96 * se)
-  p   <- 2 * pnorm(-abs(qbar / se))
-  list(or = or, lo = lo, hi = hi, p = p, logOR = qbar, se = se)
-}
-
 # ── Helper: simple pooling (no df needed) ─────────────────────────────────
 pool_simple <- function(ests, ses) {
   m <- length(ests)
@@ -83,7 +60,6 @@ smd <- function(x, trt, w = NULL) {
   if (is.null(w)) w <- rep(1, length(x))
   m1 <- weighted.mean(x[trt == 1], w[trt == 1], na.rm = TRUE)
   m0 <- weighted.mean(x[trt == 0], w[trt == 0], na.rm = TRUE)
-  # unweighted pooled SD
   s1 <- sd(x[trt == 1], na.rm = TRUE)
   s0 <- sd(x[trt == 0], na.rm = TRUE)
   sp <- sqrt((s1^2 + s0^2) / 2)
@@ -96,7 +72,6 @@ smd <- function(x, trt, w = NULL) {
 # ============================================================================
 
 standardize <- function(dat) {
-  # Rename to canonical names used by the analysis
   rmap <- c(
     "mg_supplementation"     = "mg_supp",
     "hosp_mortality"         = "hospital_mortality",
@@ -131,12 +106,10 @@ standardize <- function(dat) {
       names(dat)[names(dat) == old] <- new
     }
   }
-  # eICU age is sometimes "> 89" string — use age_num
   if (is.character(dat$age) && "age" %in% names(dat)) {
     dat$age <- suppressWarnings(as.numeric(dat$age))
     dat$age[is.na(dat$age)] <- 90
   }
-  # Surgery dummies
   if ("surgery_type" %in% names(dat)) {
     dat$surg_cabg     <- as.integer(dat$surgery_type == "cabg")
     dat$surg_valve    <- as.integer(dat$surgery_type == "valve")
@@ -168,11 +141,10 @@ run_analysis <- function(dat, db_name, has_cluster = FALSE) {
 
   results <- list()
 
-  # ── Identify available columns ────────────────────────────────────────
   has_lactate <- "first_lactate" %in% names(dat)
   has_ac      <- "ac_group" %in% names(dat)
 
-  # ── Lactate: median + missing indicator (79% missing, MNAR) ───────────
+  # ── Lactate: median + missing indicator ─────────────────────────────
   if (has_lactate) {
     n_lac_na <- sum(is.na(dat$first_lactate))
     pct_lac  <- round(100 * n_lac_na / nrow(dat), 1)
@@ -182,11 +154,10 @@ run_analysis <- function(dat, db_name, has_cluster = FALSE) {
     dat$first_lactate[is.na(dat$first_lactate)] <- lac_med
   }
 
-  # ── MICE targets: only low-missingness variables ──────────────────────
+  # ── MICE targets ────────────────────────────────────────────────────
   mice_vars <- c("bmi", "first_heartrate", "first_calcium", "first_potassium")
   mice_vars <- mice_vars[mice_vars %in% names(dat)]
 
-  # Count missingness
   for (v in mice_vars) {
     n_na <- sum(is.na(dat[[v]]))
     if (n_na > 0) cat(sprintf("  MICE target: %s (%d NA, %.1f%%)\n", v, n_na,
@@ -195,7 +166,7 @@ run_analysis <- function(dat, db_name, has_cluster = FALSE) {
 
   any_missing <- any(sapply(mice_vars, function(v) sum(is.na(dat[[v]])) > 0))
 
-  # ── Build PS formula ──────────────────────────────────────────────────
+  # ── Build PS formula ────────────────────────────────────────────────
   ps_covars <- c("age", "is_female", "bmi",
                  "surg_cabg", "surg_valve", "surg_combined",
                  "heart_failure", "hypertension", "diabetes", "ckd",
@@ -204,36 +175,30 @@ run_analysis <- function(dat, db_name, has_cluster = FALSE) {
                  "loop_diuretics", "nsaids", "acei_arb", "ppi",
                  "beta_blockers", "steroids", "antiarrhythmics",
                  "first_potassium", "first_calcium", "first_heartrate",
-                 "vasopressor_6h", "first_mg_value")
+                 "vasopressor_6h", "transfusion_6h", "first_mg_value")
 
   if (has_lactate) {
     ps_covars <- c(ps_covars, "first_lactate", "lactate_missing")
   }
 
-  # Keep only covariates that exist in data
   ps_covars <- ps_covars[ps_covars %in% names(dat)]
   cat(sprintf("  PS model: %d covariates\n", length(ps_covars)))
 
   ps_formula <- as.formula(paste("mg_supp ~", paste(ps_covars, collapse = " + ")))
 
-  # ── Cluster variable ──────────────────────────────────────────────────
   cluster_var <- NULL
   if (has_cluster && "hospitalid" %in% names(dat)) {
     cluster_var <- dat$hospitalid
   }
 
-  # ── Run MICE (or single run if no missing) ────────────────────────────
+  # ── Run MICE ────────────────────────────────────────────────────────
   if (any_missing) {
     cat(sprintf("  Running MICE (m=%d, pmm)...\n", M_IMP))
-
-    # Include predictors that help imputation
     imp_predictors <- c(mice_vars, "age", "is_female", "baseline_creatinine",
                         "mg_supp", "aki_kdigo1")
     imp_predictors <- unique(imp_predictors[imp_predictors %in% names(dat)])
-
     imp <- mice(dat[, imp_predictors], m = M_IMP, method = "pmm",
                 seed = SEED, printFlag = FALSE, maxit = 10)
-
     cat("  MICE converged.\n")
     n_imp <- M_IMP
   } else {
@@ -241,24 +206,21 @@ run_analysis <- function(dat, db_name, has_cluster = FALSE) {
     n_imp <- 1
   }
 
-  # ── Storage for pooling across imputations ────────────────────────────
-  # Each analysis stores logOR and SE per imputation
+  # ── Storage ─────────────────────────────────────────────────────────
   store <- list(
-    ow_aki1  = list(est = numeric(0), se = numeric(0)),
-    ow_mort  = list(est = numeric(0), se = numeric(0)),
-    psm_aki1 = list(est = numeric(0), se = numeric(0)),
+    ow_aki1   = list(est = numeric(0), se = numeric(0)),
+    ow_mort   = list(est = numeric(0), se = numeric(0)),
+    psm_aki1  = list(est = numeric(0), se = numeric(0)),
     iptw_aki1 = list(est = numeric(0), se = numeric(0)),
-    ow_frac  = list(est = numeric(0), se = numeric(0)),
+    ow_frac   = list(est = numeric(0), se = numeric(0)),
     ow_enceph = list(est = numeric(0), se = numeric(0)),
-    ac_aki1  = list(est = numeric(0), se = numeric(0))
+    ac_aki1   = list(est = numeric(0), se = numeric(0))
   )
 
-  # Track balance from last imputation for reporting
   final_ow_smds <- NULL
   final_ac_mg_smd <- NA
 
   for (i in seq_len(n_imp)) {
-    # ── Get imputed data ──────────────────────────────────────────────
     d <- dat
     if (any_missing && n_imp > 1) {
       imputed <- complete(imp, i)
@@ -267,85 +229,70 @@ run_analysis <- function(dat, db_name, has_cluster = FALSE) {
       }
     }
 
-    # ── Drop rows with remaining NAs in PS covariates ─────────────────
     ps_complete <- complete.cases(d[, ps_covars])
     d_ps <- d[ps_complete, ]
-    if (nrow(d_ps) < nrow(d)) {
-      cat(sprintf("    Imp %d: dropped %d rows with remaining NA in PS covars\n",
-                  i, nrow(d) - nrow(d_ps)))
-    }
 
-    # ── Estimate propensity score ─────────────────────────────────────
     ps_fit <- glm(ps_formula, data = d_ps, family = binomial())
-    d_ps$ps <- fitted(ps_fit)
+    d_ps$ps <- pmax(pmin(fitted(ps_fit), 0.99), 0.01)
 
-    # Clip extreme PS
-    d_ps$ps <- pmax(pmin(d_ps$ps, 0.99), 0.01)
-
-    # ── Overlap weights ───────────────────────────────────────────────
+    # OW
     d_ps$ow <- ifelse(d_ps$mg_supp == 1, 1 - d_ps$ps, d_ps$ps)
 
-    # ── Stabilized IPTW ───────────────────────────────────────────────
+    # Stabilized IPTW
     prev <- mean(d_ps$mg_supp)
-    d_ps$iptw <- ifelse(d_ps$mg_supp == 1,
-                        prev / d_ps$ps,
-                        (1 - prev) / (1 - d_ps$ps))
-    # Truncate at 1st/99th percentile
-    q01 <- quantile(d_ps$iptw, 0.01)
-    q99 <- quantile(d_ps$iptw, 0.99)
+    d_ps$iptw <- ifelse(d_ps$mg_supp == 1, prev / d_ps$ps, (1 - prev) / (1 - d_ps$ps))
+    q01 <- quantile(d_ps$iptw, 0.01); q99 <- quantile(d_ps$iptw, 0.99)
     d_ps$iptw <- pmax(pmin(d_ps$iptw, q99), q01)
 
-    # ── OW balance check (last imputation) ────────────────────────────
+    # Balance check (last imp)
     if (i == n_imp) {
       ow_smds <- sapply(ps_covars, function(v) {
-        if (is.numeric(d_ps[[v]])) {
-          smd(d_ps[[v]], d_ps$mg_supp, d_ps$ow)
-        } else { NA }
+        if (is.numeric(d_ps[[v]])) smd(d_ps[[v]], d_ps$mg_supp, d_ps$ow) else NA
       })
       final_ow_smds <- ow_smds
     }
 
-    # ── OW: AKI KDIGO≥1 ──────────────────────────────────────────────
     cl <- if (has_cluster) cluster_var[ps_complete] else NULL
+
+    # OW: AKI
     res <- wglm(aki_kdigo1 ~ mg_supp, d_ps, d_ps$ow, cl)
     store$ow_aki1$est <- c(store$ow_aki1$est, res$logOR)
     store$ow_aki1$se  <- c(store$ow_aki1$se, res$se)
 
-    # ── OW: Mortality ─────────────────────────────────────────────────
+    # OW: Mortality
     if ("hospital_mortality" %in% names(d_ps)) {
       res <- wglm(hospital_mortality ~ mg_supp, d_ps, d_ps$ow, cl)
       store$ow_mort$est <- c(store$ow_mort$est, res$logOR)
       store$ow_mort$se  <- c(store$ow_mort$se, res$se)
     }
 
-    # ── OW: Fracture ──────────────────────────────────────────────────
+    # OW: Fracture
     if ("fracture" %in% names(d_ps)) {
       res <- wglm(fracture ~ mg_supp, d_ps, d_ps$ow, cl)
       store$ow_frac$est <- c(store$ow_frac$est, res$logOR)
       store$ow_frac$se  <- c(store$ow_frac$se, res$se)
     }
 
-    # ── OW: Encephalopathy ────────────────────────────────────────────
+    # OW: Encephalopathy
     if ("encephalopathy" %in% names(d_ps)) {
       res <- wglm(encephalopathy ~ mg_supp, d_ps, d_ps$ow, cl)
       store$ow_enceph$est <- c(store$ow_enceph$est, res$logOR)
       store$ow_enceph$se  <- c(store$ow_enceph$se, res$se)
     }
 
-    # ── IPTW: AKI (sensitivity) ───────────────────────────────────────
+    # IPTW: AKI
     res <- wglm(aki_kdigo1 ~ mg_supp, d_ps, d_ps$iptw, cl)
     store$iptw_aki1$est <- c(store$iptw_aki1$est, res$logOR)
     store$iptw_aki1$se  <- c(store$iptw_aki1$se, res$se)
 
-    # ── PSM: AKI (co-primary) ─────────────────────────────────────────
+    # PSM: AKI
     tryCatch({
       m_out <- matchit(ps_formula, data = d_ps, method = "nearest",
                        distance = d_ps$ps, caliper = 0.2, std.caliper = TRUE,
                        ratio = 1, replace = FALSE)
       md <- match.data(m_out)
       md$.w <- md$weights
-      psm_fit <- glm(aki_kdigo1 ~ mg_supp, data = md, family = binomial(),
-                     weights = .w)
+      psm_fit <- glm(aki_kdigo1 ~ mg_supp, data = md, family = binomial(), weights = .w)
       vc <- vcovHC(psm_fit, type = "HC1")
       ct <- coeftest(psm_fit, vcov. = vc)
       trt_row <- which(rownames(ct) == "mg_supp")
@@ -356,7 +303,7 @@ run_analysis <- function(dat, db_name, has_cluster = FALSE) {
       cat(sprintf("    PSM failed imp %d: %s\n", i, e$message))
     })
 
-    # ── Active Comparator: OW ─────────────────────────────────────────
+    # AC: OW
     if (has_ac && "ac_group" %in% names(d_ps)) {
       d_ac <- d_ps[d_ps$ac_group %in% c("mg_k", "k_only"), ]
       if (nrow(d_ac) > 50 && sum(d_ac$ac_group == "mg_k") > 10) {
@@ -364,11 +311,9 @@ run_analysis <- function(dat, db_name, has_cluster = FALSE) {
         ac_formula <- as.formula(paste("ac_trt ~", paste(ps_covars, collapse = " + ")))
         tryCatch({
           ac_ps_fit <- glm(ac_formula, data = d_ac, family = binomial())
-          d_ac$ac_ps <- fitted(ac_ps_fit)
-          d_ac$ac_ps <- pmax(pmin(d_ac$ac_ps, 0.99), 0.01)
+          d_ac$ac_ps <- pmax(pmin(fitted(ac_ps_fit), 0.99), 0.01)
           d_ac$ac_ow <- ifelse(d_ac$ac_trt == 1, 1 - d_ac$ac_ps, d_ac$ac_ps)
 
-          # AC Mg balance (last imputation)
           if (i == n_imp && "first_mg_value" %in% names(d_ac)) {
             final_ac_mg_smd <- smd(d_ac$first_mg_value, d_ac$ac_trt, d_ac$ac_ow)
           }
@@ -383,17 +328,14 @@ run_analysis <- function(dat, db_name, has_cluster = FALSE) {
     }
   }
 
-  # ── Pool results via Rubin's rules ──────────────────────────────────
+  # ── Pool results ────────────────────────────────────────────────────
   cat("\n  ── Pooled Results (Rubin's rules, m=", n_imp, ") ──\n")
 
   out_rows <- list()
-
   for (analysis in names(store)) {
     s <- store[[analysis]]
     if (length(s$est) == 0) next
-
     if (length(s$est) == 1) {
-      # No imputation — just report directly
       r <- list(or = exp(s$est), lo = exp(s$est - 1.96*s$se),
                 hi = exp(s$est + 1.96*s$se),
                 p = 2*pnorm(-abs(s$est/s$se)),
@@ -401,11 +343,9 @@ run_analysis <- function(dat, db_name, has_cluster = FALSE) {
     } else {
       r <- pool_simple(s$est, s$se)
     }
-
     sig <- ifelse(r$p < 0.05, " *", "")
     cat(sprintf("  %-15s OR=%.3f (%.3f–%.3f) P=%.4f%s\n",
                 analysis, r$or, r$lo, r$hi, r$p, sig))
-
     out_rows[[length(out_rows) + 1]] <- data.frame(
       db = db_name, analysis = analysis,
       or = round(r$or, 3), lo = round(r$lo, 3), hi = round(r$hi, 3),
@@ -414,7 +354,6 @@ run_analysis <- function(dat, db_name, has_cluster = FALSE) {
     )
   }
 
-  # ── OW balance report ───────────────────────────────────────────────
   if (!is.null(final_ow_smds)) {
     max_smd <- max(final_ow_smds, na.rm = TRUE)
     mg_smd  <- final_ow_smds["first_mg_value"]
@@ -425,7 +364,6 @@ run_analysis <- function(dat, db_name, has_cluster = FALSE) {
                 sum(!is.na(final_ow_smds))))
   }
 
-  # ── AC Mg balance report ────────────────────────────────────────────
   if (!is.na(final_ac_mg_smd)) {
     cat(sprintf("  AC subgroup: first_mg_value weighted SMD = %.4f %s\n",
                 final_ac_mg_smd,
@@ -449,17 +387,12 @@ cat("FIXED-EFFECTS META-ANALYSIS\n")
 cat("======================================================================\n")
 
 meta_rows <- list()
-
 for (a in unique(c(res_e$analysis, res_m$analysis))) {
   e <- res_e[res_e$analysis == a, ]
   m <- res_m[res_m$analysis == a, ]
   if (nrow(e) == 0 || nrow(m) == 0) next
 
-  # Inverse-variance weights
-  w_e <- 1 / e$se^2
-  w_m <- 1 / m$se^2
-  w_tot <- w_e + w_m
-
+  w_e <- 1 / e$se^2; w_m <- 1 / m$se^2; w_tot <- w_e + w_m
   pool_logOR <- (w_e * e$logOR + w_m * m$logOR) / w_tot
   pool_se    <- sqrt(1 / w_tot)
   pool_or    <- exp(pool_logOR)
@@ -467,7 +400,6 @@ for (a in unique(c(res_e$analysis, res_m$analysis))) {
   pool_hi    <- exp(pool_logOR + 1.96 * pool_se)
   pool_p     <- 2 * pnorm(-abs(pool_logOR / pool_se))
 
-  # I-squared
   Q <- w_e * (e$logOR - pool_logOR)^2 + w_m * (m$logOR - pool_logOR)^2
   I2 <- max(0, (Q - 1) / Q) * 100
 
@@ -479,8 +411,7 @@ for (a in unique(c(res_e$analysis, res_m$analysis))) {
     db = "Pooled", analysis = a,
     or = round(pool_or, 3), lo = round(pool_lo, 3), hi = round(pool_hi, 3),
     p = round(pool_p, 4), logOR = round(pool_logOR, 4), se = round(pool_se, 4),
-    I2 = round(I2, 0),
-    stringsAsFactors = FALSE
+    I2 = round(I2, 0), stringsAsFactors = FALSE
   )
 }
 
