@@ -172,6 +172,15 @@ COVAR_LABELS = {
     "first_heartrate": "First HR",
     "vasopressor_6h": "Vasopressor",
     "first_mg_value": "First serum Mg",
+    "alcohol_history": "Alcohol history",
+    "vent_duration_h": "Ventilation duration",
+    "icu_los_h": "ICU LOS",
+    "rrt_7d": "RRT (7 d)",
+    "hosp_mortality": "Hospital mortality",
+    "hospital_mortality": "Hospital mortality",
+    "has_iabp": "IABP",
+    "has_ecmo": "ECMO",
+    "preexisting_af": "Pre-existing AF",
 }
 
 
@@ -724,145 +733,216 @@ def compute_smd(x, trt, w=None):
     return abs(m1 - m0) / sp
 
 
-def fit_ps_ow(d, trt_col, covars):
-    """Fit logistic PS model + compute overlap weights. Returns weights."""
-    from numpy.linalg import LinAlgError
+def fit_ps_weights(d, trt_col, covars):
+    """Fit logistic PS → return OW + stabilized IPTW weights."""
+    from sklearn.linear_model import LogisticRegression
 
     available = [c for c in covars if c in d.columns]
     X = d[available].values.astype(float)
     y = d[trt_col].values.astype(float)
 
-    # Complete cases
     mask = ~np.isnan(X).any(axis=1) & ~np.isnan(y)
-    X, y = X[mask], y[mask]
+    X_cc, y_cc = X[mask], y[mask]
 
-    # Add intercept
-    X_int = np.column_stack([np.ones(len(X)), X])
+    lr = LogisticRegression(max_iter=2000, C=1e6, solver="lbfgs")
+    lr.fit(X_cc, y_cc)
+    ps = np.clip(lr.predict_proba(X_cc)[:, 1], 0.01, 0.99)
 
-    # Logistic regression via iteratively reweighted least squares
-    try:
-        from sklearn.linear_model import LogisticRegression
+    # Overlap weights
+    ow = np.where(y_cc == 1, 1 - ps, ps)
 
-        lr = LogisticRegression(max_iter=1000, C=1e6, solver="lbfgs", penalty="l2")
-        lr.fit(X, y)
-        ps = lr.predict_proba(X)[:, 1]
-    except ImportError:
-        # Fallback: statsmodels
-        try:
-            import statsmodels.api as sm
+    # Stabilized IPTW (truncated 1st/99th)
+    prev = y_cc.mean()
+    iptw = np.where(y_cc == 1, prev / ps, (1 - prev) / (1 - ps))
+    q01, q99 = np.percentile(iptw, [1, 99])
+    iptw = np.clip(iptw, q01, q99)
 
-            fit = sm.Logit(y, X_int).fit(disp=0, maxiter=100)
-            ps = fit.predict(X_int)
-        except Exception:
-            # Last resort: very simple logistic
-            print("    WARNING: using simple logistic approximation")
-            beta = np.zeros(X_int.shape[1])
-            for _ in range(50):
-                p = 1 / (1 + np.exp(-X_int @ beta))
-                p = np.clip(p, 1e-6, 1 - 1e-6)
-                W = np.diag(p * (1 - p))
-                try:
-                    beta += np.linalg.solve(X_int.T @ W @ X_int, X_int.T @ (y - p))
-                except LinAlgError:
-                    break
-            ps = 1 / (1 + np.exp(-X_int @ beta))
-
-    ps = np.clip(ps, 0.01, 0.99)
-    ow = np.where(y == 1, 1 - ps, ps)
-
-    # Map back to full dataframe
-    full_ps = np.full(len(d), np.nan)
+    # Map back to full length
     full_ow = np.full(len(d), np.nan)
-    full_ps[mask] = ps
+    full_iptw = np.full(len(d), np.nan)
     full_ow[mask] = ow
-    return full_ps, full_ow, mask
+    full_iptw[mask] = iptw
+    return full_ow, full_iptw, mask
 
 
 def plot_love(ax, d, trt_col, covars, title=""):
-    """Plot Love plot: unweighted vs OW-weighted SMDs."""
+    """Love plot: raw vs OW vs IPTW SMDs, plus out-of-model vars."""
     available = [c for c in covars if c in d.columns]
 
-    # Fit PS + OW
-    ps, ow, mask = fit_ps_ow(d, trt_col, available)
+    # Out-of-model variables (sanity check — OW should NOT zero these)
+    extra_vars = [
+        v
+        for v in [
+            "alcohol_history",
+            "vent_duration_h",
+            "icu_los_h",
+            "rrt_7d",
+            "hosp_mortality",
+            "hospital_mortality",
+            "has_iabp",
+            "has_ecmo",
+            "preexisting_af",
+        ]
+        if v in d.columns and v not in available
+    ]
+
+    # Fit PS → OW + IPTW
+    ow, iptw, mask = fit_ps_weights(d, trt_col, available)
 
     d_cc = d[mask].copy()
     trt = d_cc[trt_col].values
+    ow_cc = ow[mask]
+    iptw_cc = iptw[mask]
 
-    # Compute SMDs
-    smd_raw = []
-    smd_wt = []
-    labels = []
+    # Compute SMDs for in-model covariates
+    smd_raw, smd_ow, smd_iptw, labels, in_model = [], [], [], [], []
     for v in available:
         if not np.issubdtype(d_cc[v].dtype, np.number):
             continue
-        s_raw = compute_smd(d_cc[v].values, trt)
-        s_wt = compute_smd(d_cc[v].values, trt, ow[mask])
-        smd_raw.append(s_raw)
-        smd_wt.append(s_wt)
+        smd_raw.append(compute_smd(d_cc[v].values, trt))
+        smd_ow.append(compute_smd(d_cc[v].values, trt, ow_cc))
+        smd_iptw.append(compute_smd(d_cc[v].values, trt, iptw_cc))
         labels.append(COVAR_LABELS.get(v, v))
+        in_model.append(True)
 
-    # Sort by raw SMD (largest at top)
+    # Compute SMDs for out-of-model variables
+    for v in extra_vars:
+        if not np.issubdtype(d_cc[v].dtype, np.number):
+            continue
+        if d_cc[v].isna().all():
+            continue
+        smd_raw.append(compute_smd(d_cc[v].values, trt))
+        smd_ow.append(compute_smd(d_cc[v].values, trt, ow_cc))
+        smd_iptw.append(compute_smd(d_cc[v].values, trt, iptw_cc))
+        labels.append(f"* {COVAR_LABELS.get(v, v)}")
+        in_model.append(False)
+
+    smd_raw = np.array(smd_raw)
+    smd_ow = np.array(smd_ow)
+    smd_iptw = np.array(smd_iptw)
+    labels = np.array(labels)
+    in_model = np.array(in_model)
+
+    # Sort by raw SMD
     order = np.argsort(smd_raw)
-    smd_raw = np.array(smd_raw)[order]
-    smd_wt = np.array(smd_wt)[order]
-    labels = np.array(labels)[order]
+    smd_raw = smd_raw[order]
+    smd_ow = smd_ow[order]
+    smd_iptw = smd_iptw[order]
+    labels = labels[order]
+    in_model = in_model[order]
 
     y = np.arange(len(labels))
 
     # Threshold lines
-    ax.axvline(0.10, color=C_GRAY, linestyle="--", linewidth=0.5)
-    ax.axvline(0.05, color=C_GRAY, linestyle=":", linewidth=0.3)
+    ax.axvline(0.10, color=C_GRAY, linestyle="--", linewidth=0.5, alpha=0.7)
+    ax.axvline(0.05, color=C_GRAY, linestyle=":", linewidth=0.3, alpha=0.5)
 
-    # Points
+    # Three sets of markers
     ax.scatter(
         smd_raw,
         y,
         marker="o",
         facecolors="none",
         edgecolors=C_VERMILLION,
-        s=25,
+        s=20,
         linewidths=0.7,
         label="Unweighted",
         zorder=3,
     )
     ax.scatter(
-        smd_wt,
+        smd_iptw,
         y,
-        marker="o",
-        facecolors=C_BLUE,
-        edgecolors=C_BLUE,
-        s=25,
-        linewidths=0.7,
-        label="OW-weighted",
+        marker="^",
+        facecolors=C_GREEN,
+        edgecolors=C_GREEN,
+        s=18,
+        linewidths=0.5,
+        label="IPTW",
         zorder=4,
     )
+    ax.scatter(
+        smd_ow,
+        y,
+        marker="s",
+        facecolors=C_BLUE,
+        edgecolors=C_BLUE,
+        s=18,
+        linewidths=0.5,
+        label="OW",
+        zorder=5,
+    )
 
-    # Connect pairs
+    # Connect raw → IPTW → OW
     for i in range(len(y)):
         ax.plot(
-            [smd_raw[i], smd_wt[i]], [y[i], y[i]], color=C_GRAY, linewidth=0.3, zorder=1
+            [smd_raw[i], smd_iptw[i]],
+            [y[i], y[i]],
+            color=C_GRAY,
+            linewidth=0.2,
+            zorder=1,
         )
+
+    # Highlight out-of-model vars with gray background band
+    for i in range(len(y)):
+        if not in_model[i]:
+            ax.axhspan(y[i] - 0.4, y[i] + 0.4, color="#f0f0f0", zorder=0)
 
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=5)
     ax.set_xlabel("|Standardized mean difference|")
-    ax.set_xlim(-0.01, max(0.25, max(smd_raw) * 1.1))
-    ax.legend(loc="lower right", fontsize=5, markerscale=0.8)
+    ax.set_xlim(-0.01, max(0.25, max(smd_raw) * 1.15))
+    ax.legend(loc="lower right", fontsize=5, markerscale=0.8, handletextpad=0.3)
     if title:
         ax.set_title(title, fontsize=7, fontweight="bold")
 
-    max_raw = max(smd_raw) if len(smd_raw) > 0 else 0
-    max_wt = max(smd_wt) if len(smd_wt) > 0 else 0
-    print(f"    {title}: max SMD raw={max_raw:.4f}, weighted={max_wt:.4f}")
+    # Print summary
+    n_in = in_model.sum()
+    n_out = (~in_model).sum()
+    max_ow_in = max(smd_ow[in_model]) if n_in > 0 else 0
+    max_iptw_in = max(smd_iptw[in_model]) if n_in > 0 else 0
+    max_ow_out = max(smd_ow[~in_model]) if n_out > 0 else 0
+    max_iptw_out = max(smd_iptw[~in_model]) if n_out > 0 else 0
+    print(f"    {title}")
+    print(
+        f"      In-model ({n_in}):  raw max={max(smd_raw[in_model]):.3f}, "
+        f"IPTW max={max_iptw_in:.4f}, OW max={max_ow_in:.4f}"
+    )
+    if n_out > 0:
+        print(
+            f"      Out-of-model ({n_out}): raw max={max(smd_raw[~in_model]):.3f}, "
+            f"IPTW max={max_iptw_out:.4f}, OW max={max_ow_out:.4f}"
+        )
 
 
 def run_love(d_e, d_m):
     print(f"\n{'='*65}")
-    print("LOVE PLOTS (covariate balance before/after OW)")
+    print("LOVE PLOTS (raw vs IPTW vs OW)")
+    print("  ○ Unweighted  △ IPTW  ■ OW")
+    print("  * = out-of-model variable (OW should NOT zero these)")
     print(f"{'='*65}")
 
-    fig, axes = plt.subplots(2, 2, figsize=(W_DOUBLE, 7.5))
-    fig.subplots_adjust(hspace=0.35, wspace=0.45)
+    # Try enriched cohorts (have extra vars like vent_duration, alcohol)
+    for fname, target in [
+        ("01_analysis_a_cohort_enriched.csv", "d_e"),
+        ("04_mimic_cohort_enriched.csv", "d_m"),
+    ]:
+        path = os.path.join(RESULTS, fname)
+        if os.path.exists(path):
+            enriched = standardize(pd.read_csv(path))
+            if target == "d_e" and len(enriched) == len(d_e):
+                # Merge new columns
+                new_cols = [c for c in enriched.columns if c not in d_e.columns]
+                if new_cols:
+                    d_e = d_e.join(enriched[new_cols])
+                    print(f"  Loaded {len(new_cols)} extra vars from enriched eICU")
+            elif target == "d_m" and len(enriched) == len(d_m):
+                new_cols = [c for c in enriched.columns if c not in d_m.columns]
+                if new_cols:
+                    d_m = d_m.join(enriched[new_cols])
+                    print(f"  Loaded {len(new_cols)} extra vars from enriched MIMIC")
+
+    fig, axes = plt.subplots(2, 2, figsize=(W_DOUBLE, 8.0))
+    fig.subplots_adjust(hspace=0.35, wspace=0.50)
 
     # eICU all-patient
     plot_love(
@@ -899,7 +979,7 @@ def run_love(d_e, d_m):
     # Panel labels
     for i, ax in enumerate(axes.flat):
         ax.text(
-            -0.20,
+            -0.25,
             1.04,
             chr(ord("a") + i),
             transform=ax.transAxes,
@@ -908,6 +988,17 @@ def run_love(d_e, d_m):
             va="top",
             ha="right",
         )
+
+    fig.text(
+        0.5,
+        0.005,
+        "○ Unweighted   △ IPTW   ■ Overlap weighting   "
+        "│   Dashed line = SMD 0.10   "
+        "│   * = variable NOT in PS model (OW exact balance does not apply)",
+        ha="center",
+        fontsize=5,
+        color="#555555",
+    )
 
     path = os.path.join(FIGS, "fig_love_plots.pdf")
     fig.savefig(path, format="pdf")
