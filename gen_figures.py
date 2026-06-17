@@ -113,13 +113,13 @@ def fig1_forest():
     # Sections (top to bottom in the figure)
     sections = [
         (
-            "Primary: Active Comparator",
+            "Active Comparator (Mg+K\u207a vs K\u207a-only)",
             [
-                ("AKI KDIGO \u22651 (Mg+K\u207a vs K\u207a-only)", "ac_aki1"),
+                ("AKI KDIGO \u22651", "ac_aki1"),
             ],
         ),
         (
-            "Sensitivity: All-Patient AKI",
+            "All-Patient Analyses",
             [
                 ("IPTW", "iptw_aki1"),
                 ("Overlap weighting", "ow_aki1"),
@@ -127,42 +127,12 @@ def fig1_forest():
             ],
         ),
         (
-            "Exploratory",
+            "Encephalopathy",
             [
-                ("Encephalopathy", "ow_enceph"),
-            ],
-        ),
-        (
-            "Negative Control: Transfusion",
-            [
-                ("Active comparator (OW)", "nc_transfusion_ac"),
-                ("All-patient OW", "nc_transfusion_ow"),
+                ("Overlap weighting", "ow_enceph"),
             ],
         ),
     ]
-
-    # Inject transfusion NC (from probe_complexity_nc.R, eICU only)
-    transfusion_rows = pd.DataFrame(
-        [
-            {
-                "db": "eICU",
-                "analysis": "nc_transfusion_ow",
-                or_col: 0.756,
-                "lo": 0.614,
-                "hi": 0.931,
-                "p": 0.009,
-            },
-            {
-                "db": "eICU",
-                "analysis": "nc_transfusion_ac",
-                or_col: 0.951,
-                "lo": 0.763,
-                "hi": 1.187,
-                "p": 0.659,
-            },
-        ]
-    )
-    res = pd.concat([res, transfusion_rows], ignore_index=True)
 
     # Build rows bottom-to-top for matplotlib y-axis
     rows = []
@@ -250,7 +220,8 @@ def fig1_forest():
         y += 1.5
 
     fd = pd.DataFrame(rows)
-    fig, ax = plt.subplots(figsize=(W_DOUBLE, 4.8))
+    fig, ax = plt.subplots(figsize=(W_DOUBLE, 3.5))
+    fig.subplots_adjust(left=0.02, right=0.98)
 
     ax.axvline(1, color=C_GRAY, linestyle="--", linewidth=0.5, zorder=0)
 
@@ -280,32 +251,34 @@ def fig1_forest():
             zorder=5,
         )
         ax.text(
-            2.8,
+            1.85,
             r["y"],
             f"{r['or_']:.2f} ({r['lo']:.2f}\u2013{r['hi']:.2f})",
             va="center",
             ha="left",
             fontsize=5.5,
             color="#333333",
+            clip_on=False,
         )
 
     for _, r in fd.iterrows():
         weight = "bold" if r["source"] in ("section", "header", "Pooled") else "normal"
         size = 7 if r["source"] == "section" else 6.5
         ax.text(
-            0.30,
+            0.22,
             r["y"],
             r["label"],
             va="center",
             ha="left",
             fontsize=size,
             fontweight=weight,
+            clip_on=False,
         )
 
     ax.set_xscale("log")
-    ax.set_xlim(0.25, 4.0)
-    ax.set_xticks([0.5, 0.75, 1, 1.5, 2])
-    ax.set_xticklabels(["0.50", "0.75", "1.00", "1.50", "2.00"])
+    ax.set_xlim(0.20, 2.3)
+    ax.set_xticks([0.5, 0.75, 1, 1.5])
+    ax.set_xticklabels(["0.50", "0.75", "1.00", "1.50"])
     ax.xaxis.set_minor_locator(NullLocator())
     ax.set_xlabel("Odds ratio (95% CI)")
     ax.set_ylim(-1.5, fd["y"].max() + 1)
@@ -322,7 +295,7 @@ def fig1_forest():
         style="italic",
     )
     ax.text(
-        1.6,
+        1.35,
         -1.2,
         "Favors no supplementation \u2192",
         fontsize=5.5,
@@ -362,7 +335,7 @@ def fig1_forest():
     ]
     ax.legend(
         handles=legend_elements,
-        loc="lower right",
+        loc="upper right",
         fontsize=6,
         handletextpad=0.3,
         borderpad=0.2,
@@ -867,16 +840,61 @@ def efig2_interaction():
 
 
 # =====================================================================
+# eFigure 3: Spline — OR(treatment) vs baseline serum Mg
+# Output: figs/efig_spline_interaction.pdf
+# =====================================================================
+def efig_spline():
+    csv_path = os.path.join(RESULTS, "probe_spline_interaction.csv")
+    if not os.path.exists(csv_path):
+        print("eFigure spline: probe_spline_interaction.csv not found — skip")
+        return
+    print("eFigure spline: Treatment effect by baseline serum magnesium")
+
+    grid = pd.read_csv(csv_path)
+
+    fig, ax = plt.subplots(figsize=(W_SINGLE, W_SINGLE * 0.75))
+
+    for db, color, label in [
+        ("eICU", C_BLUE, "eICU-CRD"),
+        ("MIMIC", C_VERMILLION, "MIMIC-IV"),
+    ]:
+        g = grid[grid.db == db].sort_values("mg")
+        ax.fill_between(g.mg, g.lo, g.hi, alpha=0.12, color=color, linewidth=0)
+        ax.plot(g.mg, g["or"], color=color, linewidth=1.5, label=label)
+
+    ax.axhline(1, color=C_GRAY, linestyle="--", linewidth=0.5, zorder=0)
+    ax.set_xlabel("Baseline serum magnesium (mg/dL)")
+    ax.set_ylabel("Odds ratio for AKI\n(supplemented vs unsupplemented)")
+    ax.set_xlim(1.0, 4.0)
+    ax.set_ylim(0.1, 2.5)
+    ax.legend(loc="upper right", fontsize=7, frameon=False)
+
+    ax.text(
+        0.03,
+        0.03,
+        "Linear interaction:\neICU OR 0.59/mg\u00b7dL\u207b\u00b9, P = .003\n"
+        "MIMIC OR 0.77/mg\u00b7dL\u207b\u00b9, P = .11",
+        transform=ax.transAxes,
+        fontsize=5.5,
+        va="bottom",
+        color="#555555",
+    )
+
+    save(fig, "efig_spline_interaction")
+
+
+# =====================================================================
 # MAIN
 # =====================================================================
 if __name__ == "__main__":
     print("=" * 55)
-    print("Generating publication figures (v4 — threshold narrative)")
+    print("Generating publication figures (v7)")
     print("=" * 55)
 
     fig1_forest()
     fig_mg_stratified()
     fig3_subgroups()
     efig2_interaction()
+    efig_spline()
 
     print("\nDone. Check figs/ directory.")
