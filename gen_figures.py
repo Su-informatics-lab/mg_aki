@@ -34,13 +34,13 @@ mpl.rcParams["pdf.fonttype"] = 42
 mpl.rcParams["ps.fonttype"] = 42
 mpl.rcParams["font.family"] = "sans-serif"
 mpl.rcParams["font.sans-serif"] = ["Arial", "Helvetica", "DejaVu Sans"]
-mpl.rcParams["font.size"] = 7
-mpl.rcParams["axes.labelsize"] = 7
-mpl.rcParams["axes.titlesize"] = 7
-mpl.rcParams["xtick.labelsize"] = 6
-mpl.rcParams["ytick.labelsize"] = 6
-mpl.rcParams["legend.fontsize"] = 6
-mpl.rcParams["legend.title_fontsize"] = 7
+mpl.rcParams["font.size"] = 9
+mpl.rcParams["axes.labelsize"] = 11
+mpl.rcParams["axes.titlesize"] = 11
+mpl.rcParams["xtick.labelsize"] = 9
+mpl.rcParams["ytick.labelsize"] = 9
+mpl.rcParams["legend.fontsize"] = 9
+mpl.rcParams["legend.title_fontsize"] = 11
 mpl.rcParams["axes.linewidth"] = 0.5
 mpl.rcParams["xtick.major.width"] = 0.5
 mpl.rcParams["ytick.major.width"] = 0.5
@@ -93,7 +93,7 @@ def add_panel_label(ax, label, x=-0.12, y=1.06):
         y,
         label,
         transform=ax.transAxes,
-        fontsize=8,
+        fontsize=11,
         fontweight="bold",
         va="top",
         ha="right",
@@ -220,7 +220,7 @@ def fig1_forest():
         y += 1.5
 
     fd = pd.DataFrame(rows)
-    fig, ax = plt.subplots(figsize=(W_DOUBLE, 3.5))
+    fig, ax = plt.subplots(figsize=(W_DOUBLE, 4.5))
     fig.subplots_adjust(left=0.02, right=0.98)
 
     ax.axvline(1, color=C_GRAY, linestyle="--", linewidth=0.5, zorder=0)
@@ -256,14 +256,14 @@ def fig1_forest():
             f"{r['or_']:.2f} ({r['lo']:.2f}\u2013{r['hi']:.2f})",
             va="center",
             ha="left",
-            fontsize=5.5,
+            fontsize=9,
             color="#333333",
             clip_on=False,
         )
 
     for _, r in fd.iterrows():
         weight = "bold" if r["source"] in ("section", "header", "Pooled") else "normal"
-        size = 7 if r["source"] == "section" else 6.5
+        size = 11 if r["source"] == "section" else 9
         ax.text(
             0.22,
             r["y"],
@@ -289,7 +289,7 @@ def fig1_forest():
         0.55,
         -1.2,
         "\u2190 Favors supplementation",
-        fontsize=5.5,
+        fontsize=9,
         ha="center",
         color=C_GRAY,
         style="italic",
@@ -298,7 +298,7 @@ def fig1_forest():
         1.35,
         -1.2,
         "Favors no supplementation \u2192",
-        fontsize=5.5,
+        fontsize=9,
         ha="center",
         color=C_GRAY,
         style="italic",
@@ -338,7 +338,7 @@ def fig1_forest():
         loc="upper center",
         bbox_to_anchor=(0.55, 1.02),
         ncol=3,
-        fontsize=6,
+        fontsize=9,
         handletextpad=0.3,
         columnspacing=1.0,
         borderpad=0.2,
@@ -439,7 +439,7 @@ def fig_mg_stratified():
 
     # ── Build figure: two panels ─────────────────────────────────
     fig, (ax_a, ax_b) = plt.subplots(
-        1, 2, figsize=(W_DOUBLE, 3.8), gridspec_kw={"width_ratios": [1.3, 1]}
+        1, 2, figsize=(W_DOUBLE, 5.0), gridspec_kw={"width_ratios": [1.3, 1]}
     )
 
     # ── Panel a: 4 strata × 2 databases ─────────────────────────
@@ -483,7 +483,7 @@ def fig_mg_stratified():
                 f"{s_m['or_']:.2f} ({s_m['lo']:.2f}\u2013{s_m['hi']:.2f}){star}",
                 va="center",
                 ha="left",
-                fontsize=5,
+                fontsize=9,
                 color=C_BLUE,
             )
         y_mimic = y
@@ -514,7 +514,7 @@ def fig_mg_stratified():
                 f"{s_e['or_']:.2f} ({s_e['lo']:.2f}\u2013{s_e['hi']:.2f}){star}",
                 va="center",
                 ha="left",
-                fontsize=5,
+                fontsize=9,
                 color=C_VERMILLION,
             )
         y_eicu = y
@@ -527,7 +527,7 @@ def fig_mg_stratified():
         y += 1
 
     ax.set_yticks(y_positions)
-    ax.set_yticklabels(y_labels_list, fontsize=6)
+    ax.set_yticklabels(y_labels_list, fontsize=9)
     ax.set_xscale("log")
     ax.set_xlim(0.25, 3.5)
     ax.set_xticks([0.25, 0.5, 1, 2])
@@ -544,7 +544,7 @@ def fig_mg_stratified():
         0.06,
         int_text,
         transform=ax.transAxes,
-        fontsize=5.5,
+        fontsize=9,
         color="#555555",
         style="italic",
     )
@@ -554,7 +554,7 @@ def fig_mg_stratified():
         0.55,
         -1.0,
         "\u2190 Favors Mg",
-        fontsize=5,
+        fontsize=9,
         color=C_GRAY,
         style="italic",
         ha="center",
@@ -563,7 +563,7 @@ def fig_mg_stratified():
         1.5,
         -1.0,
         "Favors no Mg \u2192",
-        fontsize=5,
+        fontsize=9,
         color=C_GRAY,
         style="italic",
         ha="center",
@@ -593,7 +593,7 @@ def fig_mg_stratified():
     ax.legend(
         handles=legend_a,
         loc="upper left",
-        fontsize=5.5,
+        fontsize=9,
         handletextpad=0.2,
         borderpad=0.2,
     )
@@ -635,7 +635,7 @@ def fig_mg_stratified():
             f"{sb['or_']:.2f} ({sb['lo']:.2f}\u2013{sb['hi']:.2f}){star}",
             va="center",
             ha="left",
-            fontsize=5.5,
+            fontsize=9,
             color="#333333",
         )
 
@@ -644,7 +644,7 @@ def fig_mg_stratified():
         y += 1.2
 
     ax.set_yticks(y_sub)
-    ax.set_yticklabels(y_sub_labels, fontsize=6)
+    ax.set_yticklabels(y_sub_labels, fontsize=9)
     ax.set_xscale("log")
     ax.set_xlim(0.08, 4.0)
     ax.set_xticks([0.1, 0.25, 0.5, 1, 2])
@@ -661,7 +661,7 @@ def fig_mg_stratified():
         1.02,
         "Sub-bands within >2.3 mg/dL (eICU)",
         transform=ax.transAxes,
-        fontsize=6,
+        fontsize=9,
         ha="center",
         fontweight="bold",
     )
@@ -703,7 +703,7 @@ def fig3_subgroups():
         ("4", "Other cardiac", "Other cardiac"),
     ]
 
-    fig, ax = plt.subplots(figsize=(W_ONEHALF, 4.5))
+    fig, ax = plt.subplots(figsize=(W_ONEHALF, 5.5))
     ax.axvline(1, color=C_GRAY, linestyle="--", linewidth=0.5, zorder=0)
 
     y_positions = []
@@ -741,7 +741,7 @@ def fig3_subgroups():
             f"n={int(r['n'])}",
             va="center",
             ha="left",
-            fontsize=5.5,
+            fontsize=9,
             color="#333333",
         )
 
@@ -751,7 +751,7 @@ def fig3_subgroups():
         prev_table = etable
 
     ax.set_yticks(y_positions)
-    ax.set_yticklabels(y_labels_list, fontsize=6)
+    ax.set_yticklabels(y_labels_list, fontsize=9)
     ax.set_xscale("log")
     ax.set_xlim(0.2, 3.5)
     ax.set_xticks([0.5, 0.75, 1, 1.5, 2])
@@ -763,13 +763,13 @@ def fig3_subgroups():
     ax.tick_params(axis="y", length=0)
 
     ax.text(
-        0.55, -0.7, "\u2190 Favors Mg+K\u207a", fontsize=5, color=C_GRAY, style="italic"
+        0.55, -0.7, "\u2190 Favors Mg+K\u207a", fontsize=9, color=C_GRAY, style="italic"
     )
     ax.text(
         1.5,
         -0.7,
         "Favors K\u207a-only \u2192",
-        fontsize=5,
+        fontsize=9,
         color=C_GRAY,
         style="italic",
     )
@@ -826,13 +826,13 @@ def efig2_interaction():
     )
     ax.set_ylim(0.7, 2.3)
     ax.set_yticks(np.arange(0.8, 2.4, 0.2))
-    ax.legend(loc="upper left", fontsize=6)
+    ax.legend(loc="upper left", fontsize=9)
 
     ax.annotate(
         "More cardioplegia \u2192\nhigher Mg + more AKI",
         xy=(0.88, 1.74),
         xytext=(0.40, 2.10),
-        fontsize=5.5,
+        fontsize=9,
         color=C_GRAY,
         style="italic",
         arrowprops=dict(arrowstyle="->", color=C_GRAY, lw=0.5),
@@ -869,7 +869,7 @@ def efig_spline():
     ax.set_ylabel("Odds ratio for AKI\n(supplemented vs unsupplemented)")
     ax.set_xlim(1.0, 4.0)
     ax.set_ylim(0.1, 2.5)
-    ax.legend(loc="upper right", fontsize=7, frameon=False)
+    ax.legend(loc="upper right", fontsize=9, frameon=False)
 
     ax.text(
         0.03,
@@ -877,7 +877,7 @@ def efig_spline():
         "Linear interaction:\neICU OR 0.59/mg\u00b7dL\u207b\u00b9, P = .003\n"
         "MIMIC OR 0.77/mg\u00b7dL\u207b\u00b9, P = .11",
         transform=ax.transAxes,
-        fontsize=5.5,
+        fontsize=9,
         va="bottom",
         color="#555555",
     )
