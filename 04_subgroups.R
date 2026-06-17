@@ -120,7 +120,7 @@ fit_full_ps <- function(d, db_name) {
   # ◆ 31 covariates (matches 02_analysis.R)
   ps_vars <- intersect(c("age","is_female","bmi",
     "heart_failure","hypertension","diabetes","ckd","copd","pvd","stroke","liver_disease",
-    "baseline_creatinine","egfr","loop_diuretics","nsaids","acei_arb","ppi",
+    "egfr","loop_diuretics","nsaids","acei_arb","ppi",
     "beta_blockers","steroids","antiarrhythmics",
     "first_potassium","first_calcium","first_heartrate",
     "vasopressor_6h","transfusion_6h","first_mg_value"), names(d))
@@ -211,7 +211,7 @@ run_subgroup <- function(d, subset_idx, trt_var, outcome, db_name, cluster=NULL)
 
   # Check balance within subgroup
   d_bal <- d_sub[!is.na(d_sub[[wt_col]]),]
-  check_vars <- intersect(c("age","is_female","bmi","baseline_creatinine","egfr",
+  check_vars <- intersect(c("age","is_female","bmi","egfr",
                              "first_mg_value","first_potassium"), names(d_bal))
   smds <- sapply(check_vars, function(v)
     if (is.numeric(d_bal[[v]])) smd_w(d_bal[[v]], d_bal[[trt_var]], d_bal[[wt_col]]) else NA)
@@ -247,7 +247,7 @@ for (db in list(list(d=dat_e, nm="eICU"), list(d=dat_m, nm="MIMIC"))) {
   d_ac <- d[!is.na(d$ac_trt),]
   d_ac$trt_label <- ifelse(d_ac$ac_trt==1, "Mg+K", "K-only")
   vars <- intersect(c("age","is_female","bmi","surgery_type",
-    "heart_failure","hypertension","diabetes","ckd","baseline_creatinine","egfr",
+    "heart_failure","hypertension","diabetes","ckd","egfr",
     "loop_diuretics","ppi","first_mg_value","mds","aki_kdigo1","hospital_mortality"), names(d_ac))
   cat(sprintf("\n  %s AC (N=%d):\n", db$nm, nrow(d_ac)))
   tryCatch({

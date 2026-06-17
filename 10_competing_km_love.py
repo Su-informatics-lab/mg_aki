@@ -114,7 +114,6 @@ PS_COVARS = [
     "pvd",
     "stroke",
     "liver_disease",
-    "baseline_creatinine",
     "egfr",
     "loop_diuretics",
     "nsaids",

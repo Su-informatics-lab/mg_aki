@@ -82,7 +82,7 @@ run_lactate_sens <- function(dat, db_name, has_cluster) {
     "surg_cabg", "surg_valve", "surg_combined",
     "heart_failure", "hypertension", "diabetes", "ckd",
     "copd", "pvd", "stroke", "liver_disease",
-    "baseline_creatinine", "egfr",
+    "egfr",
     "loop_diuretics", "nsaids", "acei_arb", "ppi",
     "beta_blockers", "steroids", "antiarrhythmics",
     "first_potassium", "first_calcium", "first_heartrate",
