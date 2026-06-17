@@ -69,7 +69,7 @@ run_key <- function(dat, db, version, has_cluster) {
     "loop_diuretics","nsaids","acei_arb","ppi",
     "beta_blockers","steroids","antiarrhythmics",
     "first_potassium","first_calcium","first_heartrate",
-    "vasopressor_6h","first_mg_value",
+    "vasopressor_6h","transfusion_6h","first_mg_value",
     "first_lactate","lactate_missing"), names(dat))
 
   d <- dat[complete.cases(dat[,ps_covars]),]

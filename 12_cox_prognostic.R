@@ -118,7 +118,8 @@ cox_covars <- c("age","is_female","bmi",
   "baseline_creatinine","egfr",
   "loop_diuretics","nsaids","acei_arb","ppi",
   "beta_blockers","steroids","antiarrhythmics",
-  "first_potassium","first_calcium","first_heartrate","vasopressor_6h")
+  "first_potassium","first_calcium","first_heartrate","vasopressor_6h",
+  "transfusion_6h")
 
 # ── Load data ────────────────────────────────────────────────────────
 cat("Loading cohorts...\n")

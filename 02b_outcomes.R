@@ -98,7 +98,7 @@ run_additional <- function(dat, db_name, has_cluster = FALSE) {
     "loop_diuretics","nsaids","acei_arb","ppi",
     "beta_blockers","steroids","antiarrhythmics",
     "first_potassium","first_calcium","first_heartrate",
-    "vasopressor_6h","first_mg_value",
+    "vasopressor_6h","transfusion_6h","first_mg_value",
     "first_lactate","lactate_missing"), names(dat))
 
   ps_formula <- as.formula(paste("mg_supp ~", paste(ps_covars, collapse="+")))

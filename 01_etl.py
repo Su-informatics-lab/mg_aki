@@ -892,34 +892,47 @@ def run_eicu():
         )
     cohort["rrt_7d"] = cohort.patientunitstayid.isin(rrt_pids).astype(int)
 
-    # ◆ Perioperative transfusion (complexity-specific negative control)
-    transfusion_pids = set()
+    # ◆ Perioperative transfusion
+    _tx_patterns = [
+        "transfusion",
+        "blood product",
+        "packed red",
+        "prbc",
+        "red blood cell",
+        "ffp",
+        "fresh frozen",
+        "platelet",
+        "cryoprecipitate",
+        "blood administration",
+    ]
+    # 0–6h transfusion → PS covariate (pre-T₀)
+    transfusion_6h_pids = set()
+    # Any-time transfusion → descriptive (Table 1)
+    transfusion_any_pids = set()
     if len(tx) > 0:
-        transfusion_pids = set(
-            tx[
-                tx.patientunitstayid.isin(pids)
-                & matches_any(
-                    tx.treatmentstring,
-                    [
-                        "transfusion",
-                        "blood product",
-                        "packed red",
-                        "prbc",
-                        "red blood cell",
-                        "ffp",
-                        "fresh frozen",
-                        "platelet",
-                        "cryoprecipitate",
-                        "blood administration",
-                    ],
-                )
+        tx_match = tx[
+            tx.patientunitstayid.isin(pids)
+            & matches_any(tx.treatmentstring, _tx_patterns)
+        ]
+        transfusion_any_pids = set(tx_match.patientunitstayid)
+        transfusion_6h_pids = set(
+            tx_match[
+                (tx_match.treatmentoffset >= 0)
+                & (tx_match.treatmentoffset <= LANDMARK_MIN)
             ].patientunitstayid
         )
-    cohort["nc_transfusion"] = cohort.patientunitstayid.isin(transfusion_pids).astype(
-        int
+    cohort["transfusion_6h"] = cohort.patientunitstayid.isin(
+        transfusion_6h_pids
+    ).astype(int)
+    cohort["nc_transfusion"] = cohort.patientunitstayid.isin(
+        transfusion_any_pids
+    ).astype(int)
+    print(
+        f"  Transfusion 0-6h (PS covariate): {cohort.transfusion_6h.sum()} "
+        f"({100*cohort.transfusion_6h.mean():.1f}%)"
     )
     print(
-        f"  Perioperative transfusion: {cohort.nc_transfusion.sum()} "
+        f"  Transfusion any time (descriptive): {cohort.nc_transfusion.sum()} "
         f"({100*cohort.nc_transfusion.mean():.1f}%)"
     )
 
@@ -1496,7 +1509,7 @@ def run_mimic():
         matches_icd(dx, hadms, VT_ICD)
     ).astype(int)
 
-    # ◆ Perioperative transfusion (complexity-specific NC)
+    # ◆ Perioperative transfusion
     BLOOD_ITEMS = [
         225168,
         220970,
@@ -1507,12 +1520,19 @@ def run_mimic():
         226370,
         226371,
     ]  # OR blood products
-    blood_stays = set(
-        ie_with[ie_with.itemid.isin(BLOOD_ITEMS) & ie_with.stay_id.isin(stays)].stay_id
-    )
-    cohort["nc_transfusion"] = cohort.stay_id.isin(blood_stays).astype(int)
+    blood_ie = ie_with[ie_with.itemid.isin(BLOOD_ITEMS) & ie_with.stay_id.isin(stays)]
+    # 0–6h → PS covariate (pre-T₀)
+    blood_6h = set(blood_ie[blood_ie.offset_h.between(0, LANDMARK_HOURS)].stay_id)
+    # Any time → descriptive
+    blood_any = set(blood_ie.stay_id)
+    cohort["transfusion_6h"] = cohort.stay_id.isin(blood_6h).astype(int)
+    cohort["nc_transfusion"] = cohort.stay_id.isin(blood_any).astype(int)
     print(
-        f"  Perioperative transfusion: {cohort.nc_transfusion.sum()} "
+        f"  Transfusion 0-6h (PS covariate): {cohort.transfusion_6h.sum()} "
+        f"({100*cohort.transfusion_6h.mean():.1f}%)"
+    )
+    print(
+        f"  Transfusion any time (descriptive): {cohort.nc_transfusion.sum()} "
         f"({100*cohort.nc_transfusion.mean():.1f}%)"
     )
 
