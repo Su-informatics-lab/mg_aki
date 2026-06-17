@@ -537,19 +537,26 @@ def run_eicu():
         )
 
         aki_15x = 0
-        aki_time = np.nan
+        aki_time_ratio = np.nan
         aki_delta03 = 0
+        aki_time_delta = np.nan
         if len(fu) > 0 and bl_cr > 0:
-            # Ratio criterion: any fu Cr >= 1.5× baseline
+            # Ratio criterion: any fu Cr >= 1.5× baseline (7d)
             hits = fu[fu.labresult / bl_cr >= cfg.AKI_RATIO_STAGE1]
             if len(hits) > 0:
                 aki_15x = 1
-                aki_time = hits.labresultoffset.iloc[0]
+                aki_time_ratio = hits.labresultoffset.iloc[0]
 
             # Delta criterion: any fu Cr >= baseline + 0.3 within 48h
             fu_48 = fu[fu.labresultoffset <= LANDMARK_MIN + cfg.AKI_WINDOW_48H_MIN]
-            if len(fu_48) > 0 and (fu_48.labresult - bl_cr).max() >= cfg.AKI_DELTA_48H:
-                aki_delta03 = 1
+            if len(fu_48) > 0:
+                delta_hits = fu_48[(fu_48.labresult - bl_cr) >= cfg.AKI_DELTA_48H]
+                if len(delta_hits) > 0:
+                    aki_delta03 = 1
+                    aki_time_delta = delta_hits.labresultoffset.iloc[0]
+
+        # ◆ aki_time_offset = earliest of either criterion
+        aki_time = np.nanmin([aki_time_ratio, aki_time_delta])
 
         max_cr = fu.labresult.max() if len(fu) > 0 else np.nan
         max_ratio = max_cr / bl_cr if bl_cr > 0 and not np.isnan(max_cr) else 0
@@ -1293,11 +1300,22 @@ def run_mimic():
                     "aki_stage2": int((g.cr_ratio >= 2.0).any()),
                     "aki_stage3": int((g.cr_ratio >= 3.0).any()),
                     "peak_cr": g.valuenum.max(),
-                    # ◆ NEW: save AKI onset time for KM
-                    "aki_time_offset": (
-                        g[g.cr_ratio >= 1.5].offset_min_from_icu.min()
-                        if (g.cr_ratio >= 1.5).any()
-                        else np.nan
+                    # ◆ FIX: earliest time meeting EITHER criterion
+                    "aki_time_offset": np.nanmin(
+                        [
+                            (
+                                g[g.cr_ratio >= 1.5].offset_min_from_icu.min()
+                                if (g.cr_ratio >= 1.5).any()
+                                else np.nan
+                            ),
+                            (
+                                g[
+                                    (g.cr_delta >= 0.3) & (g.hours_post_lm <= 48)
+                                ].offset_min_from_icu.min()
+                                if ((g.cr_delta >= 0.3) & (g.hours_post_lm <= 48)).any()
+                                else np.nan
+                            ),
+                        ]
                     ),
                 }
             )
