@@ -1,0 +1,652 @@
+Pipeline started: Wed Jun 17 14:49:10 MDT 2026
+Steps: 4 7 8 9 fig
+
+
+──── Step 4: Subgroup/Safety ────
+Loading cohorts...
+  Loading 01_analysis_a_cohort_enriched.csv
+  Loading 04_mimic_cohort_enriched.csv
+
+ ============================================================ 
+STEP 1: Full-sample PS + OW estimation
+============================================================ 
+  eICU PS model: 30 covariates
+  eICU all-patient: N=4632, max SMD=0.0037
+  eICU AC: N=1051 (trt=290), max SMD=0.0000, Mg SMD=0.0000
+  eICU MDS >=2: 2074/4632 (44.8%)
+  MIMIC PS model: 30 covariates
+  MIMIC all-patient: N=1411, max SMD=0.0000
+  MIMIC AC: N=376 (trt=122), max SMD=0.0000, Mg SMD=0.0000
+  MIMIC MDS >=2: 828/1411 (58.7%)
+
+ ============================================================ 
+eTABLE 3: AC Subgroup Baseline
+============================================================ 
+
+  eICU AC (N=1051):
+                                 Stratified by trt_label
+                                  K-only        Mg+K          SMD   
+  n                                 761           290               
+  age (mean (SD))                 64.13 (14.16) 66.81 (14.85)  0.185
+  is_female (mean (SD))            0.36 (0.48)   0.41 (0.49)   0.119
+  bmi (mean (SD))                 29.74 (7.08)  29.37 (6.70)   0.055
+  surgery_type (%)                                             0.134
+     cabg                           274 (36.0)    106 (36.6)        
+     combined                        56 ( 7.4)     13 ( 4.5)        
+     other_cardiac                  301 (39.6)    119 (41.0)        
+     unknown                          1 ( 0.1)      0 ( 0.0)        
+     valve                          129 (17.0)     52 (17.9)        
+  heart_failure (mean (SD))        0.16 (0.37)   0.17 (0.38)   0.027
+  hypertension (mean (SD))         0.57 (0.49)   0.59 (0.49)   0.027
+  diabetes (mean (SD))             0.33 (0.47)   0.37 (0.48)   0.078
+  ckd (mean (SD))                  0.10 (0.30)   0.07 (0.26)   0.093
+  baseline_creatinine (mean (SD))  1.13 (0.47)   1.10 (0.48)   0.062
+  egfr (mean (SD))                73.65 (24.75) 73.59 (23.97)  0.002
+  loop_diuretics (mean (SD))       0.30 (0.46)   0.23 (0.42)   0.170
+  ppi (mean (SD))                  0.24 (0.43)   0.21 (0.41)   0.057
+  first_mg_value (mean (SD))       2.21 (0.52)   1.99 (0.46)   0.443
+  mds (mean (SD))                  1.53 (1.09)   1.44 (1.07)   0.084
+  aki_kdigo1 (mean (SD))           0.21 (0.41)   0.16 (0.36)   0.146
+  hospital_mortality (mean (SD))   0.06 (0.24)   0.06 (0.24)   0.001
+
+  MIMIC AC (N=376):
+                                 Stratified by trt_label
+                                  K-only        Mg+K          SMD   
+  n                                 254           122               
+  age (mean (SD))                 68.92 (14.51) 72.99 (12.99)  0.296
+  is_female (mean (SD))            0.43 (0.50)   0.48 (0.50)   0.109
+  bmi (mean (SD))                 27.54 (5.47)  26.58 (4.64)   0.189
+  surgery_type (%)                                             0.091
+     cabg                            55 (21.7)     22 (18.0)        
+     combined                         6 ( 2.4)      3 ( 2.5)        
+     other_cardiac                  139 (54.7)     70 (57.4)        
+     valve                           54 (21.3)     27 (22.1)        
+  heart_failure (mean (SD))        0.43 (0.50)   0.43 (0.50)   0.019
+  hypertension (mean (SD))         0.74 (0.44)   0.75 (0.43)   0.041
+  diabetes (mean (SD))             0.31 (0.46)   0.29 (0.45)   0.044
+  ckd (mean (SD))                  0.24 (0.43)   0.21 (0.41)   0.064
+  baseline_creatinine (mean (SD))  1.15 (0.53)   1.11 (0.56)   0.075
+  egfr (mean (SD))                70.07 (26.92) 70.67 (27.48)  0.022
+  loop_diuretics (mean (SD))       0.18 (0.38)   0.13 (0.34)   0.127
+  ppi (mean (SD))                  0.28 (0.45)   0.28 (0.45)   0.007
+  first_mg_value (mean (SD))       2.36 (0.72)   2.14 (0.81)   0.289
+  mds (mean (SD))                  1.61 (1.03)   1.51 (0.99)   0.101
+  aki_kdigo1 (mean (SD))           0.29 (0.46)   0.25 (0.44)   0.083
+  hospital_mortality (mean (SD))   0.06 (0.24)   0.05 (0.22)   0.060
+
+============================================================
+eTABLE 4: Subgroup by surgery_type
+============================================================
+  eICU CABG                 OW:  N=1383 trt=156 OR 0.65 (0.42-1.01) P=0.055 [bal 0.119]
+  eICU CABG                 AC:  N=380 trt=106 OR 0.58 (0.30-1.09) P=0.090 [bal 0.177]
+  MIMIC CABG                 OW:  N=279 trt=44 OR 1.13 (0.49-2.60) P=0.782 [bal 0.307]
+  MIMIC CABG                 AC:  N=77 trt=22 OR 0.54 (0.13-2.23) P=0.395 [bal 0.545]
+  eICU Valve                OW:  N=694 trt=73 OR 0.55 (0.24-1.25) P=0.153 [bal 0.198]
+  eICU Valve                AC:  N=181 trt=52 OR 0.25 (0.07-0.92) P=0.036 [bal 0.289]
+  MIMIC Valve                OW:  N=295 trt=63 OR 0.92 (0.46-1.82) P=0.807 [bal 0.207]
+  MIMIC Valve                AC:  N=81 trt=27 OR 1.19 (0.39-3.62) P=0.760 [bal 0.210]
+  eICU Combined             OW:  N=231 trt=20 OR 0.94 (0.29-3.05) P=0.914 [bal 0.412]
+  eICU Combined             AC:  N=69 trt=13 OR 2.35 (0.60-9.28) P=0.223 [bal 0.520]
+  eICU Other cardiac        OW:  N=2321 trt=357 OR 1.10 (0.73-1.67) P=0.646 [bal 0.044]
+  eICU Other cardiac        AC:  N=420 trt=119 OR 1.22 (0.69-2.17) P=0.494 [bal 0.167]
+  MIMIC Other cardiac        OW:  N=791 trt=143 OR 1.17 (0.76-1.79) P=0.481 [bal 0.221]
+  MIMIC Other cardiac        AC:  N=209 trt=70 OR 0.87 (0.43-1.73) P=0.681 [bal 0.183]
+
+============================================================
+eTABLE 5: Subgroup by mds_high
+============================================================
+  eICU MDS 0-1              OW:  N=2558 trt=337 OR 0.93 (0.63-1.37) P=0.719 [bal 0.085]
+  eICU MDS 0-1              AC:  N=545 trt=159 OR 0.76 (0.42-1.36) P=0.352 [bal 0.079]
+  MIMIC MDS 0-1              OW:  N=583 trt=125 OR 0.84 (0.49-1.43) P=0.511 [bal 0.076]
+  MIMIC MDS 0-1              AC:  N=169 trt=54 OR 0.61 (0.26-1.44) P=0.259 [bal 0.185]
+  eICU MDS >=2              OW:  N=2074 trt=269 OR 0.84 (0.59-1.20) P=0.341 [bal 0.066]
+  eICU MDS >=2              AC:  N=506 trt=131 OR 0.83 (0.50-1.38) P=0.478 [bal 0.088]
+  MIMIC MDS >=2              OW:  N=828 trt=130 OR 1.26 (0.83-1.92) P=0.280 [bal 0.106]
+  MIMIC MDS >=2              AC:  N=207 trt=68 OR 1.18 (0.60-2.30) P=0.629 [bal 0.130]
+
+============================================================
+eTABLE 5b: Subgroup by age
+============================================================
+  eICU Age <60              OW:  N=1453 trt=179 OR 0.98 (0.59-1.62) P=0.938 [bal 0.101]
+  eICU Age <60              AC:  N=333 trt=77 OR 0.94 (0.45-1.98) P=0.875 [bal 0.168]
+  MIMIC Age <60              OW:  N=318 trt=36 OR 0.73 (0.28-1.94) P=0.530 [bal 0.215]
+  MIMIC Age <60              AC:  N=71 trt=15 OR 0.74 (0.16-3.50) P=0.706 [bal 0.330]
+  eICU Age >=60             OW:  N=3179 trt=427 OR 0.84 (0.62-1.14) P=0.266 [bal 0.048]
+  eICU Age >=60             AC:  N=718 trt=213 OR 0.76 (0.49-1.19) P=0.230 [bal 0.072]
+  MIMIC Age >=60             OW:  N=1093 trt=219 OR 1.12 (0.79-1.59) P=0.521 [bal 0.122]
+  MIMIC Age >=60             AC:  N=305 trt=107 OR 0.93 (0.53-1.63) P=0.812 [bal 0.092]
+
+============================================================
+eTABLE 5c: Subgroup by first_mg_value
+============================================================
+  eICU Mg <2.0 (hypo)       OW:  N=1817 trt=428 OR 0.92 (0.64-1.32) P=0.661 [bal 0.323]
+  eICU Mg <2.0 (hypo)       AC:  N=406 trt=164 OR 0.88 (0.50-1.54) P=0.653 [bal 0.258]
+  MIMIC Mg <2.0 (hypo)       OW:  N=646 trt=193 OR 1.09 (0.72-1.65) P=0.693 [bal 0.209]
+  MIMIC Mg <2.0 (hypo)       AC:  N=163 trt=81 OR 0.87 (0.41-1.84) P=0.714 [bal 0.228]
+  eICU Mg >=2.0             OW:  N=2815 trt=178 OR 0.87 (0.61-1.23) P=0.430 [bal 0.168]
+  eICU Mg >=2.0             AC:  N=645 trt=126 OR 0.77 (0.45-1.32) P=0.348 [bal 0.208]
+  MIMIC Mg >=2.0             OW:  N=765 trt=62 OR 1.20 (0.67-2.16) P=0.535 [bal 0.943]
+  MIMIC Mg >=2.0             AC:  N=213 trt=41 OR 1.02 (0.46-2.26) P=0.958 [bal 0.874]
+
+============================================================
+eTABLE 5d: Subgroup by depletion_risk
+============================================================
+  eICU PPI user             OW:  N=741 trt=121 OR 0.86 (0.62-1.19) P=0.371 [bal 0.238]
+  eICU PPI user             AC:  N=243 trt=62 OR 1.13 (0.54-2.36) P=0.748 [bal 0.291]
+  MIMIC PPI user             OW:  N=351 trt=63 OR 0.78 (0.39-1.55) P=0.483 [bal 0.222]
+  MIMIC PPI user             AC:  N=104 trt=34 OR 0.64 (0.23-1.83) P=0.409 [bal 0.367]
+  eICU No PPI               OW:  N=3891 trt=485 OR 0.88 (0.64-1.20) P=0.424 [bal 0.052]
+  eICU No PPI               AC:  N=808 trt=228 OR 0.72 (0.46-1.12) P=0.142 [bal 0.077]
+  MIMIC No PPI               OW:  N=1060 trt=192 OR 1.20 (0.83-1.74) P=0.338 [bal 0.074]
+  MIMIC No PPI               AC:  N=272 trt=88 OR 1.04 (0.57-1.91) P=0.893 [bal 0.166]
+  eICU Loop diuretic        OW:  N=1037 trt=138 OR 0.87 (0.61-1.25) P=0.458 [bal 0.151]
+  eICU Loop diuretic        AC:  N=296 trt=66 OR 0.63 (0.31-1.29) P=0.207 [bal 0.222]
+  MIMIC Loop diuretic        OW:  N=347 trt=39 OR 0.60 (0.27-1.35) P=0.217 [bal 0.336]
+  MIMIC Loop diuretic        AC:  N=61 trt=16 OR 0.44 (0.08-2.37) P=0.340 [bal 0.351]
+  eICU No loop diuretic     OW:  N=3595 trt=468 OR 0.88 (0.61-1.26) P=0.471 [bal 0.045]
+  eICU No loop diuretic     AC:  N=755 trt=224 OR 0.89 (0.57-1.40) P=0.622 [bal 0.073]
+  MIMIC No loop diuretic     OW:  N=1064 trt=216 OR 1.24 (0.86-1.78) P=0.249 [bal 0.062]
+  MIMIC No loop diuretic     AC:  N=315 trt=106 OR 1.02 (0.58-1.78) P=0.952 [bal 0.047]
+  eICU eGFR <60             OW:  N=1457 trt=178 OR 0.98 (0.61-1.58) P=0.930 [bal 0.093]
+  eICU eGFR <60             AC:  N=315 trt=83 OR 0.98 (0.55-1.76) P=0.949 [bal 0.192]
+  MIMIC eGFR <60             OW:  N=613 trt=85 OR 1.61 (0.98-2.63) P=0.059 [bal 0.111]
+  MIMIC eGFR <60             AC:  N=140 trt=46 OR 1.66 (0.76-3.64) P=0.203 [bal 0.126]
+  eICU eGFR >=60            OW:  N=3175 trt=428 OR 0.82 (0.60-1.13) P=0.224 [bal 0.052]
+  eICU eGFR >=60            AC:  N=736 trt=207 OR 0.69 (0.41-1.16) P=0.159 [bal 0.083]
+  MIMIC eGFR >=60            OW:  N=798 trt=170 OR 0.80 (0.51-1.27) P=0.342 [bal 0.064]
+  MIMIC eGFR >=60            AC:  N=236 trt=76 OR 0.56 (0.27-1.17) P=0.123 [bal 0.062]
+
+✓ Saved etables_4_5_subgroups.csv (62 rows)
+
+============================================================
+eTABLE 6: Safety Outcomes
+============================================================
+
+  eICU (N=4632):
+    icu_los_h            diff -2.66 (-12.44 to 7.12) P=0.594
+      Trt: median 46.5, Ctrl: median 47.7
+    post_hr_6h           diff -1.05 (-2.45 to 0.35) P=0.141
+      Trt: median 80.0, Ctrl: median 81.0
+    Max post-Mg:       Trt median 2.23 (max 8.60), Ctrl median 2.30 (max 7.20)
+      >4.8: Trt 2/541 (0.4%), Ctrl 5/3427 (0.1%)
+    has_iabp             OR 1.88 (1.10-3.21) P=0.021 [events=167]
+
+  MIMIC (N=1411):
+    icu_los_h            diff -1.11 (-15.07 to 12.85) P=0.876
+      Trt: median 45.5, Ctrl: median 49.3
+    vent_duration_h      diff -6.89 (-25.56 to 11.79) P=0.470
+      Trt: median 11.7, Ctrl: median 14.6
+    post_hr_6h           diff 1.14 (-0.98 to 3.27) P=0.292
+      Trt: median 78.0, Ctrl: median 79.0
+    Max post-Mg:       Trt median 2.40 (max 7.40), Ctrl median 2.50 (max 9.80)
+      >4.8: Trt 1/252 (0.4%), Ctrl 11/1134 (1.0%)
+    has_ecmo             OR 1.58 (0.32-7.86) P=0.578 [events=12]
+
+✓ Saved etable6_safety.csv
+
+============================================================
+SUMMARY
+============================================================
+  All subgroup analyses use full-sample OW weights (downstream).
+  Balance checked within each subgroup (max_smd column).
+
+  Files:
+    etables_4_5_subgroups.csv — surgery, MDS, age, baseline Mg, PPI/diuretic/eGFR
+    etable6_safety.csv — ICU LOS, vent, HR, max Mg, IABP/ECMO
+
+  Key predictions:
+    Mg <2.0 effect > Mg >=2.0 → 'repletion benefits the depleted'
+    Age >=60 effect > Age <60 → age-related Mg depletion
+    MDS >=2 effect > MDS 0-1 → composite risk guides therapy
+    Safety null across the board → 'no harm at these doses'
+
+subgroup_analysis.R COMPLETE
+
+──── Step 7: Sensitivity ────
+Loading cohorts...
+  eICU: N=4632  MIMIC: N=1411
+
+=================================================================
+A. E-VALUE SENSITIVITY ANALYSIS
+=================================================================
+  Prevalence: eICU all=0.207, MIMIC all=0.295
+  Prevalence: eICU AC=0.212, MIMIC AC=0.291
+  Primary: AC AKI           OR=0.827 (0.608-1.125)  E=1.71 (CI limit 1.50)
+  Sensitivity: IPTW AKI     OR=0.917 (0.738-1.140)  E=1.40 (CI limit 1.54)
+  Sensitivity: OW AKI       OR=0.946 (0.768-1.164)  E=1.30 (CI limit 1.60)
+  Exploratory: Enceph       OR=0.577 (0.290-1.147)  E=2.86 (CI limit 1.56)
+  Control: Fracture         OR=0.689 (0.376-1.262)  E=2.26 (CI limit 1.84)
+  Mg >2.3 OW                OR=0.553 (0.326-0.937)  E=3.02 (CI limit 1.34)
+  Mg >2.3 AC                OR=0.498 (0.242-1.027)  E=3.43 (CI limit 1.19)
+  Saved: 07_evalues.csv
+
+=================================================================
+B. PROGNOSTIC Mg→AKI ASSOCIATION
+=================================================================
+
+  eICU (N=4632)
+    KDIGO stage >=1           OR 1.555 (1.338-1.806) P=0.0000 *
+    Cr ratio >=1.5x           OR 1.566 (1.320-1.858) P=0.0000 *
+    Delta Cr >=0.3/48h        OR 1.591 (1.358-1.864) P=0.0000 *
+    KDIGO stage >=2           OR 1.300 (0.997-1.694) P=0.0527
+    KDIGO stage >=3           OR 1.342 (0.959-1.879) P=0.0860
+    Simple                    OR 1.448 (1.203-1.742) P=0.0001
+    Complex                   OR 1.947 (1.480-2.560) P=0.0000
+
+  MIMIC (N=1411)
+    KDIGO stage >=1           OR 1.121 (0.891-1.412) P=0.3290
+    Cr ratio >=1.5x           OR 1.123 (0.871-1.447) P=0.3727
+    Delta Cr >=0.3/48h        OR 1.174 (0.914-1.508) P=0.2088
+    KDIGO stage >=2           OR 1.042 (0.740-1.468) P=0.8131
+    KDIGO stage >=3           OR 1.137 (0.651-1.983) P=0.6519
+    Simple                    OR 1.040 (0.768-1.409) P=0.7983
+    Complex                   OR 1.261 (0.790-2.015) P=0.3315
+  Saved: 07b_prognostic.csv (14 rows)
+
+=================================================================
+C. MICE STABILITY (m=10, 20)
+=================================================================
+  eICU m=10...
+    ow_aki1      OR=0.879 (0.672-1.150) P=0.3469
+    iptw_aki1    OR=0.806 (0.614-1.059) P=0.1214
+    ac_aki1      OR=0.806 (0.551-1.177) P=0.2641
+  MIMIC m=10...
+    ow_aki1      OR=1.064 (0.766-1.478) P=0.7119
+    iptw_aki1    OR=1.165 (0.811-1.675) P=0.4090
+    ac_aki1      OR=0.901 (0.535-1.519) P=0.6954
+  eICU m=20...
+    ow_aki1      OR=0.879 (0.672-1.150) P=0.3469
+    iptw_aki1    OR=0.806 (0.614-1.059) P=0.1214
+    ac_aki1      OR=0.806 (0.551-1.177) P=0.2641
+  MIMIC m=20...
+    ow_aki1      OR=1.064 (0.766-1.478) P=0.7119
+    iptw_aki1    OR=1.165 (0.811-1.675) P=0.4090
+    ac_aki1      OR=0.901 (0.535-1.519) P=0.6954
+  Saved: 07c_mice_stability.csv (18 rows)
+
+=================================================================
+D. AC BASELINE CHARACTERISTICS (eTable 3)
+=================================================================
+  eICU AC: N=1051 (Mg+K=290, K-only=761)
+
+                                 Stratified by trt_label
+                                  K-only        Mg+K          SMD   
+  n                                 761           290               
+  age (mean (SD))                 64.13 (14.16) 66.81 (14.85)  0.185
+  is_female = 1 (%)                 271 (35.6)    120 (41.4)   0.119
+  bmi (mean (SD))                 29.74 (7.08)  29.37 (6.70)   0.055
+  surgery_type (%)                                             0.134
+     cabg                           274 (36.0)    106 (36.6)        
+     combined                        56 ( 7.4)     13 ( 4.5)        
+     other_cardiac                  301 (39.6)    119 (41.0)        
+     unknown                          1 ( 0.1)      0 ( 0.0)        
+     valve                          129 (17.0)     52 (17.9)        
+  heart_failure = 1 (%)             121 (15.9)     49 (16.9)   0.027
+  hypertension = 1 (%)              436 (57.3)    170 (58.6)   0.027
+  diabetes = 1 (%)                  250 (32.9)    106 (36.6)   0.078
+  ckd = 1 (%)                        75 ( 9.9)     21 ( 7.2)   0.094
+  copd = 1 (%)                       71 ( 9.3)     23 ( 7.9)   0.050
+  pvd = 1 (%)                        30 ( 3.9)     15 ( 5.2)   0.059
+  stroke = 1 (%)                     67 ( 8.8)     33 (11.4)   0.086
+  liver_disease = 1 (%)               5 ( 0.7)      1 ( 0.3)   0.044
+  baseline_creatinine (mean (SD))  1.13 (0.47)   1.10 (0.48)   0.062
+  egfr (mean (SD))                73.65 (24.75) 73.59 (23.97)  0.002
+  loop_diuretics = 1 (%)            230 (30.2)     66 (22.8)   0.170
+  nsaids = 1 (%)                     19 ( 2.5)      6 ( 2.1)   0.029
+  acei_arb = 1 (%)                  104 (13.7)     36 (12.4)   0.037
+  ppi = 1 (%)                       181 (23.8)     62 (21.4)   0.058
+  beta_blockers = 1 (%)             376 (49.4)    142 (49.0)   0.009
+  steroids = 1 (%)                   96 (12.6)     30 (10.3)   0.071
+  antiarrhythmics = 1 (%)             7 ( 0.9)      4 ( 1.4)   0.043
+  vasopressor_6h = 1 (%)            257 (33.8)    118 (40.7)   0.143
+  transfusion_6h = 1 (%)             99 (13.0)     39 (13.4)   0.013
+  first_mg_value (mean (SD))       2.21 (0.52)   1.99 (0.46)   0.443
+  first_potassium (mean (SD))      3.93 (0.61)   3.84 (0.54)   0.146
+  first_calcium (mean (SD))        7.39 (1.64)   7.72 (1.45)   0.216
+  first_heartrate (mean (SD))     86.39 (18.23) 84.75 (18.41)  0.089
+  aki_kdigo1 = 1 (%)                161 (21.2)     45 (15.5)   0.146
+  hospital_mortality = 1 (%)         47 ( 6.2)     18 ( 6.2)   0.001
+                                 Stratified by trt_label
+                                  K-only          Mg+K            SMD     
+  n                               "  761"         "  290"         ""      
+  age (mean (SD))                 "64.13 (14.16)" "66.81 (14.85)" " 0.185"
+  is_female = 1 (%)               "  271 (35.6) " "  120 (41.4) " " 0.119"
+  bmi (mean (SD))                 "29.74 (7.08)"  "29.37 (6.70)"  " 0.055"
+  surgery_type (%)                "  "            "  "            " 0.134"
+     cabg                         "  274 (36.0) " "  106 (36.6) " ""      
+     combined                     "   56 ( 7.4) " "   13 ( 4.5) " ""      
+     other_cardiac                "  301 (39.6) " "  119 (41.0) " ""      
+     unknown                      "    1 ( 0.1) " "    0 ( 0.0) " ""      
+     valve                        "  129 (17.0) " "   52 (17.9) " ""      
+  heart_failure = 1 (%)           "  121 (15.9) " "   49 (16.9) " " 0.027"
+  hypertension = 1 (%)            "  436 (57.3) " "  170 (58.6) " " 0.027"
+  diabetes = 1 (%)                "  250 (32.9) " "  106 (36.6) " " 0.078"
+  ckd = 1 (%)                     "   75 ( 9.9) " "   21 ( 7.2) " " 0.094"
+  copd = 1 (%)                    "   71 ( 9.3) " "   23 ( 7.9) " " 0.050"
+  pvd = 1 (%)                     "   30 ( 3.9) " "   15 ( 5.2) " " 0.059"
+  stroke = 1 (%)                  "   67 ( 8.8) " "   33 (11.4) " " 0.086"
+  liver_disease = 1 (%)           "    5 ( 0.7) " "    1 ( 0.3) " " 0.044"
+  baseline_creatinine (mean (SD)) " 1.13 (0.47)"  " 1.10 (0.48)"  " 0.062"
+  egfr (mean (SD))                "73.65 (24.75)" "73.59 (23.97)" " 0.002"
+  loop_diuretics = 1 (%)          "  230 (30.2) " "   66 (22.8) " " 0.170"
+  nsaids = 1 (%)                  "   19 ( 2.5) " "    6 ( 2.1) " " 0.029"
+  acei_arb = 1 (%)                "  104 (13.7) " "   36 (12.4) " " 0.037"
+  ppi = 1 (%)                     "  181 (23.8) " "   62 (21.4) " " 0.058"
+  beta_blockers = 1 (%)           "  376 (49.4) " "  142 (49.0) " " 0.009"
+  steroids = 1 (%)                "   96 (12.6) " "   30 (10.3) " " 0.071"
+  antiarrhythmics = 1 (%)         "    7 ( 0.9) " "    4 ( 1.4) " " 0.043"
+  vasopressor_6h = 1 (%)          "  257 (33.8) " "  118 (40.7) " " 0.143"
+  transfusion_6h = 1 (%)          "   99 (13.0) " "   39 (13.4) " " 0.013"
+  first_mg_value (mean (SD))      " 2.21 (0.52)"  " 1.99 (0.46)"  " 0.443"
+  first_potassium (mean (SD))     " 3.93 (0.61)"  " 3.84 (0.54)"  " 0.146"
+  first_calcium (mean (SD))       " 7.39 (1.64)"  " 7.72 (1.45)"  " 0.216"
+  first_heartrate (mean (SD))     "86.39 (18.23)" "84.75 (18.41)" " 0.089"
+  aki_kdigo1 = 1 (%)              "  161 (21.2) " "   45 (15.5) " " 0.146"
+  hospital_mortality = 1 (%)      "   47 ( 6.2) " "   18 ( 6.2) " " 0.001"
+  MIMIC-IV AC: N=376 (Mg+K=122, K-only=254)
+
+                                 Stratified by trt_label
+                                  K-only        Mg+K          SMD   
+  n                                 254           122               
+  age (mean (SD))                 68.92 (14.51) 72.99 (12.99)  0.296
+  is_female = 1 (%)                 109 (42.9)     59 (48.4)   0.110
+  bmi (mean (SD))                 27.54 (5.47)  26.58 (4.64)   0.189
+  surgery_type (%)                                             0.091
+     cabg                            55 (21.7)     22 (18.0)        
+     combined                         6 ( 2.4)      3 ( 2.5)        
+     other_cardiac                  139 (54.7)     70 (57.4)        
+     valve                           54 (21.3)     27 (22.1)        
+  heart_failure = 1 (%)             108 (42.5)     53 (43.4)   0.019
+  hypertension = 1 (%)              187 (73.6)     92 (75.4)   0.041
+  diabetes = 1 (%)                   78 (30.7)     35 (28.7)   0.044
+  ckd = 1 (%)                        61 (24.0)     26 (21.3)   0.065
+  copd = 1 (%)                       40 (15.7)     23 (18.9)   0.082
+  pvd = 1 (%)                        22 ( 8.7)     17 (13.9)   0.167
+  stroke = 1 (%)                     14 ( 5.5)      3 ( 2.5)   0.157
+  liver_disease = 1 (%)              13 ( 5.1)      6 ( 4.9)   0.009
+  baseline_creatinine (mean (SD))  1.15 (0.53)   1.11 (0.56)   0.075
+  egfr (mean (SD))                70.07 (26.92) 70.67 (27.48)  0.022
+  loop_diuretics = 1 (%)             45 (17.7)     16 (13.1)   0.128
+  nsaids = 1 (%)                      3 ( 1.2)      4 ( 3.3)   0.142
+  acei_arb = 1 (%)                   21 ( 8.3)     10 ( 8.2)   0.003
+  ppi = 1 (%)                        70 (27.6)     34 (27.9)   0.007
+  beta_blockers = 1 (%)             100 (39.4)     59 (48.4)   0.182
+  steroids = 1 (%)                   21 ( 8.3)      6 ( 4.9)   0.135
+  antiarrhythmics = 1 (%)            23 ( 9.1)     11 ( 9.0)   0.001
+  vasopressor_6h = 1 (%)            140 (55.1)     64 (52.5)   0.053
+  transfusion_6h = 1 (%)            113 (44.5)     52 (42.6)   0.038
+  first_mg_value (mean (SD))       2.36 (0.72)   2.14 (0.81)   0.289
+  first_potassium (mean (SD))      3.98 (0.62)   3.82 (0.46)   0.298
+  first_calcium (mean (SD))        8.28 (0.77)   8.13 (0.63)   0.216
+  first_heartrate (mean (SD))     84.31 (15.88) 81.59 (11.86)  0.194
+  aki_kdigo1 = 1 (%)                 74 (29.1)     31 (25.4)   0.084
+  hospital_mortality = 1 (%)         16 ( 6.3)      6 ( 4.9)   0.060
+                                 Stratified by trt_label
+                                  K-only          Mg+K            SMD     
+  n                               "  254"         "  122"         ""      
+  age (mean (SD))                 "68.92 (14.51)" "72.99 (12.99)" " 0.296"
+  is_female = 1 (%)               "  109 (42.9) " "   59 (48.4) " " 0.110"
+  bmi (mean (SD))                 "27.54 (5.47)"  "26.58 (4.64)"  " 0.189"
+  surgery_type (%)                "  "            "   "           " 0.091"
+     cabg                         "   55 (21.7) " "   22 (18.0) " ""      
+     combined                     "    6 ( 2.4) " "    3 ( 2.5) " ""      
+     other_cardiac                "  139 (54.7) " "   70 (57.4) " ""      
+     valve                        "   54 (21.3) " "   27 (22.1) " ""      
+  heart_failure = 1 (%)           "  108 (42.5) " "   53 (43.4) " " 0.019"
+  hypertension = 1 (%)            "  187 (73.6) " "   92 (75.4) " " 0.041"
+  diabetes = 1 (%)                "   78 (30.7) " "   35 (28.7) " " 0.044"
+  ckd = 1 (%)                     "   61 (24.0) " "   26 (21.3) " " 0.065"
+  copd = 1 (%)                    "   40 (15.7) " "   23 (18.9) " " 0.082"
+  pvd = 1 (%)                     "   22 ( 8.7) " "   17 (13.9) " " 0.167"
+  stroke = 1 (%)                  "   14 ( 5.5) " "    3 ( 2.5) " " 0.157"
+  liver_disease = 1 (%)           "   13 ( 5.1) " "    6 ( 4.9) " " 0.009"
+  baseline_creatinine (mean (SD)) " 1.15 (0.53)"  " 1.11 (0.56)"  " 0.075"
+  egfr (mean (SD))                "70.07 (26.92)" "70.67 (27.48)" " 0.022"
+  loop_diuretics = 1 (%)          "   45 (17.7) " "   16 (13.1) " " 0.128"
+  nsaids = 1 (%)                  "    3 ( 1.2) " "    4 ( 3.3) " " 0.142"
+  acei_arb = 1 (%)                "   21 ( 8.3) " "   10 ( 8.2) " " 0.003"
+  ppi = 1 (%)                     "   70 (27.6) " "   34 (27.9) " " 0.007"
+  beta_blockers = 1 (%)           "  100 (39.4) " "   59 (48.4) " " 0.182"
+  steroids = 1 (%)                "   21 ( 8.3) " "    6 ( 4.9) " " 0.135"
+  antiarrhythmics = 1 (%)         "   23 ( 9.1) " "   11 ( 9.0) " " 0.001"
+  vasopressor_6h = 1 (%)          "  140 (55.1) " "   64 (52.5) " " 0.053"
+  transfusion_6h = 1 (%)          "  113 (44.5) " "   52 (42.6) " " 0.038"
+  first_mg_value (mean (SD))      " 2.36 (0.72)"  " 2.14 (0.81)"  " 0.289"
+  first_potassium (mean (SD))     " 3.98 (0.62)"  " 3.82 (0.46)"  " 0.298"
+  first_calcium (mean (SD))       " 8.28 (0.77)"  " 8.13 (0.63)"  " 0.216"
+  first_heartrate (mean (SD))     "84.31 (15.88)" "81.59 (11.86)" " 0.194"
+  aki_kdigo1 = 1 (%)              "   74 (29.1) " "   31 (25.4) " " 0.084"
+  hospital_mortality = 1 (%)      "   16 ( 6.3) " "    6 ( 4.9) " " 0.060"
+  Saved: 07d_ac_table1.csv
+
+=================================================================
+07_sensitivity.R COMPLETE
+=================================================================
+
+──── Step 8: Stratified + RE ────
+Loading cohorts...
+  eICU: N=4632  MIMIC: N=1411
+
+=================================================================
+A. SERUM-MG-STRATIFIED ANALYSIS
+=================================================================
+
+  eICU (N=4632, trt=606)
+    <1.8       N= 1036 trt= 266 (25.7%) AKI=15.5%
+    1.8-2.0    N=  781 trt= 162 (20.7%) AKI=17.0%
+    2.0-2.3    N= 1076 trt=  83 (7.7%) AKI=19.2%
+    >2.3       N= 1739 trt=  95 (5.5%) AKI=24.7%
+    <1.8       OW:  OR 1.013 (0.605-1.695) P=0.9623
+    <1.8       AC:  OR 1.351 (0.610-2.992) P=0.4576
+    1.8-2.0    OW:  OR 0.960 (0.652-1.412) P=0.8340
+    1.8-2.0    AC:  OR 0.895 (0.370-2.167) P=0.8064
+    2.0-2.3    OW:  OR 0.954 (0.564-1.613) P=0.8598
+    2.0-2.3    AC:  OR 0.958 (0.402-2.283) P=0.9227
+    >2.3       OW:  OR 0.553 (0.327-0.937) P=0.0278 *
+    >2.3       AC:  OR 0.497 (0.241-1.026) P=0.0587
+    Interaction: OR 0.476 P=0.0064
+    Cochran Q=3.53 P=0.3171 I²=15%
+
+  MIMIC (N=1411, trt=255)
+    <1.8       N=  323 trt= 121 (37.5%) AKI=28.5%
+    1.8-2.0    N=  323 trt=  72 (22.3%) AKI=22.6%
+    2.0-2.3    N=  359 trt=  11 (3.1%) AKI=29.8%
+    >2.3       N=  406 trt=  51 (12.6%) AKI=33.5%
+    <1.8       OW:  OR 1.098 (0.637-1.893) P=0.7367
+    <1.8       AC:  OR 1.202 (0.378-3.819) P=0.7556
+    1.8-2.0    OW:  OR 1.054 (0.535-2.075) P=0.8799
+    1.8-2.0    AC:  OR 0.571 (0.152-2.139) P=0.4054
+    2.0-2.3    SKIP
+    >2.3       OW:  OR 1.121 (0.547-2.296) P=0.7551
+    >2.3       AC:  OR 0.750 (0.280-2.004) P=0.5657
+    Interaction: OR 0.980 P=0.9362
+    Cochran Q=0.02 P=0.9919 I²=0%
+  Saved: 08_mg_stratified.csv (16 rows)
+
+=================================================================
+B. HOSPITAL RANDOM EFFECTS (eICU)
+=================================================================
+  N=4632, hospitals=71
+  ICC: 0.069 (6.9% between hospitals)
+  Hospital correlation (supp rate vs AKI): r=-0.213 P=0.1514
+
+  ── Overall (N=4631, trt=605, hosp=70) ──
+    Fixed:       OR 0.810 (0.633-1.037) P=0.0941
+    Hospital RE: OR 0.807 (0.624-1.043) P=0.1011  ICC=0.068
+    Delta: -0.4%
+
+  ── <1.8 (N=1032, trt=265, hosp=47) ──
+    Fixed:       OR 1.030 (0.615-1.724) P=0.9116
+    Hospital RE: OR 0.966 (0.617-1.513) P=0.8798  ICC=0.050
+    Delta: -6.2%
+
+  ── 2.0-2.3 (N=1071, trt=83, hosp=59) ──
+    Fixed:       OR 0.928 (0.539-1.599) P=0.7877
+    Hospital RE: OR 0.946 (0.510-1.752) P=0.8593  ICC=0.025
+    Delta: +1.9%
+
+  ── >2.3 (N=1734, trt=94, hosp=65) ──
+    Fixed:       OR 0.525 (0.320-0.862) P=0.0108
+    Hospital RE: OR 0.505 (0.271-0.941) P=0.0314 *  ICC=0.046
+    Delta: -3.8%
+
+  ── Narrow sub-bands within >2.3 (Firth, 3 covariates) ──
+    2.3-2.6    N= 726 trt= 52(10 events) ctrl= 674(144 events) Firth OR 0.948 (0.445-1.856) P=0.8817
+    2.6-3.0    N= 603 trt= 31(3 events) ctrl= 572(140 events) Firth OR 0.403 (0.107-1.114) P=0.0833
+    >3.0       N= 410 trt= 12(2 events) ctrl= 398(131 events) Firth OR 0.485 (0.092-1.714) P=0.2796
+
+  ── Within-hospital meta (>2.3) ──
+    Hospitals with >=5 per arm: 6
+    Pooled: OR 0.407 (0.134-1.242) P=0.1144 I²=0%
+  Saved: 08b_hospital_re.csv (12 rows)
+Warning messages:
+1: glm.fit: algorithm did not converge 
+2: glm.fit: fitted probabilities numerically 0 or 1 occurred 
+3: glm.fit: algorithm did not converge 
+4: glm.fit: fitted probabilities numerically 0 or 1 occurred 
+
+=================================================================
+08_stratified.R COMPLETE
+=================================================================
+
+──── Step 9: Robustness ────
+Loading cohorts...
+
+=================================================================
+E. LACTATE SENSITIVITY ANALYSIS
+=================================================================
+  eICU with_lactate:
+    OW:   OR 0.879 (0.672-1.150) P=0.3469
+    IPTW: OR 0.806 (0.614-1.059) P=0.1214
+    AC:   OR 0.806 (0.551-1.177) P=0.2641
+  eICU without_lactate:
+    OW:   OR 0.875 (0.669-1.143) P=0.3271
+    IPTW: OR 0.803 (0.610-1.057) P=0.1175
+    AC:   OR 0.809 (0.554-1.183) P=0.2746
+    ow_aki1 |ΔOR| = 0.004
+    iptw_aki1 |ΔOR| = 0.003
+    ac_aki1 |ΔOR| = 0.003
+  MIMIC with_lactate:
+    OW:   OR 1.064 (0.766-1.478) P=0.7119
+    IPTW: OR 1.165 (0.811-1.675) P=0.4090
+    AC:   OR 0.901 (0.535-1.519) P=0.6954
+  MIMIC without_lactate:
+    OW:   OR 1.028 (0.741-1.427) P=0.8674
+    IPTW: OR 1.136 (0.792-1.630) P=0.4880
+    AC:   OR 0.886 (0.529-1.486) P=0.6469
+    ow_aki1 |ΔOR| = 0.036
+    iptw_aki1 |ΔOR| = 0.029
+    ac_aki1 |ΔOR| = 0.015
+
+=================================================================
+F. QUANTITATIVE BIAS ANALYSIS
+=================================================================
+  2.6-3.0 subband OR loaded from CSV: 0.403
+  Assumptions:
+    U = complex surgery (long CPB / cross-clamp)
+    OR_UY = effect of complex surgery on AKI
+    p0 = P(complex | untreated), p1 = p0 - delta
+    Bias factor = (OR_UY*p1 + 1-p1) / (OR_UY*p0 + 1-p0)
+    Adjusted OR = Observed OR / Bias factor
+
+  ── AC primary (eICU) (observed OR = 0.795) ──
+    Survives 36/36 scenarios (100%)
+    Worst case: bias factor=0.824 → adjusted OR=0.965 (still protective)
+  ── IPTW (eICU) (observed OR = 0.805) ──
+    Survives 36/36 scenarios (100%)
+    Worst case: bias factor=0.824 → adjusted OR=0.977 (still protective)
+  ── Mg >2.3 OW (eICU) (observed OR = 0.553) ──
+    Survives 36/36 scenarios (100%)
+    Worst case: bias factor=0.912 → adjusted OR=0.607 (still protective)
+  ── Mg >2.3 AC (eICU) (observed OR = 0.497) ──
+    Survives 36/36 scenarios (100%)
+    Worst case: bias factor=0.912 → adjusted OR=0.545 (still protective)
+  ── 2.6-3.0 subband (observed OR = 0.403) ──
+    Survives 36/36 scenarios (100%)
+    Worst case: bias factor=0.912 → adjusted OR=0.442 (still protective)
+
+-----------------------------------------------------------------
+QBA SUMMARY: Does the estimate survive?
+-----------------------------------------------------------------
+  Scenario: OR_UY=2.0, p0=0.40, delta=0.10 (moderate assumptions)
+  For stratified estimates, delta halved to 0.05
+
+  AC primary (eICU)         OR 0.795 → 0.856 ✓ survives
+  IPTW (eICU)               OR 0.805 → 0.867 ✓ survives
+  Mg >2.3 OW (eICU)         OR 0.553 → 0.573 ✓ survives
+  Mg >2.3 AC (eICU)         OR 0.497 → 0.515 ✓ survives
+  2.6-3.0 subband           OR 0.403 → 0.418 ✓ survives
+
+  Key insight: within the >2.3 stratum, complexity is held
+  approximately constant by stratification, so the prevalence
+  difference shrinks → bias factor approaches 1 → adjusted
+  estimate stays protective.
+
+=================================================================
+09_robustness.R COMPLETE
+=================================================================
+  Saved: results/09_lactate_sensitivity.csv
+  Saved: results/09_qba.csv
+
+──── Step fig: Figures (Python) ────
+=======================================================
+Generating publication figures (v7)
+=======================================================
+Figure 1: Forest plot (AC + sensitivity + controls)
+  Saved: figs/fig2_forest.pdf + .png
+Figure 2: Mg-stratified forest (core finding)
+  Saved: figs/fig_mg_stratified.pdf + .png
+Figure 3: Subgroup forest (eICU AC)
+  Saved: figs/fig3_subgroups.pdf + .png
+eFigure 2: Surgery-type interaction (cardioplegia)
+  Saved: figs/efig1_interaction.pdf + .png
+eFigure spline: Treatment effect by baseline serum magnesium
+  Saved: figs/efig_spline_interaction.pdf + .png
+
+Done. Check figs/ directory.
+
+✓ Done (4m3s)
+-rw-r--r--. 1 g91p721 tempest-users  50K Jun 17 14:53 figs/efig1_interaction.pdf
+-rw-r--r--. 1 g91p721 tempest-users  39K Jun 17 14:53 figs/efig_spline_interaction.pdf
+-rw-r--r--. 1 g91p721 tempest-users  73K Jun 17 14:53 figs/fig2_forest.pdf
+-rw-r--r--. 1 g91p721 tempest-users  50K Jun 17 14:53 figs/fig3_subgroups.pdf
+-rw-r--r--. 1 g91p721 tempest-users 6.7K Jun 17 14:12 figs/fig_cox_spline.pdf
+-rw-r--r--. 1 g91p721 tempest-users  77K Jun 17 10:43 figs/fig_cr_kinetics.pdf
+-rw-r--r--. 1 g91p721 tempest-users 149K Jun 16 22:08 figs/fig_km_panels.pdf
+-rw-r--r--. 1 g91p721 tempest-users 103K Jun 17 12:27 figs/fig_love_plots.pdf
+-rw-r--r--. 1 g91p721 tempest-users  59K Jun 17 14:53 figs/fig_mg_stratified.pdf
+-rw-r--r--. 1 g91p721 tempest-users  238 Jun 17 14:01 results/00_consort.csv
+-rw-r--r--. 1 g91p721 tempest-users 2.4M Jun 17 14:01 results/01_analysis_a_cohort.csv
+-rw-r--r--. 1 g91p721 tempest-users 2.5M Jun 17 12:14 results/01_analysis_a_cohort_enriched.csv
+-rw-r--r--. 1 g91p721 tempest-users  601 Jun 17 14:12 results/02b_additional_outcomes.csv
+-rw-r--r--. 1 g91p721 tempest-users 1.2K Jun 17 12:27 results/02c_strict_comparison.csv
+-rw-r--r--. 1 g91p721 tempest-users 1.3K Jun 17 14:20 results/02_results.csv
+-rw-r--r--. 1 g91p721 tempest-users 636K Jun 17 14:11 results/04_mimic_cohort.csv
+-rw-r--r--. 1 g91p721 tempest-users 677K Jun 17 12:23 results/04_mimic_cohort_enriched.csv
+-rw-r--r--. 1 g91p721 tempest-users 4.6K Jun 17 12:23 results/05_table1.csv
+-rw-r--r--. 1 g91p721 tempest-users  399 Jun 17 12:23 results/05_table2.csv
+-rw-r--r--. 1 g91p721 tempest-users  444 Jun 16 23:56 results/06_fig1_consort.csv
+-rw-r--r--. 1 g91p721 tempest-users  824 Jun 17 14:49 results/07b_prognostic.csv
+-rw-r--r--. 1 g91p721 tempest-users  859 Jun 17 14:49 results/07c_mice_stability.csv
+-rw-r--r--. 1 g91p721 tempest-users 4.7K Jun 17 14:49 results/07d_ac_table1.csv
+-rw-r--r--. 1 g91p721 tempest-users  459 Jun 17 14:49 results/07_evalues.csv
+-rw-r--r--. 1 g91p721 tempest-users  801 Jun 17 14:53 results/08b_hospital_re.csv
+-rw-r--r--. 1 g91p721 tempest-users 1.8K Jun 17 14:49 results/08_mg_stratified.csv
+-rw-r--r--. 1 g91p721 tempest-users  908 Jun 17 14:53 results/09_lactate_sensitivity.csv
+-rw-r--r--. 1 g91p721 tempest-users  13K Jun 17 14:53 results/09_qba.csv
+-rw-r--r--. 1 g91p721 tempest-users   62 Jun 16 22:08 results/10_death_rates.csv
+-rw-r--r--. 1 g91p721 tempest-users  226 Jun 17 14:12 results/12_cox_prognostic.csv
+-rw-r--r--. 1 g91p721 tempest-users 9.4K Jun 17 14:12 results/12_spline_interaction.csv
+-rw-r--r--. 1 g91p721 tempest-users  555 Jun 17 14:49 results/etable6_safety.csv
+-rw-r--r--. 1 g91p721 tempest-users 4.5K Jun 17 14:49 results/etables_4_5_subgroups.csv
+-rw-r--r--. 1 g91p721 tempest-users  417 Jun 15 22:55 results/probe_achieved_mg.csv
+-rw-r--r--. 1 g91p721 tempest-users  412 Jun 15 22:55 results/probe_apache_sensitivity.csv
+-rw-r--r--. 1 g91p721 tempest-users 1.5K Jun 16 08:15 results/probe_ascertainment.csv
+-rw-r--r--. 1 g91p721 tempest-users  225 Jun 15 22:55 results/probe_bmi_audit.csv
+-rw-r--r--. 1 g91p721 tempest-users  591 Jun 15 22:55 results/probe_bmi_sensitivity.csv
+-rw-r--r--. 1 g91p721 tempest-users  256 Jun 16 08:16 results/probe_cr_counts.csv
+-rw-r--r--. 1 g91p721 tempest-users  808 Jun 16 08:15 results/probe_firth_subbands.csv
+-rw-r--r--. 1 g91p721 tempest-users  239 Jun 16 08:15 results/probe_mimic_dose.csv
+-rw-r--r--. 1 g91p721 tempest-users 7.5K Jun 16 17:48 results/probe_spline_interaction.csv
+-rw-r--r--. 1 g91p721 tempest-users  108 Jun 16 10:40 results/probe_uo_diagnostics.csv
+-rw-r--r--. 1 g91p721 tempest-users 1.9K Jun 15 22:55 results/probe_weighted_smds.csv
