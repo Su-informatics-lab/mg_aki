@@ -181,36 +181,55 @@ def plot_kinetics(cr, cohort, db_name, axes_row):
     ax.set_title(f"{db_name}: Cr trajectory", fontsize=7, fontweight="bold")
     ax.legend(fontsize=5, loc="upper right")
 
-    # ── Panel b: Cr/baseline ratio by treatment ──────────────────
+    # ── Panel b: Cr/baseline ratio — PERCENTILE FAN ────────────
+    #   Median hides the signal (80% never get AKI). Show upper
+    #   percentiles where AKI lives: P75, P90, P95.
     ax = axes_row[1]
+    post_only = cr[(cr.hours > 0) & cr.cr_ratio.notna() & (cr.cr_ratio < 10)].copy()
+
     for g, color, label in [(1, C_VERM, "Mg supp"), (0, C_BLUE, "No supp")]:
-        sub = cr[(cr.trt == g) & cr.cr_ratio.notna() & (cr.cr_ratio < 5)]
+        sub = post_only[post_only.trt == g]
         stats = (
-            sub.groupby("time_bin")["cr_ratio"]
+            sub.groupby("time_bin")
             .agg(
-                [
-                    "median",
-                    "count",
-                    lambda x: x.quantile(0.25),
-                    lambda x: x.quantile(0.75),
-                ]
+                p50=("cr_ratio", "median"),
+                p75=("cr_ratio", lambda x: x.quantile(0.75)),
+                p90=("cr_ratio", lambda x: x.quantile(0.90)),
+                p95=("cr_ratio", lambda x: x.quantile(0.95)),
+                n=("cr_ratio", "count"),
             )
             .reset_index()
         )
-        stats.columns = ["t", "median", "n", "q25", "q75"]
         stats = stats[stats.n >= 20]
-        ax.fill_between(stats.t, stats.q25, stats.q75, alpha=0.15, color=color)
-        ax.plot(stats.t, stats["median"], color=color, linewidth=1.2, label=label)
+        t = stats.time_bin
+
+        # P75–P95 band
+        ax.fill_between(t, stats.p75, stats.p95, alpha=0.12, color=color)
+        # P90 line (this is where AKI patients live)
+        ax.plot(
+            t,
+            stats.p90,
+            color=color,
+            linewidth=1.2,
+            linestyle="-",
+            label=f"{label} P90",
+        )
+        # P75 line
+        ax.plot(t, stats.p75, color=color, linewidth=0.7, linestyle="--", alpha=0.7)
+        # P50 thin reference
+        ax.plot(t, stats.p50, color=color, linewidth=0.5, linestyle=":", alpha=0.5)
 
     ax.axhline(1.5, color="red", linestyle=":", linewidth=0.7, alpha=0.6)
     ax.text(150, 1.52, "KDIGO 1.5×", fontsize=5, color="red", alpha=0.7)
-    ax.axhline(1.0, color=C_GRAY, linestyle="-", linewidth=0.3, alpha=0.5)
+    ax.axhline(1.0, color=C_GRAY, linestyle="-", linewidth=0.3, alpha=0.4)
     ax.axvline(6, color=C_GRAY, linestyle="--", linewidth=0.5, alpha=0.7)
     ax.set_xlabel("Hours from ICU admission")
     ax.set_ylabel("Cr / baseline ratio")
-    ax.set_ylim(0.4, 2.5)
-    ax.set_title(f"{db_name}: Cr/baseline ratio", fontsize=7, fontweight="bold")
-    ax.legend(fontsize=5, loc="upper right")
+    ax.set_ylim(0.6, 3.0)
+    ax.set_title(
+        f"{db_name}: Cr ratio percentiles (P50/P75/P90)", fontsize=7, fontweight="bold"
+    )
+    ax.legend(fontsize=5, loc="upper left")
 
     # ── Panel c: Cumulative AKI proportion over time ─────────────
     ax = axes_row[2]
