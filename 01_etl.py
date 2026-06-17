@@ -376,6 +376,8 @@ def run_eicu():
     #   Priority 1: Cr near hospital admission (within ±6 h of hosp admit)
     #   Priority 2: Any pre-ICU Cr (offset < 0), closest to hosp admit
     #   Priority 3: First ICU Cr (offset 0–60 min) — flagged, not ideal
+    #   Primary: most recent pre-operative Cr (Yan/ADQI standard)
+    #   Also saves admission Cr as sensitivity column
     #   Reference: Nadim 2018 ADQI, KDIGO CSA-AKI consensus
     # ══════════════════════════════════════════════════════════════
     cr = lab[
@@ -384,70 +386,53 @@ def run_eicu():
         & lab.labresult.between(cfg.CR_PLAUSIBLE_MIN, cfg.CR_PLAUSIBLE_MAX)
     ].copy()
 
-    # Merge hospitaladmitoffset for each patient
     hosp_off = cardiac.set_index("patientunitstayid")["hospitaladmitoffset"].to_dict()
+    cr_cohort = cr[cr.patientunitstayid.isin(set(cohort.patientunitstayid))].copy()
+    cr_cohort["hosp_off"] = cr_cohort.patientunitstayid.map(hosp_off)
 
-    # Priority 1: Cr near hospital admission
-    cr_with_hosp = cr[cr.patientunitstayid.isin(set(cohort.patientunitstayid))].copy()
-    cr_with_hosp["hosp_off"] = cr_with_hosp.patientunitstayid.map(hosp_off)
-    cr_with_hosp["dist_to_admit"] = abs(
-        cr_with_hosp.labresultoffset - cr_with_hosp.hosp_off
+    # ── PRIMARY: most recent pre-ICU Cr (术前最后一个) ────────────
+    pre_icu = cr_cohort[cr_cohort.labresultoffset < 0]
+    bl_primary = (
+        pre_icu.sort_values("labresultoffset", ascending=False)
+        .groupby("patientunitstayid")
+        .first()
+        .reset_index()[["patientunitstayid", "labresult", "labresultoffset"]]
+        .rename(
+            columns={
+                "labresult": "baseline_cr",
+                "labresultoffset": "baseline_cr_offset",
+            }
+        )
     )
-    # Within ±6h of hospital admission
-    admit_window = cr_with_hosp[
-        (cr_with_hosp.labresultoffset >= cr_with_hosp.hosp_off - LANDMARK_MIN)
-        & (cr_with_hosp.labresultoffset <= cr_with_hosp.hosp_off + LANDMARK_MIN)
-    ]
-    bl_admit = (
+    bl_primary["baseline_source"] = "last_preop"
+    n_primary = len(bl_primary)
+
+    cohort = cohort.merge(bl_primary, on="patientunitstayid")
+    consort["has_baseline_cr"] = len(cohort)
+
+    # ── SENSITIVITY: admission Cr (closest to hospital admission) ─
+    admit_window = cr_cohort[
+        cr_cohort.patientunitstayid.isin(set(cohort.patientunitstayid))
+        & (cr_cohort.labresultoffset >= cr_cohort.hosp_off - LANDMARK_MIN)
+        & (cr_cohort.labresultoffset <= cr_cohort.hosp_off + LANDMARK_MIN)
+    ].copy()
+    admit_window["dist_to_admit"] = abs(
+        admit_window.labresultoffset - admit_window.hosp_off
+    )
+    bl_admit_sens = (
         admit_window.sort_values("dist_to_admit")
         .groupby("patientunitstayid")
         .first()
         .reset_index()[["patientunitstayid", "labresult"]]
-        .rename(columns={"labresult": "baseline_cr"})
+        .rename(columns={"labresult": "baseline_cr_admit"})
     )
-    bl_admit["baseline_source"] = "hospital_admission"
-    n_admit = len(bl_admit)
+    cohort = cohort.merge(bl_admit_sens, on="patientunitstayid", how="left")
+    n_admit = bl_admit_sens.patientunitstayid.nunique()
 
-    # Priority 2: Any pre-ICU Cr (offset < 0)
-    pids_need = set(cohort.patientunitstayid) - set(bl_admit.patientunitstayid)
-    pre_icu = cr_with_hosp[
-        cr_with_hosp.patientunitstayid.isin(pids_need)
-        & (cr_with_hosp.labresultoffset < 0)
-    ]
-    bl_preicu = (
-        pre_icu.sort_values("labresultoffset", ascending=False)
-        .groupby("patientunitstayid")
-        .first()
-        .reset_index()[["patientunitstayid", "labresult"]]
-        .rename(columns={"labresult": "baseline_cr"})
-    )
-    bl_preicu["baseline_source"] = "pre_icu"
-    n_preicu = len(bl_preicu)
-
-    # Priority 3: First ICU Cr (0–60 min) — last resort
-    pids_need2 = pids_need - set(bl_preicu.patientunitstayid)
-    first_icu_cr = cr_with_hosp[
-        cr_with_hosp.patientunitstayid.isin(pids_need2)
-        & (cr_with_hosp.labresultoffset >= 0)
-        & (cr_with_hosp.labresultoffset <= 60)
-    ]
-    bl_fallback = (
-        first_icu_cr.sort_values("labresultoffset")
-        .groupby("patientunitstayid")
-        .first()
-        .reset_index()[["patientunitstayid", "labresult"]]
-        .rename(columns={"labresult": "baseline_cr"})
-    )
-    bl_fallback["baseline_source"] = "first_icu_fallback"
-    n_fallback = len(bl_fallback)
-
-    baseline = pd.concat([bl_admit, bl_preicu, bl_fallback], ignore_index=True)
-    cohort = cohort.merge(baseline, on="patientunitstayid")
-    consort["has_baseline_cr"] = len(cohort)
-
+    print(f"  ◆ Primary baseline: last pre-op Cr (n={n_primary})")
     print(
-        f"  ◆ Baseline Cr sources: admission={n_admit}, "
-        f"pre-ICU={n_preicu}, first-ICU-fallback={n_fallback}"
+        f"  ◆ Sensitivity: admission Cr available for {n_admit} "
+        f"({100*n_admit/len(cohort):.0f}%)"
     )
     for src, n in cohort.baseline_source.value_counts().items():
         print(f"    {src}: {n} ({100*n/len(cohort):.1f}%)")
@@ -1107,63 +1092,49 @@ def run_mimic():
         cr_labs.charttime - cr_labs.admittime
     ).dt.total_seconds() / 3600
 
-    # ◆ Priority 1: Cr near hospital admission (±24h of admittime, before ICU)
-    admit_cr = cr_labs[
-        (cr_labs.offset_h_admit >= -24)
-        & (cr_labs.offset_h_admit <= 24)
-        & (cr_labs.offset_h_icu <= 0)
-    ]  # must be before ICU
-    admit_cr["dist_admit"] = abs(admit_cr.offset_h_admit)
-    bl_admit = (
-        admit_cr.sort_values("dist_admit")
-        .groupby("stay_id")
-        .first()
-        .reset_index()[["stay_id", "valuenum"]]
-        .rename(columns={"valuenum": "baseline_cr"})
-    )
-    bl_admit["baseline_source"] = "hospital_admission"
-    n_admit = len(bl_admit)
-
-    # ◆ Priority 2: Any pre-ICU Cr
-    pids_need = set(cohort.stay_id) - set(bl_admit.stay_id)
-    pre_icu = cr_labs[cr_labs.stay_id.isin(pids_need) & (cr_labs.offset_h_icu < 0)]
-    bl_preicu = (
+    # ── PRIMARY: most recent pre-ICU Cr (术前最后一个) ────────────
+    pre_icu = cr_labs[cr_labs.offset_h_icu < 0]
+    bl_primary = (
         pre_icu.sort_values("offset_h_icu", ascending=False)
         .groupby("stay_id")
         .first()
         .reset_index()[["stay_id", "valuenum"]]
         .rename(columns={"valuenum": "baseline_cr"})
     )
-    bl_preicu["baseline_source"] = "pre_icu"
-    n_preicu = len(bl_preicu)
+    bl_primary["baseline_source"] = "last_preop"
+    n_primary = len(bl_primary)
 
-    # ◆ Priority 3: First ICU Cr (0–1h) — fallback
-    pids_need2 = pids_need - set(bl_preicu.stay_id)
-    first_icu = cr_labs[
-        cr_labs.stay_id.isin(pids_need2) & cr_labs.offset_h_icu.between(0, 1)
-    ]
-    bl_fallback = (
-        first_icu.sort_values("offset_h_icu")
-        .groupby("stay_id")
-        .first()
-        .reset_index()[["stay_id", "valuenum"]]
-        .rename(columns={"valuenum": "baseline_cr"})
-    )
-    bl_fallback["baseline_source"] = "first_icu_fallback"
-    n_fallback = len(bl_fallback)
-
-    baseline = pd.concat([bl_admit, bl_preicu, bl_fallback], ignore_index=True)
-    cohort = cohort.merge(baseline, on="stay_id", how="inner")
+    cohort = cohort.merge(bl_primary, on="stay_id", how="inner")
     cohort = cohort[cohort.baseline_cr < 4.0]
     cohort["baseline_egfr"] = cohort.apply(
         lambda r: compute_egfr_scalar(r.baseline_cr, r.age, r.is_female), axis=1
     )
+
+    # ── SENSITIVITY: admission Cr (closest to admittime) ──────────
+    admit_cr = cr_labs[
+        cr_labs.stay_id.isin(set(cohort.stay_id))
+        & (cr_labs.offset_h_admit >= -24)
+        & (cr_labs.offset_h_admit <= 24)
+        & (cr_labs.offset_h_icu <= 0)
+    ].copy()
+    admit_cr["dist_admit"] = abs(admit_cr.offset_h_admit)
+    bl_admit_sens = (
+        admit_cr.sort_values("dist_admit")
+        .groupby("stay_id")
+        .first()
+        .reset_index()[["stay_id", "valuenum"]]
+        .rename(columns={"valuenum": "baseline_cr_admit"})
+    )
+    cohort = cohort.merge(bl_admit_sens, on="stay_id", how="left")
+    n_admit = bl_admit_sens.stay_id.nunique()
+
     stays = set(cohort.stay_id)
     hadms = set(cohort.hadm_id.dropna().astype(int))
 
+    print(f"  ◆ Primary baseline: last pre-op Cr (n={n_primary})")
     print(
-        f"  ◆ Baseline Cr sources: admission={n_admit}, "
-        f"pre-ICU={n_preicu}, first-ICU-fallback={n_fallback}"
+        f"  ◆ Sensitivity: admission Cr available for {n_admit} "
+        f"({100*n_admit/len(cohort):.0f}%)"
     )
     print(f"  With baseline Cr: {len(cohort)}")
 
