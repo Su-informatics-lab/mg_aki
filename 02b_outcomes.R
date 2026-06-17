@@ -124,7 +124,10 @@ run_additional <- function(dat, db_name, has_cluster = FALSE) {
     list(name="ow_composite",  outcome="aki_or_death", trt="mg_supp",  filter_na=FALSE),
     list(name="iptw_composite",outcome="aki_or_death", trt="mg_supp",  filter_na=FALSE),
     list(name="ac_poaf",       outcome="poaf",        trt="ac_trt",   filter_na=TRUE),
-    list(name="ac_composite",  outcome="aki_or_death", trt="ac_trt",   filter_na=FALSE)
+    list(name="ac_composite",  outcome="aki_or_death", trt="ac_trt",   filter_na=FALSE),
+    # Transfusion negative control (complexity-specific)
+    list(name="ow_transfusion",  outcome="nc_transfusion", trt="mg_supp", filter_na=FALSE),
+    list(name="ac_transfusion",  outcome="nc_transfusion", trt="ac_trt",  filter_na=FALSE)
   )
 
   stores <- lapply(outcomes, function(x) list(est=numeric(0), se=numeric(0)))
@@ -242,3 +245,7 @@ cat("  POAF: exploratory outcome (AF prevention is known Mg mechanism)\n")
 cat("  AKI-or-death composite: competing risk sensitivity\n")
 cat("    If composite ≈ AKI-only → competing risk is minimal\n")
 cat("    If composite diverges → need cause-specific hazard\n")
+cat("  Transfusion negative control (complexity-specific):\n")
+cat("    ow_transfusion: expect confounded (OR<1 = Mg pts had simpler surgery)\n")
+cat("    ac_transfusion: expect NULL (AC controls complexity)\n")
+cat("    If ow confounded + ac null → design works ✓\n")

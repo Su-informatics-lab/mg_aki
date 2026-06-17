@@ -885,6 +885,37 @@ def run_eicu():
         )
     cohort["rrt_7d"] = cohort.patientunitstayid.isin(rrt_pids).astype(int)
 
+    # ◆ Perioperative transfusion (complexity-specific negative control)
+    transfusion_pids = set()
+    if len(tx) > 0:
+        transfusion_pids = set(
+            tx[
+                tx.patientunitstayid.isin(pids)
+                & matches_any(
+                    tx.treatmentstring,
+                    [
+                        "transfusion",
+                        "blood product",
+                        "packed red",
+                        "prbc",
+                        "red blood cell",
+                        "ffp",
+                        "fresh frozen",
+                        "platelet",
+                        "cryoprecipitate",
+                        "blood administration",
+                    ],
+                )
+            ].patientunitstayid
+        )
+    cohort["nc_transfusion"] = cohort.patientunitstayid.isin(transfusion_pids).astype(
+        int
+    )
+    print(
+        f"  Perioperative transfusion: {cohort.nc_transfusion.sum()} "
+        f"({100*cohort.nc_transfusion.mean():.1f}%)"
+    )
+
     # POAF (unchanged)
     dx = t["diagnosis"]
     dx_elig = dx[dx.patientunitstayid.isin(pids)] if len(dx) > 0 else pd.DataFrame()
@@ -1446,6 +1477,26 @@ def run_mimic():
     cohort["vent_arrhythmia"] = cohort.hadm_id.isin(
         matches_icd(dx, hadms, VT_ICD)
     ).astype(int)
+
+    # ◆ Perioperative transfusion (complexity-specific NC)
+    BLOOD_ITEMS = [
+        225168,
+        220970,
+        225170,
+        225171,  # PRBC, FFP, PLT, Cryo
+        226368,
+        226369,
+        226370,
+        226371,
+    ]  # OR blood products
+    blood_stays = set(
+        ie_with[ie_with.itemid.isin(BLOOD_ITEMS) & ie_with.stay_id.isin(stays)].stay_id
+    )
+    cohort["nc_transfusion"] = cohort.stay_id.isin(blood_stays).astype(int)
+    print(
+        f"  Perioperative transfusion: {cohort.nc_transfusion.sum()} "
+        f"({100*cohort.nc_transfusion.mean():.1f}%)"
+    )
 
     # Follow-up Mg (unchanged)
     mg_fu = mg_labs[
