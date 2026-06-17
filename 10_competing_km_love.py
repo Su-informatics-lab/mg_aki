@@ -770,17 +770,11 @@ def plot_love(ax, d, trt_col, covars, title=""):
     available = [c for c in covars if c in d.columns]
 
     # Out-of-model variables (sanity check — OW should NOT zero these)
+    # Only PRE-TREATMENT vars here. No outcomes (vent, LOS, mortality).
     extra_vars = [
         v
         for v in [
             "alcohol_history",
-            "vent_duration_h",
-            "icu_los_h",
-            "rrt_7d",
-            "hosp_mortality",
-            "hospital_mortality",
-            "has_iabp",
-            "has_ecmo",
             "preexisting_af",
         ]
         if v in d.columns and v not in available

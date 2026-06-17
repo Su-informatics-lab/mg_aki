@@ -685,7 +685,45 @@ def run_eicu():
     cohort["mg_supplementation"] = cohort.patientunitstayid.isin(mg_supp_pids).astype(
         int
     )
+
+    # ◆ Flag: pre-lab Mg supplementation (for strict sensitivity exclusion)
+    pre_lab_pids = set()
+    if len(med_elig) > 0:
+        for pid_i in pids:
+            mo = mg_offsets.get(pid_i)
+            if mo is None:
+                continue
+            pt_pre = mg_meds[
+                (mg_meds.patientunitstayid == pid_i)
+                & (mg_meds.drugstartoffset < mo)
+                & (mg_meds.drugstartoffset >= 0)
+            ]
+            if len(pt_pre) > 0:
+                pre_lab_pids.add(pid_i)
+    # Also check infusionDrug
+    _inf = t["infusionDrug"]
+    if len(_inf) > 0 and "drugname" in _inf.columns:
+        mg_inf_all = _inf[
+            _inf.patientunitstayid.isin(pids)
+            & matches_any(_inf.drugname, cfg.MG_SUPP_DRUG_PATTERNS)
+        ]
+        for pid_i in pids:
+            mo = mg_offsets.get(pid_i)
+            if mo is None:
+                continue
+            pt_inf = mg_inf_all[
+                (mg_inf_all.patientunitstayid == pid_i)
+                & (mg_inf_all.infusionoffset < mo)
+                & (mg_inf_all.infusionoffset >= 0)
+            ]
+            if len(pt_inf) > 0:
+                pre_lab_pids.add(pid_i)
+    cohort["pre_lab_mg_supp"] = cohort.patientunitstayid.isin(pre_lab_pids).astype(int)
+    n_pre = cohort.pre_lab_mg_supp.sum()
     print(f"  Mg supplementation: {cohort.mg_supplementation.sum()}")
+    print(
+        f"  ◆ Pre-lab Mg supp (strict exclusion flag): {n_pre} ({100*n_pre/len(cohort):.1f}%)"
+    )
 
     # K+ supplementation (unchanged)
     k_supp_pids = set()
@@ -914,6 +952,11 @@ def run_eicu():
     )
     cohort = cohort.merge(fu_first, on="patientunitstayid", how="left")
     cohort["delta_mg"] = cohort.followup_mg_value - cohort.first_mg_value
+
+    # ◆ Composite outcome: AKI or death (competing risk sensitivity)
+    cohort["aki_or_death"] = (
+        (cohort.aki_kdigo1 == 1) | (cohort.hosp_mortality == 1)
+    ).astype(int)
 
     # ── Save ─────────────────────────────────────────────────────
     consort_df = pd.DataFrame([{"step": k, "n": int(v)} for k, v in consort.items()])
@@ -1363,6 +1406,25 @@ def run_mimic():
         cohort = cohort.merge(dose, on="stay_id", how="left")
         cohort["mg_total_dose"] = cohort.mg_total_dose.fillna(0)
 
+    # ◆ Flag: pre-lab Mg supplementation (for strict sensitivity)
+    mg_all_ie = ie_with[ie_with.itemid.isin(MG_SUPP_ITEMS)]
+    pre_lab_stays = set()
+    for _, row in cohort.iterrows():
+        sid = row.stay_id
+        mg_time = row.mg_charttime
+        if pd.isna(mg_time):
+            continue
+        pt_ie = mg_all_ie[
+            (mg_all_ie.stay_id == sid) & (mg_all_ie.starttime < pd.to_datetime(mg_time))
+        ]
+        if len(pt_ie) > 0:
+            pre_lab_stays.add(sid)
+    cohort["pre_lab_mg_supp"] = cohort.stay_id.isin(pre_lab_stays).astype(int)
+    n_pre = cohort.pre_lab_mg_supp.sum()
+    print(
+        f"  ◆ Pre-lab Mg supp (strict exclusion flag): {n_pre} ({100*n_pre/len(cohort):.1f}%)"
+    )
+
     # K+ supplementation (unchanged)
     cohort["k_supp"] = cohort.stay_id.isin(
         set(ie_early[ie_early.itemid.isin(K_SUPP_ITEMS)].stay_id)
@@ -1449,6 +1511,11 @@ def run_mimic():
         f"  Mg supp: {cohort.mg_supplementation.sum()} "
         f"({cohort.mg_supplementation.mean()*100:.1f}%)"
     )
+
+    # ◆ Composite outcome: AKI or death (competing risk sensitivity)
+    cohort["aki_or_death"] = (
+        (cohort.aki_kdigo1 == 1) | (cohort.hosp_mortality == 1)
+    ).astype(int)
 
     # ── Save ─────────────────────────────────────────────────────
     out = os.path.join(cfg.RESULTS, "04_mimic_cohort.csv")
