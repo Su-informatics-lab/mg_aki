@@ -335,10 +335,12 @@ def fig1_forest():
     ]
     ax.legend(
         handles=legend_elements,
-        loc="upper right",
+        loc="upper left",
+        bbox_to_anchor=(0.40, 1.0),
         fontsize=6,
         handletextpad=0.3,
         borderpad=0.2,
+        frameon=False,
     )
 
     save(fig, "fig2_forest")
@@ -694,8 +696,6 @@ def fig3_subgroups():
         ("5c", "Mg <2.0 (hypo)", "Baseline Mg <2.0"),
         ("5b", "Age >=60", "Age \u226560"),
         ("5b", "Age <60", "Age <60"),
-        ("5", "MDS 0-1", "MDS 0\u20131"),
-        ("5", "MDS >=2", "MDS \u22652"),
         ("4", "Valve", "Valve surgery"),
         ("4", "CABG", "CABG"),
         ("4", "Other cardiac", "Other cardiac"),
