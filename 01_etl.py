@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
 01_etl.py — Cohort construction for eICU-CRD and MIMIC-IV
+  ◆ v2: Three critical design fixes (gtgs/ziyue review)
+    1. Baseline Cr = pre-operative (admission), not first ICU Cr
+    2. AKI outcome Cr only counted after 6 h landmark (washout)
+    3. 6 h landmark exclusion in eligibility (not sensitivity)
 
-  Section A: eICU-CRD (208 US hospitals, 2014-2015)
-             → results/01_analysis_a_cohort.csv
-  Section B: MIMIC-IV (BIDMC, 2008-2019) with integrated POAF fix
-             → results/04_mimic_cohort.csv
+  Section A: eICU-CRD → results/01_analysis_a_cohort.csv
+  Section B: MIMIC-IV  → results/04_mimic_cohort.csv
 
 Run:  python 01_etl.py            # both databases
       python 01_etl.py eicu       # eICU only
@@ -17,7 +19,6 @@ import sys
 import warnings
 
 warnings.filterwarnings("ignore")
-
 from importlib.util import module_from_spec, spec_from_file_location
 
 import numpy as np
@@ -29,9 +30,13 @@ _spec = spec_from_file_location("config", _cfg_path)
 cfg = module_from_spec(_spec)
 _spec.loader.exec_module(cfg)
 
+# ◆ CHANGED: 6 h landmark is now a first-class constant
+LANDMARK_MIN = 360  # 6 hours in minutes — time zero for all analyses
+LANDMARK_HOURS = 6
+
 
 # =====================================================================
-# SHARED HELPERS
+# SHARED HELPERS (unchanged)
 # =====================================================================
 def save(df, name):
     path = os.path.join(cfg.RESULTS, name)
@@ -103,7 +108,6 @@ def compute_egfr(cr, age, is_female):
 
 
 def compute_egfr_scalar(cr, age, is_female):
-    """CKD-EPI 2021 race-free (scalar)."""
     if pd.isna(cr) or pd.isna(age) or cr <= 0:
         return np.nan
     k = 0.7 if is_female else 0.9
@@ -114,7 +118,7 @@ def compute_egfr_scalar(cr, age, is_female):
 
 
 # =====================================================================
-# MIMIC-IV CONSTANTS (schema-specific)
+# MIMIC-IV CONSTANTS (unchanged)
 # =====================================================================
 MIMIC_ROOT = os.path.expanduser("~/mg_aki/mimic-iv-3.1")
 MIMIC_HOSP = os.path.join(MIMIC_ROOT, "hosp")
@@ -266,7 +270,7 @@ def matches_icd(dx_df, hadm_ids, code_map):
 # =====================================================================
 def run_eicu():
     print("=" * 70)
-    print("SECTION A: eICU-CRD Cohort Construction")
+    print("SECTION A: eICU-CRD Cohort Construction (v2: pre-op Cr + 6h landmark)")
     print("=" * 70)
     print(f"  DATA_ROOT: {cfg.DATA_ROOT}")
 
@@ -298,7 +302,7 @@ def run_eicu():
     t["apachePredVar"] = load_eicu_csv("apachePredVar")
     t["intakeOutput"] = load_eicu_csv("intakeOutput")
 
-    # ── Cardiac surgery cohort ───────────────────────────────────
+    # ── Cardiac surgery cohort (unchanged) ───────────────────────
     consort = {}
     pt = t["patient"].copy()
     consort["total_icu_stays"] = len(pt)
@@ -336,7 +340,7 @@ def run_eicu():
 
     cardiac["surgery_type"] = cardiac.apacheadmissiondx.apply(_surgery_type)
 
-    # ── Mg exposure ──────────────────────────────────────────────
+    # ── Mg exposure (unchanged) ──────────────────────────────────
     pids = set(cardiac.patientunitstayid)
     lab = t["lab"]
     mg = lab[
@@ -365,49 +369,90 @@ def run_eicu():
     )
     cohort = cardiac.merge(first_mg, on="patientunitstayid")
     consort["has_mg"] = len(cohort)
-    mg_offsets = dict(zip(cohort.patientunitstayid, cohort.mg_offset))
     print(f"  Mg within {cfg.MG_WINDOW_HOURS}h: {len(cohort):,}")
 
-    # ── Baseline creatinine ──────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════
+    # ◆ CHANGED: Baseline creatinine = PRE-OPERATIVE (admission)
+    #   Priority 1: Cr near hospital admission (within ±6 h of hosp admit)
+    #   Priority 2: Any pre-ICU Cr (offset < 0), closest to hosp admit
+    #   Priority 3: First ICU Cr (offset 0–60 min) — flagged, not ideal
+    #   Reference: Nadim 2018 ADQI, KDIGO CSA-AKI consensus
+    # ══════════════════════════════════════════════════════════════
     cr = lab[
         lab.patientunitstayid.isin(pids)
         & matches_any(lab.labname, cfg.CR_LABNAMES)
         & lab.labresult.between(cfg.CR_PLAUSIBLE_MIN, cfg.CR_PLAUSIBLE_MAX)
     ].copy()
 
-    pre_icu = cr[
-        (cr.labresultoffset >= cfg.BASELINE_PRE_ICU_WINDOW_MIN)
-        & (cr.labresultoffset <= cfg.BASELINE_PRE_ICU_WINDOW_MAX)
+    # Merge hospitaladmitoffset for each patient
+    hosp_off = cardiac.set_index("patientunitstayid")["hospitaladmitoffset"].to_dict()
+
+    # Priority 1: Cr near hospital admission
+    cr_with_hosp = cr[cr.patientunitstayid.isin(set(cohort.patientunitstayid))].copy()
+    cr_with_hosp["hosp_off"] = cr_with_hosp.patientunitstayid.map(hosp_off)
+    cr_with_hosp["dist_to_admit"] = abs(
+        cr_with_hosp.labresultoffset - cr_with_hosp.hosp_off
+    )
+    # Within ±6h of hospital admission
+    admit_window = cr_with_hosp[
+        (cr_with_hosp.labresultoffset >= cr_with_hosp.hosp_off - LANDMARK_MIN)
+        & (cr_with_hosp.labresultoffset <= cr_with_hosp.hosp_off + LANDMARK_MIN)
     ]
-    pre_icu_bl = (
-        pre_icu.sort_values("labresult")
+    bl_admit = (
+        admit_window.sort_values("dist_to_admit")
         .groupby("patientunitstayid")
         .first()
         .reset_index()[["patientunitstayid", "labresult"]]
         .rename(columns={"labresult": "baseline_cr"})
     )
-    pre_icu_bl["baseline_source"] = "pre_icu"
+    bl_admit["baseline_source"] = "hospital_admission"
+    n_admit = len(bl_admit)
 
-    pids_need = set(cohort.patientunitstayid) - set(pre_icu_bl.patientunitstayid)
-    fb_pool = cr[
-        cr.patientunitstayid.isin(pids_need)
-        & (cr.labresultoffset >= -60)
-        & (cr.labresultoffset <= 720)
+    # Priority 2: Any pre-ICU Cr (offset < 0)
+    pids_need = set(cohort.patientunitstayid) - set(bl_admit.patientunitstayid)
+    pre_icu = cr_with_hosp[
+        cr_with_hosp.patientunitstayid.isin(pids_need)
+        & (cr_with_hosp.labresultoffset < 0)
     ]
-    fb_df = (
-        fb_pool.sort_values("labresultoffset")
+    bl_preicu = (
+        pre_icu.sort_values("labresultoffset", ascending=False)
         .groupby("patientunitstayid")
         .first()
         .reset_index()[["patientunitstayid", "labresult"]]
         .rename(columns={"labresult": "baseline_cr"})
     )
-    fb_df["baseline_source"] = "first_admission"
+    bl_preicu["baseline_source"] = "pre_icu"
+    n_preicu = len(bl_preicu)
 
-    baseline = pd.concat([pre_icu_bl, fb_df], ignore_index=True)
+    # Priority 3: First ICU Cr (0–60 min) — last resort
+    pids_need2 = pids_need - set(bl_preicu.patientunitstayid)
+    first_icu_cr = cr_with_hosp[
+        cr_with_hosp.patientunitstayid.isin(pids_need2)
+        & (cr_with_hosp.labresultoffset >= 0)
+        & (cr_with_hosp.labresultoffset <= 60)
+    ]
+    bl_fallback = (
+        first_icu_cr.sort_values("labresultoffset")
+        .groupby("patientunitstayid")
+        .first()
+        .reset_index()[["patientunitstayid", "labresult"]]
+        .rename(columns={"labresult": "baseline_cr"})
+    )
+    bl_fallback["baseline_source"] = "first_icu_fallback"
+    n_fallback = len(bl_fallback)
+
+    baseline = pd.concat([bl_admit, bl_preicu, bl_fallback], ignore_index=True)
     cohort = cohort.merge(baseline, on="patientunitstayid")
     consort["has_baseline_cr"] = len(cohort)
 
-    # Eadon sensitivity baseline
+    print(
+        f"  ◆ Baseline Cr sources: admission={n_admit}, "
+        f"pre-ICU={n_preicu}, first-ICU-fallback={n_fallback}"
+    )
+    for src, n in cohort.baseline_source.value_counts().items():
+        print(f"    {src}: {n} ({100*n/len(cohort):.1f}%)")
+
+    # Eadon sensitivity baseline (unchanged)
     eadon = cr[
         (cr.labresultoffset >= cfg.BASELINE_EADON_WINDOW_MIN)
         & (cr.labresultoffset <= cfg.BASELINE_EADON_WINDOW_MAX)
@@ -421,7 +466,7 @@ def run_eicu():
     )
     cohort = cohort.merge(bl_eadon, on="patientunitstayid", how="left")
 
-    # Exclude high Cr + ESKD
+    # Exclude high Cr + ESKD (unchanged)
     cohort = cohort[cohort.baseline_cr < cfg.BASELINE_CR_MAX].copy()
     ph = t["pastHistory"]
     eskd_pids = set()
@@ -437,7 +482,6 @@ def run_eicu():
         )
     cohort = cohort[~cohort.patientunitstayid.isin(eskd_pids)].copy()
 
-    # APACHE dialysis exclusion
     apv = t["apachePredVar"]
     if len(apv) > 0:
         apv_elig = apv[apv.patientunitstayid.isin(set(cohort.patientunitstayid))]
@@ -445,50 +489,85 @@ def run_eicu():
             dial_pids = set(apv_elig[apv_elig.dialysis == 1].patientunitstayid)
             cohort = cohort[~cohort.patientunitstayid.isin(dial_pids)].copy()
 
-    # ── AKI phenotype ────────────────────────────────────────────
+    consort["eligible_pre_landmark"] = len(cohort)
+
+    # ══════════════════════════════════════════════════════════════
+    # ◆ CHANGED: 6 h landmark exclusion (eligibility, not sensitivity)
+    #   Exclude patients discharged, dead, or with AKI before 6 h.
+    #   This is now part of eligibility, not a sensitivity analysis.
+    # ══════════════════════════════════════════════════════════════
+    n_before = len(cohort)
+
+    # Discharged before landmark
+    if "unitdischargeoffset" in cohort.columns:
+        discharged_pre = cohort.unitdischargeoffset <= LANDMARK_MIN
+        cohort = cohort[~discharged_pre].copy()
+
+    # Died before landmark
+    cohort["death_offset_min_raw"] = np.where(
+        cohort.hospitaldischargestatus.str.lower() == "expired",
+        cohort.hospitaldischargeoffset,
+        np.nan,
+    )
+    died_pre = cohort.death_offset_min_raw.notna() & (
+        cohort.death_offset_min_raw <= LANDMARK_MIN
+    )
+    cohort = cohort[~died_pre].copy()
+
+    consort["landmark_excluded"] = n_before - len(cohort)
+    consort["eligible_post_landmark"] = len(cohort)
+    print(
+        f"  ◆ 6h landmark: excluded {n_before - len(cohort)} "
+        f"(discharge/death before 6h), {len(cohort)} remain"
+    )
+
+    # ══════════════════════════════════════════════════════════════
+    # ◆ CHANGED: AKI phenotype — only Cr AFTER 6 h landmark
+    #   Washout: Cr in first 6 h may reflect CPB hemodilution or
+    #   surgical muscle damage, not true renal injury.
+    #   Reference: BMC Anesthesiol 2021 (pCr at H6 post-CPB)
+    # ══════════════════════════════════════════════════════════════
     cr_all = cr
     results = []
     for _, row in cohort.iterrows():
         pid = row.patientunitstayid
         bl_cr = row.baseline_cr
-        mg_off = mg_offsets.get(pid, 0)
         pt_cr = cr_all[cr_all.patientunitstayid == pid]
+
+        # ◆ Follow-up: only Cr AFTER 6h landmark, up to 7 days
         fu = pt_cr[
-            (pt_cr.labresultoffset > mg_off)
+            (pt_cr.labresultoffset > LANDMARK_MIN)
             & (pt_cr.labresultoffset <= cfg.AKI_WINDOW_7D_MIN)
         ].sort_values("labresultoffset")
+
+        # ◆ Prevalent AKI: Cr between ICU admission and 6h that
+        #   already meets KDIGO vs pre-op baseline
+        pre_lm = pt_cr[
+            (pt_cr.labresultoffset >= 0) & (pt_cr.labresultoffset <= LANDMARK_MIN)
+        ]
+        prevalent = int(
+            len(pre_lm) > 0
+            and bl_cr > 0
+            and (pre_lm.labresult / bl_cr).max() >= cfg.AKI_RATIO_STAGE1
+        )
 
         aki_15x = 0
         aki_time = np.nan
         aki_delta03 = 0
         if len(fu) > 0 and bl_cr > 0:
+            # Ratio criterion: any fu Cr >= 1.5× baseline
             hits = fu[fu.labresult / bl_cr >= cfg.AKI_RATIO_STAGE1]
             if len(hits) > 0:
                 aki_15x = 1
                 aki_time = hits.labresultoffset.iloc[0]
-        if len(fu) >= 2:
-            for i in range(len(fu)):
-                for j in range(i + 1, len(fu)):
-                    if (
-                        fu.labresultoffset.iloc[j] - fu.labresultoffset.iloc[i]
-                    ) <= cfg.AKI_WINDOW_48H_MIN:
-                        if (
-                            fu.labresult.iloc[j] - fu.labresult.iloc[i]
-                            >= cfg.AKI_DELTA_48H
-                        ):
-                            aki_delta03 = 1
-                            break
-                if aki_delta03:
-                    break
+
+            # Delta criterion: any fu Cr >= baseline + 0.3 within 48h
+            fu_48 = fu[fu.labresultoffset <= LANDMARK_MIN + cfg.AKI_WINDOW_48H_MIN]
+            if len(fu_48) > 0 and (fu_48.labresult - bl_cr).max() >= cfg.AKI_DELTA_48H:
+                aki_delta03 = 1
 
         max_cr = fu.labresult.max() if len(fu) > 0 else np.nan
         max_ratio = max_cr / bl_cr if bl_cr > 0 and not np.isnan(max_cr) else 0
-        pre_mg = pt_cr[(pt_cr.labresultoffset > 0) & (pt_cr.labresultoffset <= mg_off)]
-        prevalent = int(
-            len(pre_mg) > 0
-            and bl_cr > 0
-            and (pre_mg.labresult / bl_cr).max() >= cfg.AKI_RATIO_STAGE1
-        )
 
         results.append(
             {
@@ -512,11 +591,17 @@ def run_eicu():
 
     aki_df = pd.DataFrame(results)
     cohort = cohort.merge(aki_df, on="patientunitstayid")
+
+    # ◆ CHANGED: exclude prevalent AKI (vs pre-op baseline, within 0–6h)
+    n_prevalent = cohort.prevalent_aki.sum()
     cohort = cohort[cohort.prevalent_aki == 0].copy()
+    consort["excluded_prevalent_aki"] = n_prevalent
+
     cohort["aki_kdigo1"] = (
         (cohort.aki_primary == 1) | (cohort.aki_delta03 == 1)
     ).astype(int)
     cohort["time_to_aki_hours"] = cohort.aki_time_offset / 60.0
+
     if "unitdischargeoffset" in cohort.columns:
         cohort["censor_offset"] = cohort.unitdischargeoffset.clip(
             upper=cfg.AKI_WINDOW_7D_MIN
@@ -524,14 +609,17 @@ def run_eicu():
         cohort["time_to_event_hours"] = np.where(
             cohort.aki_primary == 1,
             cohort.time_to_aki_hours,
-            (cohort.censor_offset - cohort.mg_offset) / 60.0,
-        )
+            (cohort.censor_offset - LANDMARK_MIN) / 60.0,
+        )  # ◆ from landmark
+
     consort["eligible_final"] = len(cohort)
+    print(f"  ◆ Prevalent AKI (pre-op→6h): {n_prevalent} excluded")
     print(
-        f"  AKI KDIGO≥1: {cohort.aki_kdigo1.sum()} ({cohort.aki_kdigo1.mean()*100:.1f}%)"
+        f"  AKI KDIGO≥1: {cohort.aki_kdigo1.sum()} "
+        f"({cohort.aki_kdigo1.mean()*100:.1f}%)"
     )
 
-    # ── Covariates ───────────────────────────────────────────────
+    # ── Covariates (unchanged except BMI cap) ────────────────────
     pids = set(cohort.patientunitstayid)
     cohort["sex"] = cohort.gender.map({"Male": "Male", "Female": "Female"}).fillna(
         "Other"
@@ -545,12 +633,6 @@ def run_eicu():
         cohort.admissionweight / (cohort.admissionheight / 100) ** 2,
         np.nan,
     )
-    # ── BMI plausibility cap ─────────────────────────────────────
-    # 22 outliers (0.27%) from height-in-inches and data entry errors
-    # across 16 hospitals (sporadic, not systematic). Root cause:
-    #   8 height_in_inches, 5 height_data_error, 5 weight_possibly_lbs,
-    #   4 height_ambiguous_short. Probe: |ΔOR| = 0.0009.
-    # Matches MIMIC ETL's existing cap.
     n_bmi_out = int(cohort.bmi.notna().sum() - cohort.bmi.between(10, 80).sum())
     cohort.loc[cohort.bmi.notna() & ~cohort.bmi.between(10, 80), "bmi"] = np.nan
     print(f"  BMI: capped {n_bmi_out} outliers outside [10, 80] to NaN")
@@ -568,7 +650,7 @@ def run_eicu():
             )
         cohort[f"hx_{cmorb}"] = cohort.patientunitstayid.isin(flagged).astype(int)
 
-    # Nephrotoxins
+    # Nephrotoxins (unchanged)
     ad = t["admissionDrug"]
     med = t["medication"]
     ad_elig = ad[ad.patientunitstayid.isin(pids)] if len(ad) > 0 else pd.DataFrame()
@@ -577,6 +659,7 @@ def run_eicu():
         if len(med) > 0
         else pd.DataFrame()
     )
+    mg_offsets = dict(zip(cohort.patientunitstayid, cohort.mg_offset))
 
     for drug_class, patterns in cfg.NEPHROTOXIN_CLASSES.items():
         flagged = set()
@@ -586,12 +669,12 @@ def run_eicu():
             )
         if len(med_elig) > 0:
             for pid_i in pids:
-                mg_off = cohort.loc[cohort.patientunitstayid == pid_i, "mg_offset"]
-                if len(mg_off) == 0:
+                mg_off = mg_offsets.get(pid_i)
+                if mg_off is None:
                     continue
                 pt_meds = med_elig[
                     (med_elig.patientunitstayid == pid_i)
-                    & (med_elig.drugstartoffset <= mg_off.iloc[0])
+                    & (med_elig.drugstartoffset <= mg_off)
                 ]
                 if len(pt_meds) > 0 and matches_any(pt_meds.drugname, patterns).any():
                     flagged.add(pid_i)
@@ -599,15 +682,14 @@ def run_eicu():
             flagged
         ).astype(int)
 
-    # Mg supplementation
+    # Mg supplementation (unchanged)
     mg_supp_pids = set()
     if len(med_elig) > 0:
         mg_meds = med_elig[matches_any(med_elig.drugname, cfg.MG_SUPP_DRUG_PATTERNS)]
         for pid_i in pids:
-            mg_off = cohort.loc[cohort.patientunitstayid == pid_i, "mg_offset"]
-            if len(mg_off) == 0:
+            mo = mg_offsets.get(pid_i)
+            if mo is None:
                 continue
-            mo = mg_off.iloc[0]
             pt_mg = mg_meds[
                 (mg_meds.patientunitstayid == pid_i)
                 & (mg_meds.drugstartoffset >= mo)
@@ -620,7 +702,7 @@ def run_eicu():
     )
     print(f"  Mg supplementation: {cohort.mg_supplementation.sum()}")
 
-    # K+ supplementation (active comparator)
+    # K+ supplementation (unchanged)
     k_supp_pids = set()
     if len(med_elig) > 0:
         k_meds = med_elig[matches_any(med_elig.drugname, cfg.K_SUPP_DRUG_PATTERNS)]
@@ -650,7 +732,7 @@ def run_eicu():
         "k_only"
     )
 
-    # β-blocker, steroid, vasopressor, antiarrhythmic
+    # β-blocker, steroid, vasopressor, antiarrhythmic (unchanged)
     for drug_name, patterns, col_name in [
         ("betablocker", cfg.BETA_BLOCKER_PATTERNS, "has_betablocker"),
         ("steroid", cfg.STEROID_PATTERNS, "has_steroid"),
@@ -668,7 +750,6 @@ def run_eicu():
             dpids |= set(early.patientunitstayid)
         cohort[col_name] = cohort.patientunitstayid.isin(dpids).astype(int)
 
-    # Vasopressors
     vaso_pids = set()
     if len(inf) > 0 and "drugname" in inf.columns:
         vaso_inf = inf[
@@ -687,7 +768,6 @@ def run_eicu():
         vaso_pids |= set(vaso_med.patientunitstayid)
     cohort["has_vasopressor"] = cohort.patientunitstayid.isin(vaso_pids).astype(int)
 
-    # Pre-op antiarrhythmic
     preop_aa_pids = set()
     if len(ad_elig) > 0 and "drugname" in ad_elig.columns:
         preop_aa_pids = set(
@@ -699,7 +779,7 @@ def run_eicu():
         preop_aa_pids
     ).astype(int)
 
-    # First HR, Ca, K, lactate
+    # First HR, Ca, K, lactate (unchanged)
     try:
         vp = pd.read_csv(
             os.path.join(cfg.DATA_ROOT, "vitalPeriodic.csv.gz"),
@@ -755,7 +835,7 @@ def run_eicu():
         )
         cohort = cohort.merge(first_e, on="patientunitstayid", how="left")
 
-    # Mortality
+    # Mortality (unchanged)
     cohort["icu_mortality"] = (
         cohort.unitdischargestatus.str.lower() == "expired"
     ).astype(int)
@@ -768,7 +848,7 @@ def run_eicu():
         np.nan,
     )
 
-    # RRT
+    # RRT (unchanged)
     tx = t["treatment"]
     rrt_pids = set()
     if len(tx) > 0:
@@ -782,7 +862,7 @@ def run_eicu():
         )
     cohort["rrt_7d"] = cohort.patientunitstayid.isin(rrt_pids).astype(int)
 
-    # POAF (composite)
+    # POAF (unchanged)
     dx = t["diagnosis"]
     dx_elig = dx[dx.patientunitstayid.isin(pids)] if len(dx) > 0 else pd.DataFrame()
     preexist_af_pids = set()
@@ -808,7 +888,7 @@ def run_eicu():
     cohort["poaf"] = cohort.patientunitstayid.isin(poaf_dx_pids).astype(int)
     cohort.loc[cohort.preexisting_af == 1, "poaf"] = np.nan
 
-    # Negative controls + neuro
+    # Negative controls + neuro (unchanged)
     for nc_name, nc_patterns in cfg.NEGATIVE_CONTROL_DX.items():
         nc_pids = set()
         if len(dx_elig) > 0 and "diagnosisstring" in dx_elig.columns:
@@ -832,7 +912,7 @@ def run_eicu():
             neuro_pids
         ).astype(int)
 
-    # Follow-up Mg
+    # Follow-up Mg (unchanged)
     mg_fu = lab[
         lab.patientunitstayid.isin(pids)
         & matches_any(lab.labname, cfg.MG_LABNAMES)
@@ -857,21 +937,23 @@ def run_eicu():
     print(f"\n  eICU COMPLETE: {len(cohort):,} patients, {cohort.shape[1]} cols")
     print(f"  AKI: {cohort.aki_kdigo1.sum()} ({cohort.aki_kdigo1.mean()*100:.1f}%)")
     print(
-        f"  Mg supp: {cohort.mg_supplementation.sum()} ({cohort.mg_supplementation.mean()*100:.1f}%)"
+        f"  Mg supp: {cohort.mg_supplementation.sum()} "
+        f"({cohort.mg_supplementation.mean()*100:.1f}%)"
     )
+    print(f"  Baseline source distribution:")
+    for src, n in cohort.baseline_source.value_counts().items():
+        print(f"    {src}: {n} ({100*n/len(cohort):.1f}%)")
 
 
 # =====================================================================
-# SECTION B: MIMIC-IV ETL (with integrated POAF fix from 08e)
+# SECTION B: MIMIC-IV ETL
 # =====================================================================
 def run_mimic():
     print("\n" + "=" * 70)
-    print("SECTION B: MIMIC-IV Cohort Construction")
+    print("SECTION B: MIMIC-IV Cohort Construction (v2: pre-op Cr + 6h landmark)")
     print("=" * 70)
 
-    MG_WINDOW_H = 6
-
-    # ── Load tables ──────────────────────────────────────────────
+    # ── Load tables (unchanged) ──────────────────────────────────
     patients = pd.read_csv(gz(f"{MIMIC_HOSP}/patients.csv.gz"))
     admissions = pd.read_csv(gz(f"{MIMIC_HOSP}/admissions.csv.gz"))
     icustays = pd.read_csv(gz(f"{MIMIC_ICU}/icustays.csv.gz"))
@@ -932,7 +1014,7 @@ def run_mimic():
             ce_chunks.append(chunk[chunk.itemid.isin(needed_vitals)])
         chartevents = pd.concat(ce_chunks, ignore_index=True)
 
-    # ── Cardiac surgery cohort ───────────────────────────────────
+    # ── Cardiac surgery cohort (unchanged) ───────────────────────
     px["icd_code"] = px["icd_code"].astype(str).str.strip()
     all_cardiac = CABG_ICD9 + VALVE_ICD9 + CABG_ICD10 + VALVE_ICD10
     cardiac_hadm_px = set(
@@ -975,7 +1057,7 @@ def run_mimic():
     stays = set(cohort.stay_id)
     print(f"  Adults, first stay: {len(cohort)}")
 
-    # ── Mg exposure ──────────────────────────────────────────────
+    # ── Mg exposure (unchanged) ──────────────────────────────────
     mg_labs = labs[
         labs.itemid.isin(LAB_MG)
         & labs.hadm_id.isin(hadms)
@@ -985,7 +1067,7 @@ def run_mimic():
     mg_labs = mg_labs.merge(cohort[["stay_id", "hadm_id", "intime"]], on="hadm_id")
     mg_labs["offset_h"] = (mg_labs.charttime - mg_labs.intime).dt.total_seconds() / 3600
     mg_early = (
-        mg_labs[(mg_labs.offset_h >= -1) & (mg_labs.offset_h <= MG_WINDOW_H)]
+        mg_labs[(mg_labs.offset_h >= -1) & (mg_labs.offset_h <= LANDMARK_HOURS)]
         .sort_values("offset_h")
         .groupby("stay_id")
         .first()
@@ -997,9 +1079,13 @@ def run_mimic():
         on="stay_id",
         how="inner",
     )
-    print(f"  Mg within {MG_WINDOW_H}h: {len(cohort)}")
+    print(f"  Mg within {LANDMARK_HOURS}h: {len(cohort)}")
 
-    # ── Baseline creatinine ──────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════
+    # ◆ CHANGED: Baseline Cr = PRE-OPERATIVE (hospital admission)
+    #   MIMIC labevents spans entire hospitalization, so we can get
+    #   pre-surgery labs by looking near admittime (before ICU).
+    # ══════════════════════════════════════════════════════════════
     hadms = set(cohort.hadm_id.dropna().astype(int))
     cr_labs = labs[
         labs.itemid.isin(LAB_CR)
@@ -1007,25 +1093,66 @@ def run_mimic():
         & labs.valuenum.between(0.1, 25.0)
     ].copy()
     cr_labs["charttime"] = pd.to_datetime(cr_labs["charttime"])
-    cr_labs = cr_labs.merge(cohort[["stay_id", "hadm_id", "intime"]], on="hadm_id")
-    cr_labs["offset_h"] = (cr_labs.charttime - cr_labs.intime).dt.total_seconds() / 3600
 
-    pre_cr = (
-        cr_labs[cr_labs.offset_h <= 0]
-        .sort_values("valuenum")
+    # Merge both intime (ICU) and admittime (hospital)
+    adm_times = admissions[["hadm_id", "admittime"]].copy()
+    adm_times["admittime"] = pd.to_datetime(adm_times["admittime"])
+    cr_labs = cr_labs.merge(cohort[["stay_id", "hadm_id", "intime"]], on="hadm_id")
+    cr_labs = cr_labs.merge(adm_times, on="hadm_id", how="left")
+
+    cr_labs["offset_h_icu"] = (
+        cr_labs.charttime - cr_labs.intime
+    ).dt.total_seconds() / 3600
+    cr_labs["offset_h_admit"] = (
+        cr_labs.charttime - cr_labs.admittime
+    ).dt.total_seconds() / 3600
+
+    # ◆ Priority 1: Cr near hospital admission (±24h of admittime, before ICU)
+    admit_cr = cr_labs[
+        (cr_labs.offset_h_admit >= -24)
+        & (cr_labs.offset_h_admit <= 24)
+        & (cr_labs.offset_h_icu <= 0)
+    ]  # must be before ICU
+    admit_cr["dist_admit"] = abs(admit_cr.offset_h_admit)
+    bl_admit = (
+        admit_cr.sort_values("dist_admit")
         .groupby("stay_id")
         .first()
+        .reset_index()[["stay_id", "valuenum"]]
+        .rename(columns={"valuenum": "baseline_cr"})
     )
-    fb_cr = (
-        cr_labs[cr_labs.offset_h.between(-1, 12)]
-        .sort_values("offset_h")
+    bl_admit["baseline_source"] = "hospital_admission"
+    n_admit = len(bl_admit)
+
+    # ◆ Priority 2: Any pre-ICU Cr
+    pids_need = set(cohort.stay_id) - set(bl_admit.stay_id)
+    pre_icu = cr_labs[cr_labs.stay_id.isin(pids_need) & (cr_labs.offset_h_icu < 0)]
+    bl_preicu = (
+        pre_icu.sort_values("offset_h_icu", ascending=False)
         .groupby("stay_id")
         .first()
+        .reset_index()[["stay_id", "valuenum"]]
+        .rename(columns={"valuenum": "baseline_cr"})
     )
-    baseline = pre_cr[["valuenum"]].rename(columns={"valuenum": "baseline_cr"})
-    baseline = baseline.combine_first(
-        fb_cr[["valuenum"]].rename(columns={"valuenum": "baseline_cr"})
-    ).reset_index()
+    bl_preicu["baseline_source"] = "pre_icu"
+    n_preicu = len(bl_preicu)
+
+    # ◆ Priority 3: First ICU Cr (0–1h) — fallback
+    pids_need2 = pids_need - set(bl_preicu.stay_id)
+    first_icu = cr_labs[
+        cr_labs.stay_id.isin(pids_need2) & cr_labs.offset_h_icu.between(0, 1)
+    ]
+    bl_fallback = (
+        first_icu.sort_values("offset_h_icu")
+        .groupby("stay_id")
+        .first()
+        .reset_index()[["stay_id", "valuenum"]]
+        .rename(columns={"valuenum": "baseline_cr"})
+    )
+    bl_fallback["baseline_source"] = "first_icu_fallback"
+    n_fallback = len(bl_fallback)
+
+    baseline = pd.concat([bl_admit, bl_preicu, bl_fallback], ignore_index=True)
     cohort = cohort.merge(baseline, on="stay_id", how="inner")
     cohort = cohort[cohort.baseline_cr < 4.0]
     cohort["baseline_egfr"] = cohort.apply(
@@ -1033,18 +1160,79 @@ def run_mimic():
     )
     stays = set(cohort.stay_id)
     hadms = set(cohort.hadm_id.dropna().astype(int))
+
+    print(
+        f"  ◆ Baseline Cr sources: admission={n_admit}, "
+        f"pre-ICU={n_preicu}, first-ICU-fallback={n_fallback}"
+    )
     print(f"  With baseline Cr: {len(cohort)}")
 
-    # ── AKI phenotype ────────────────────────────────────────────
-    cr_post = cr_labs[cr_labs.stay_id.isin(stays)].merge(
-        cohort[["stay_id", "mg_charttime", "baseline_cr"]], on="stay_id"
+    # ══════════════════════════════════════════════════════════════
+    # ◆ CHANGED: 6h landmark exclusion
+    # ══════════════════════════════════════════════════════════════
+    n_before = len(cohort)
+    cohort["los_min"] = (cohort.outtime - cohort.intime).dt.total_seconds() / 60
+
+    # Death offset
+    adm = admissions[["hadm_id", "hospital_expire_flag", "deathtime", "dischtime"]]
+    cohort = cohort.merge(adm, on="hadm_id", how="left")
+    cohort["hosp_mortality"] = cohort.hospital_expire_flag.fillna(0).astype(int)
+    cohort["death_offset_min"] = (
+        pd.to_datetime(cohort.deathtime, errors="coerce") - cohort.intime
+    ).dt.total_seconds() / 60
+
+    # Exclude discharged before landmark
+    cohort = cohort[cohort.los_min > LANDMARK_MIN].copy()
+    # Exclude died before landmark
+    died_pre = cohort.death_offset_min.notna() & (
+        cohort.death_offset_min <= LANDMARK_MIN
     )
-    cr_post = cr_post[cr_post.charttime > cr_post.mg_charttime]
+    cohort = cohort[~died_pre].copy()
+
+    stays = set(cohort.stay_id)
+    hadms = set(cohort.hadm_id.dropna().astype(int))
+    print(f"  ◆ 6h landmark: excluded {n_before - len(cohort)}, {len(cohort)} remain")
+
+    # ══════════════════════════════════════════════════════════════
+    # ◆ CHANGED: AKI phenotype — only Cr after 6h landmark
+    #   + saves aki_time_offset for KM curves
+    # ══════════════════════════════════════════════════════════════
+    landmark_dt = cohort[["stay_id", "intime"]].copy()
+    landmark_dt["landmark_time"] = landmark_dt.intime + pd.Timedelta(
+        minutes=LANDMARK_MIN
+    )
+
+    cr_post = cr_labs[cr_labs.stay_id.isin(stays)].merge(
+        cohort[["stay_id", "baseline_cr"]], on="stay_id"
+    )
+    cr_post = cr_post.merge(landmark_dt[["stay_id", "landmark_time"]], on="stay_id")
+
+    # ◆ Only Cr AFTER 6h landmark
+    cr_post = cr_post[cr_post.charttime > cr_post.landmark_time]
     cr_post["cr_ratio"] = cr_post.valuenum / cr_post.baseline_cr
     cr_post["cr_delta"] = cr_post.valuenum - cr_post.baseline_cr
-    cr_post["hours_post_mg"] = (
-        cr_post.charttime - cr_post.mg_charttime
+    cr_post["hours_post_lm"] = (
+        cr_post.charttime - cr_post.landmark_time
     ).dt.total_seconds() / 3600
+    cr_post["offset_min_from_icu"] = (
+        cr_post.charttime - cr_post.intime
+    ).dt.total_seconds() / 60
+
+    # ◆ Prevalent AKI: Cr in 0–6h that meets KDIGO vs pre-op baseline
+    cr_prelm = cr_labs[cr_labs.stay_id.isin(stays)].merge(
+        cohort[["stay_id", "baseline_cr", "intime"]], on="stay_id"
+    )
+    cr_prelm["offset_h_icu"] = (
+        pd.to_datetime(cr_prelm.charttime) - cr_prelm.intime
+    ).dt.total_seconds() / 3600
+    cr_prelm = cr_prelm[
+        (cr_prelm.offset_h_icu >= 0) & (cr_prelm.offset_h_icu <= LANDMARK_HOURS)
+    ]
+    prevalent_stays = set()
+    for sid, g in cr_prelm.groupby("stay_id"):
+        bl = g.baseline_cr.iloc[0]
+        if bl > 0 and (g.valuenum / bl).max() >= 1.5:
+            prevalent_stays.add(sid)
 
     aki = (
         cr_post.groupby("stay_id")
@@ -1054,28 +1242,44 @@ def run_mimic():
                     "aki_primary": int((g.cr_ratio >= 1.5).any()),
                     "aki_kdigo1": int(
                         (g.cr_ratio >= 1.5).any()
-                        | ((g.cr_delta >= 0.3) & (g.hours_post_mg <= 48)).any()
+                        | ((g.cr_delta >= 0.3) & (g.hours_post_lm <= 48)).any()
                     ),
                     "aki_delta03": int(
-                        ((g.cr_delta >= 0.3) & (g.hours_post_mg <= 48)).any()
+                        ((g.cr_delta >= 0.3) & (g.hours_post_lm <= 48)).any()
                     ),
                     "aki_stage2": int((g.cr_ratio >= 2.0).any()),
                     "aki_stage3": int((g.cr_ratio >= 3.0).any()),
                     "peak_cr": g.valuenum.max(),
+                    # ◆ NEW: save AKI onset time for KM
+                    "aki_time_offset": (
+                        g[g.cr_ratio >= 1.5].offset_min_from_icu.min()
+                        if (g.cr_ratio >= 1.5).any()
+                        else np.nan
+                    ),
                 }
             )
         )
         .reset_index()
     )
+
     cohort = cohort.merge(aki, on="stay_id", how="left")
     for c in ["aki_primary", "aki_kdigo1", "aki_delta03", "aki_stage2", "aki_stage3"]:
         cohort[c] = cohort[c].fillna(0).astype(int)
     cohort["peak_cr_ratio"] = cohort["peak_cr"] / cohort["baseline_cr"]
+
+    # ◆ Exclude prevalent AKI
+    cohort["prevalent_aki"] = cohort.stay_id.isin(prevalent_stays).astype(int)
+    n_prevalent = cohort.prevalent_aki.sum()
+    cohort = cohort[cohort.prevalent_aki == 0].copy()
+    stays = set(cohort.stay_id)
+    hadms = set(cohort.hadm_id.dropna().astype(int))
+
+    print(f"  ◆ Prevalent AKI (pre-op→6h): {n_prevalent} excluded")
     print(
         f"  AKI KDIGO≥1: {cohort.aki_kdigo1.sum()} ({cohort.aki_kdigo1.mean()*100:.1f}%)"
     )
 
-    # ── Covariates ───────────────────────────────────────────────
+    # ── Covariates (unchanged) ───────────────────────────────────
     dx["icd_code"] = dx["icd_code"].astype(str).str.strip()
     for name, code_map in COMORB_ICD.items():
         cohort[name] = cohort.hadm_id.isin(matches_icd(dx, hadms, code_map)).astype(int)
@@ -1087,7 +1291,7 @@ def run_mimic():
     presc_with["offset_h"] = (
         presc_with.starttime - presc_with.intime
     ).dt.total_seconds() / 3600
-    presc_early = presc_with[presc_with.offset_h.between(-24, MG_WINDOW_H)]
+    presc_early = presc_with[presc_with.offset_h.between(-24, LANDMARK_HOURS)]
 
     for name, patterns in NEPHROTOX_MIMIC.items():
         cohort[name] = cohort.stay_id.isin(
@@ -1098,7 +1302,7 @@ def run_mimic():
     ie_with["starttime"] = pd.to_datetime(ie_with["starttime"], errors="coerce")
     ie_with = ie_with.merge(cohort[["stay_id", "intime"]], on="stay_id")
     ie_with["offset_h"] = (ie_with.starttime - ie_with.intime).dt.total_seconds() / 3600
-    ie_early = ie_with[ie_with.offset_h.between(0, MG_WINDOW_H)]
+    ie_early = ie_with[ie_with.offset_h.between(0, LANDMARK_HOURS)]
 
     bb_stays = set(presc_early[drug_match(presc_early.drug, BB_DRUGS)].stay_id)
     bb_stays |= set(ie_early[ie_early.itemid.isin(METO_ITEMS)].stay_id)
@@ -1113,7 +1317,7 @@ def run_mimic():
         set(ie_early[ie_early.itemid.isin(VASO_ITEMS)].stay_id)
     ).astype(int)
 
-    # Electrolytes
+    # Electrolytes (unchanged)
     for lab_ids, col, lo, hi in [
         (LAB_K, "first_k_value", 1.5, 8.0),
         (LAB_CA, "first_ca_value", 4.0, 15.0),
@@ -1128,7 +1332,7 @@ def run_mimic():
         elec = elec.merge(cohort[["stay_id", "hadm_id", "intime"]], on="hadm_id")
         elec["offset_h"] = (elec.charttime - elec.intime).dt.total_seconds() / 3600
         first_e = (
-            elec[elec.offset_h.between(-1, MG_WINDOW_H)]
+            elec[elec.offset_h.between(-1, LANDMARK_HOURS)]
             .sort_values("offset_h")
             .groupby("stay_id")
             .first()
@@ -1140,7 +1344,7 @@ def run_mimic():
             how="left",
         )
 
-    # HR + BMI from chartevents
+    # HR + BMI from chartevents (unchanged)
     if len(chartevents) > 0:
         hr = chartevents[
             chartevents.itemid.isin(VITAL_HR) & chartevents.stay_id.isin(stays)
@@ -1177,7 +1381,7 @@ def run_mimic():
             cohort["bmi"] = cohort.weight_kg / ((cohort.height_cm / 100) ** 2)
             cohort.loc[~cohort.bmi.between(10, 80), "bmi"] = np.nan
 
-    # Mg supplementation + dose
+    # Mg supplementation + dose (unchanged)
     mg_supp = ie_early[ie_early.itemid.isin(MG_SUPP_ITEMS)]
     cohort["mg_supplementation"] = cohort.stay_id.isin(set(mg_supp.stay_id)).astype(int)
     if "amount" in mg_supp.columns:
@@ -1190,7 +1394,7 @@ def run_mimic():
         cohort = cohort.merge(dose, on="stay_id", how="left")
         cohort["mg_total_dose"] = cohort.mg_total_dose.fillna(0)
 
-    # K+ supplementation
+    # K+ supplementation (unchanged)
     cohort["k_supp"] = cohort.stay_id.isin(
         set(ie_early[ie_early.itemid.isin(K_SUPP_ITEMS)].stay_id)
     ).astype(int)
@@ -1205,25 +1409,17 @@ def run_mimic():
         "k_only"
     )
 
-    # Mortality
-    adm = admissions[["hadm_id", "hospital_expire_flag", "deathtime", "dischtime"]]
-    cohort = cohort.merge(adm, on="hadm_id", how="left")
-    cohort["hosp_mortality"] = cohort.hospital_expire_flag.fillna(0).astype(int)
-    cohort["death_offset_min"] = (
-        pd.to_datetime(cohort.deathtime, errors="coerce") - cohort.intime
-    ).dt.total_seconds() / 60
-
-    # Negative controls + neuro + VT
+    # Negative controls + neuro + VT (unchanged)
     for name, code_map in {**NC_ICD, **NEURO_ICD}.items():
         cohort[name] = cohort.hadm_id.isin(matches_icd(dx, hadms, code_map)).astype(int)
     cohort["vent_arrhythmia"] = cohort.hadm_id.isin(
         matches_icd(dx, hadms, VT_ICD)
     ).astype(int)
 
-    # Follow-up Mg
+    # Follow-up Mg (unchanged)
     mg_fu = mg_labs[
         mg_labs.stay_id.isin(stays)
-        & (mg_labs.offset_h >= MG_WINDOW_H)
+        & (mg_labs.offset_h >= LANDMARK_HOURS)
         & (mg_labs.offset_h <= 48)
     ]
     mg_fu_first = mg_fu.sort_values("offset_h").groupby("stay_id").first().reset_index()
@@ -1236,7 +1432,7 @@ def run_mimic():
     )
     cohort["delta_mg"] = cohort.followup_mg_value - cohort.first_mg_value
 
-    # ── POAF with prior-admission fix (integrated from 08e) ──────
+    # ── POAF with prior-admission fix (unchanged) ────────────────
     print("\n  POAF phenotype (prior-admission fix)...")
     admissions_full = admissions.copy()
     admissions_full["admittime"] = pd.to_datetime(admissions_full["admittime"])
@@ -1244,14 +1440,12 @@ def run_mimic():
     all_subj_adm = admissions_full[admissions_full.subject_id.isin(subjects)]
     all_subj_dx = dx[dx.hadm_id.isin(set(all_subj_adm.hadm_id))]
 
-    # AF codes across ALL admissions
     all_af_hadms = set()
     for ver, prefixes in [(9, AF_ICD9), (10, AF_ICD10)]:
         v = all_subj_dx[all_subj_dx.icd_version == ver]
         for p in prefixes:
             all_af_hadms |= set(v[v.icd_code.str.startswith(p)].hadm_id)
 
-    # Prior-admission AF detection
     cohort_admit = cohort[["subject_id", "hadm_id"]].merge(
         admissions_full[["hadm_id", "admittime"]], on="hadm_id"
     )
@@ -1282,9 +1476,9 @@ def run_mimic():
     n_poaf = cohort.poaf.sum()
     print(f"    Pre-existing AF: {cohort.preexisting_af.sum()}")
     print(f"    New-onset POAF: {int(n_poaf)} / {n_elig} ({100*n_poaf/n_elig:.1f}%)")
-
     print(
-        f"  Mg supp: {cohort.mg_supplementation.sum()} ({cohort.mg_supplementation.mean()*100:.1f}%)"
+        f"  Mg supp: {cohort.mg_supplementation.sum()} "
+        f"({cohort.mg_supplementation.mean()*100:.1f}%)"
     )
 
     # ── Save ─────────────────────────────────────────────────────
@@ -1292,6 +1486,9 @@ def run_mimic():
     cohort.to_csv(out, index=False)
     print(f"\n  MIMIC COMPLETE: {out}  ({len(cohort)} × {len(cohort.columns)})")
     print(f"  AKI: {cohort.aki_kdigo1.sum()} ({cohort.aki_kdigo1.mean()*100:.1f}%)")
+    print(f"  Baseline source distribution:")
+    for src, n in cohort.baseline_source.value_counts().items():
+        print(f"    {src}: {n} ({100*n/len(cohort):.1f}%)")
 
 
 # =====================================================================
@@ -1300,10 +1497,8 @@ def run_mimic():
 if __name__ == "__main__":
     args = [a.lower() for a in sys.argv[1:]]
     run_both = len(args) == 0
-
     if run_both or "eicu" in args:
         run_eicu()
     if run_both or "mimic" in args:
         run_mimic()
-
-    print("\n✓ ETL complete. Next: Rscript 02_analysis.R")
+    print("\n✓ ETL complete (v2: pre-op Cr + 6h landmark). Next: Rscript 02_analysis.R")
