@@ -1219,12 +1219,10 @@ def run_mimic():
     ).dt.total_seconds() / 60
 
     # ◆ Prevalent AKI: Cr in 0–6h that meets KDIGO vs pre-op baseline
+    #   cr_labs already has offset_h_icu from earlier merge — reuse it
     cr_prelm = cr_labs[cr_labs.stay_id.isin(stays)].merge(
-        cohort[["stay_id", "baseline_cr", "intime"]], on="stay_id"
+        cohort[["stay_id", "baseline_cr"]], on="stay_id"
     )
-    cr_prelm["offset_h_icu"] = (
-        pd.to_datetime(cr_prelm.charttime) - cr_prelm.intime
-    ).dt.total_seconds() / 3600
     cr_prelm = cr_prelm[
         (cr_prelm.offset_h_icu >= 0) & (cr_prelm.offset_h_icu <= LANDMARK_HOURS)
     ]
