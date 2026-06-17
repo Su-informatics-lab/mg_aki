@@ -2,9 +2,6 @@
 # ============================================================================
 # 07_sensitivity.R — Sensitivity & supplementary analyses
 #
-# Consolidates: 07_evalues.py, 07b_prognostic.R, 07c_mice_stability.R,
-#               07d_ac_table1.R
-#
 # Sections:
 #   A. E-value sensitivity analysis        → results/07_evalues.csv
 #   B. Prognostic Mg→AKI by severity       → results/07b_prognostic.csv
@@ -77,7 +74,7 @@ stdz <- function(d) {
   d
 }
 
-# ── Shared: PS covariate list ─────────────────────────────────────────────
+# ── Shared: PS covariate list (◆ 31 covariates) ──────────────────────────
 ps_covars_full <- c(
   "age", "is_female", "bmi",
   "surg_cabg", "surg_valve", "surg_combined",
@@ -87,7 +84,7 @@ ps_covars_full <- c(
   "loop_diuretics", "nsaids", "acei_arb", "ppi",
   "beta_blockers", "steroids", "antiarrhythmics",
   "first_potassium", "first_calcium", "first_heartrate",
-  "vasopressor_6h", "first_mg_value"
+  "vasopressor_6h", "transfusion_6h", "first_mg_value"
 )
 
 # ── Shared: weighted GLM ──────────────────────────────────────────────────
@@ -124,13 +121,11 @@ sections <- if (run_all) c("A", "B", "C", "D") else toupper(args)
 
 # ============================================================================
 # SECTION A: E-VALUE SENSITIVITY ANALYSIS
-# (rewritten from 07_evalues.py — VanderWeele & Ding 2017)
 # ============================================================================
 if ("A" %in% sections) {
   cat(sprintf("\n%s\nA. E-VALUE SENSITIVITY ANALYSIS\n%s\n",
               strrep("=", 65), strrep("=", 65)))
 
-  # E-value formula
   e_value <- function(rr) {
     if (is.na(rr) || rr <= 1.0) return(1.0)
     rr + sqrt(rr * (rr - 1))
@@ -139,11 +134,9 @@ if ("A" %in% sections) {
     or_val / (1 - p0 + p0 * or_val)
   }
 
-  # Load primary results
   res <- read.csv(file.path(RESULTS, "02_results.csv"), stringsAsFactors = FALSE)
   or_col <- if ("or" %in% names(res)) "or" else "or_"
 
-  # Outcome prevalence in controls
   p0_e <- mean(dat_e$aki_kdigo1[dat_e$mg_supp == 0], na.rm = TRUE)
   p0_m <- mean(dat_m$aki_kdigo1[dat_m$mg_supp == 0], na.rm = TRUE)
   p0_ac_e <- if ("ac_group" %in% names(dat_e))
@@ -156,7 +149,6 @@ if ("A" %in% sections) {
               ifelse(is.na(p0_ac_e), NA, p0_ac_e),
               ifelse(is.na(p0_ac_m), NA, p0_ac_m)))
 
-  # Define analyses
   pooled <- res[res$db == "Pooled", ]
   p0_all <- mean(c(p0_e, p0_m), na.rm = TRUE)
   p0_ac  <- mean(c(p0_ac_e, p0_ac_m), na.rm = TRUE)
@@ -169,7 +161,6 @@ if ("A" %in% sections) {
     list(key = "ow_frac",   label = "Control: Fracture",     p0 = NA)
   )
 
-  # Also compute E-values for Mg-stratified results if available
   mg_strat_path <- file.path(RESULTS, "08_mg_stratified.csv")
   if (file.exists(mg_strat_path)) {
     mg_strat <- read.csv(mg_strat_path, stringsAsFactors = FALSE)
@@ -194,7 +185,6 @@ if ("A" %in% sections) {
 
   ev_rows <- list()
   for (a in analyses) {
-    # Get OR, lo, hi
     if (!is.null(a$custom_or)) {
       or_est <- a$custom_or; or_lo <- a$custom_lo; or_hi <- a$custom_hi
     } else {
@@ -203,10 +193,7 @@ if ("A" %in% sections) {
       or_est <- r[[or_col]][1]; or_lo <- r$lo[1]; or_hi <- r$hi[1]
     }
 
-    # CI limit closest to null
     ci_null <- if (or_est < 1) or_hi else or_lo
-
-    # Conservative: treat OR as RR
     rr_pt <- if (or_est < 1) 1 / or_est else or_est
     rr_ci <- if (ci_null < 1) 1 / ci_null else ci_null
     e_pt <- e_value(rr_pt)
@@ -241,7 +228,8 @@ if ("B" %in% sections) {
     "baseline_creatinine", "egfr",
     "loop_diuretics", "nsaids", "acei_arb", "ppi",
     "beta_blockers", "steroids", "antiarrhythmics",
-    "first_potassium", "first_calcium", "first_heartrate", "vasopressor_6h")
+    "first_potassium", "first_calcium", "first_heartrate",
+    "vasopressor_6h", "transfusion_6h")
 
   aki_defs <- c(
     "KDIGO stage >=1"    = "aki_kdigo1",
@@ -282,7 +270,6 @@ if ("B" %in% sections) {
                                           lbl, e$message)))
     }
 
-    # Surgery-type stratification (KDIGO >=1 only)
     if ("aki_kdigo1" %in% names(d) && "surgery_type" %in% names(d)) {
       d$complex <- as.integer(d$surgery_type %in% c("valve", "combined"))
       for (stype in c("Simple", "Complex")) {
@@ -336,12 +323,10 @@ if ("C" %in% sections) {
     any_missing <- any(sapply(mice_vars,
                               function(v) sum(is.na(dat[[v]])) > 0))
 
-    # Restore NAs for MICE targets (stdz median-imputed them)
     dat_raw <- read.csv(file.path(RESULTS,
       ifelse(db_name == "eICU", "01_analysis_a_cohort.csv",
              "04_mimic_cohort.csv")), stringsAsFactors = FALSE)
     dat_raw <- stdz(dat_raw)
-    # Un-impute MICE vars from raw
     for (v in mice_vars)
       if (v %in% names(dat_raw)) dat[[v]] <- dat_raw[[v]][seq_len(nrow(dat))]
     any_missing <- any(sapply(mice_vars,
@@ -369,7 +354,6 @@ if ("C" %in% sections) {
           for (v in mice_vars)
             if (v %in% names(imputed)) d[[v]] <- imputed[[v]]
         }
-        # Median-impute remaining
         for (v in ps_covars)
           if (v %in% names(d) && any(is.na(d[[v]])))
             d[[v]][is.na(d[[v]])] <- median(d[[v]], na.rm = TRUE)
@@ -428,7 +412,6 @@ if ("C" %in% sections) {
   }
   res_c <- do.call(rbind, all_c)
 
-  # Append m=5 from existing results
   res5 <- read.csv(file.path(RESULTS, "02_results.csv"), stringsAsFactors = FALSE)
   or5_col <- if ("or" %in% names(res5)) "or" else "or_"
   if (or5_col == "or_") names(res5)[names(res5) == "or_"] <- "or"
@@ -456,7 +439,6 @@ if ("D" %in% sections) {
     if (!"ac_group" %in% names(d) && !"mg_supp" %in% names(d)) {
       cat(sprintf("  %s: no ac_group\n", db_label)); return(NULL)
     }
-    # Build AC treatment variable
     if ("ac_group" %in% names(d)) {
       d_ac <- d[d$ac_group %in% c("mg_k", "k_only"), ]
       d_ac$trt_label <- ifelse(d_ac$ac_group == "mg_k", "Mg+K", "K-only")
@@ -470,6 +452,7 @@ if ("D" %in% sections) {
       "baseline_creatinine", "egfr",
       "loop_diuretics", "nsaids", "acei_arb", "ppi",
       "beta_blockers", "steroids", "antiarrhythmics", "vasopressor_6h",
+      "transfusion_6h",
       "first_mg_value", "first_potassium", "first_calcium",
       "first_heartrate",
       "aki_kdigo1", "hospital_mortality"), names(d_ac))
@@ -479,6 +462,7 @@ if ("D" %in% sections) {
       "copd", "pvd", "stroke", "liver_disease",
       "loop_diuretics", "nsaids", "acei_arb", "ppi",
       "beta_blockers", "steroids", "antiarrhythmics", "vasopressor_6h",
+      "transfusion_6h",
       "aki_kdigo1", "hospital_mortality"), vars)
 
     cat(sprintf("  %s AC: N=%d (Mg+K=%d, K-only=%d)\n",

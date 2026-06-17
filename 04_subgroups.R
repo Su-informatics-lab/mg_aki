@@ -52,6 +52,11 @@ stdz <- function(d) {
     if (old %in% names(d) && !new %in% names(d)) names(d)[names(d)==old] <- new
   }
   if (is.character(d$age)) { d$age <- suppressWarnings(as.numeric(d$age)); d$age[is.na(d$age)] <- 90 }
+  # ◆ Lactate: median + missing indicator (matches 02_analysis.R)
+  if ("first_lactate" %in% names(d)) {
+    d$lactate_missing <- as.integer(is.na(d$first_lactate))
+    d$first_lactate[is.na(d$first_lactate)] <- median(d$first_lactate, na.rm=TRUE)
+  }
   d
 }
 dat_e <- stdz(dat_e); dat_m <- stdz(dat_m)
@@ -112,21 +117,28 @@ cat("STEP 1: Full-sample PS + OW estimation\n")
 cat(strrep("=",60), "\n")
 
 fit_full_ps <- function(d, db_name) {
+  # ◆ 31 covariates (matches 02_analysis.R)
   ps_vars <- intersect(c("age","is_female","bmi",
     "heart_failure","hypertension","diabetes","ckd","copd","pvd","stroke","liver_disease",
     "baseline_creatinine","egfr","loop_diuretics","nsaids","acei_arb","ppi",
     "beta_blockers","steroids","antiarrhythmics",
     "first_potassium","first_calcium","first_heartrate",
-    "vasopressor_6h","first_mg_value"), names(d))
+    "vasopressor_6h","transfusion_6h","first_mg_value"), names(d))
   if ("surgery_type" %in% names(d)) {
     d$s_cabg <- as.integer(d$surgery_type=="cabg")
     d$s_valve <- as.integer(d$surgery_type=="valve")
     d$s_combined <- as.integer(d$surgery_type=="combined")
     ps_vars <- c(ps_vars, "s_cabg","s_valve","s_combined")
   }
+  # ◆ Lactate (matches 02_analysis.R)
+  if ("first_lactate" %in% names(d) && "lactate_missing" %in% names(d)) {
+    ps_vars <- c(ps_vars, "first_lactate", "lactate_missing")
+  }
   # Median-impute for PS estimation
   for (v in ps_vars) if (any(is.na(d[[v]])))
     d[[v]][is.na(d[[v]])] <- median(d[[v]], na.rm=TRUE)
+
+  cat(sprintf("  %s PS model: %d covariates\n", db_name, length(ps_vars)))
 
   # All-patient PS
   fml <- as.formula(paste("mg_supp ~", paste(ps_vars, collapse="+")))

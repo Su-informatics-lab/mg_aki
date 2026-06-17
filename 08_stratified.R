@@ -2,8 +2,6 @@
 # ============================================================================
 # 08_stratified.R — Mg-stratified analysis + hospital random effects
 #
-# Consolidates: 08_mg_stratified.R, 08b_hospital_re.R
-#
 # Sections:
 #   A. Mg-stratified treatment effects     → results/08_mg_stratified.csv
 #   B. Hospital random effects (eICU)      → results/08b_hospital_re.csv
@@ -70,8 +68,7 @@ stdz <- function(d) {
   d
 }
 
-# ── Shared: PS covariates WITHOUT first_mg_value ──────────────────────────
-# (removed because stratification holds it constant)
+# ── Shared: PS covariates WITHOUT first_mg_value (◆ + transfusion_6h) ────
 ps_covars_base <- c(
   "age", "is_female", "bmi",
   "surg_cabg", "surg_valve", "surg_combined",
@@ -81,7 +78,7 @@ ps_covars_base <- c(
   "loop_diuretics", "nsaids", "acei_arb", "ppi",
   "beta_blockers", "steroids", "antiarrhythmics",
   "first_potassium", "first_calcium", "first_heartrate",
-  "vasopressor_6h")
+  "vasopressor_6h", "transfusion_6h")
 
 # ── Shared: helpers ───────────────────────────────────────────────────────
 wglm <- function(formula, data, w, cluster = NULL) {
@@ -150,7 +147,6 @@ if ("A" %in% sections) {
 
     results <- list()
 
-    # ── Per-stratum PS + OW ─────────────────────────────────────
     for (s in MG_LABELS) {
       d_s <- dat[dat$mg_stratum == s, ]
       d_s <- d_s[complete.cases(d_s[, ps_covars]), ]
@@ -160,7 +156,6 @@ if ("A" %in% sections) {
         cat(sprintf("    %-10s SKIP\n", s)); next
       }
 
-      # All-patient OW
       ps_fml <- as.formula(paste("mg_supp ~",
                                   paste(ps_covars, collapse = " + ")))
       tryCatch({
@@ -187,7 +182,6 @@ if ("A" %in% sections) {
           se = round(r$se, 4), max_smd = round(max_smd, 4))
       }, error = function(e) cat(sprintf("    %-10s OW FAILED\n", s)))
 
-      # AC OW within stratum
       if ("ac_group" %in% names(d_s)) {
         d_ac <- d_s[d_s$ac_group %in% c("mg_k", "k_only"), ]
         d_ac$ac_trt <- as.integer(d_ac$ac_group == "mg_k")
@@ -221,7 +215,10 @@ if ("A" %in% sections) {
     }
 
     # ── Interaction test ────────────────────────────────────────
-    d_int <- dat[complete.cases(dat[, ps_covars]), ]
+    # ◆ Use full PS covars (with first_mg_value) for interaction model
+    int_covars <- c(ps_covars, "first_mg_value")
+    int_covars <- intersect(int_covars, names(dat))
+    d_int <- dat[complete.cases(dat[, int_covars]), ]
     int_fml <- as.formula(paste("aki_kdigo1 ~ mg_supp * first_mg_value +",
                                  paste(ps_covars, collapse = " + ")))
     tryCatch({
@@ -290,7 +287,6 @@ if ("B" %in% sections) {
 
     results_b <- list()
 
-    # ── ICC ─────────────────────────────────────────────────────
     icc_fit <- glmer(aki_kdigo1 ~ 1 + (1 | hospitalid), data = dat,
                      family = binomial, nAGQ = 1,
                      control = glmerControl(optimizer = "bobyqa"))
@@ -298,7 +294,6 @@ if ("B" %in% sections) {
     icc <- vc$vcov[1] / (vc$vcov[1] + pi^2 / 3)
     cat(sprintf("  ICC: %.3f (%.1f%% between hospitals)\n", icc, 100 * icc))
 
-    # ── Hospital exposure variation ─────────────────────────────
     hosp_stats <- aggregate(mg_supp ~ hospitalid, data = dat,
       FUN = function(x) c(n = length(x), rate = mean(x)))
     hosp_stats <- do.call(data.frame, hosp_stats)
@@ -313,7 +308,6 @@ if ("B" %in% sections) {
                   cr$estimate, cr$p.value))
     }
 
-    # ── Mixed-effects models per stratum ────────────────────────
     for (stratum in c("Overall", "<1.8", "2.0-2.3", ">2.3")) {
       d_s <- if (stratum == "Overall") dat else dat[dat$mg_stratum == stratum, ]
       n_trt <- sum(d_s$mg_supp)
@@ -328,7 +322,6 @@ if ("B" %in% sections) {
                   stratum, nrow(d_s), sum(d_s$mg_supp),
                   length(unique(d_s$hospitalid))))
 
-      # Fixed (cluster-robust)
       fml_fixed <- as.formula(paste("aki_kdigo1 ~ mg_supp +", cov_str))
       tryCatch({
         fit_f <- glm(fml_fixed, data = d_s, family = binomial())
@@ -348,7 +341,6 @@ if ("B" %in% sections) {
           p = round(p_f, 4))
       }, error = function(e) cat("    Fixed FAILED\n"))
 
-      # Hospital random intercept
       fml_re <- as.formula(paste("aki_kdigo1 ~ mg_supp +", cov_str,
                                   "+ (1 | hospitalid)"))
       tryCatch({

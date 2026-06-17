@@ -71,13 +71,12 @@ all_rows <- list()
 
 # ============================================================================
 # SECTION E: LACTATE SENSITIVITY
-# Compare PS model with vs without lactate (+ missing indicator)
 # ============================================================================
 cat(sprintf("\n%s\nE. LACTATE SENSITIVITY ANALYSIS\n%s\n",
             strrep("=", 65), strrep("=", 65)))
 
 run_lactate_sens <- function(dat, db_name, has_cluster) {
-  # Base PS covariates (always included)
+  # ◆ Base PS covariates (31-covar set minus lactate)
   ps_base <- intersect(c(
     "age", "is_female", "bmi",
     "surg_cabg", "surg_valve", "surg_combined",
@@ -87,7 +86,7 @@ run_lactate_sens <- function(dat, db_name, has_cluster) {
     "loop_diuretics", "nsaids", "acei_arb", "ppi",
     "beta_blockers", "steroids", "antiarrhythmics",
     "first_potassium", "first_calcium", "first_heartrate",
-    "vasopressor_6h", "first_mg_value"), names(dat))
+    "vasopressor_6h", "transfusion_6h", "first_mg_value"), names(dat))
 
   has_lactate <- "first_lactate" %in% names(dat)
   rows <- list()
@@ -171,7 +170,6 @@ run_lactate_sens <- function(dat, db_name, has_cluster) {
     }
   }
 
-  # Compute max delta
   df <- do.call(rbind, rows)
   for (a in unique(df$analysis)) {
     w <- df[df$analysis == a & df$model == "with_lactate" &
@@ -192,25 +190,14 @@ all_rows <- c(all_rows, list(lac_e), list(lac_m))
 
 # ============================================================================
 # SECTION F: QUANTITATIVE BIAS ANALYSIS
-# Deterministic adjustment for unmeasured CPB time confounding
-#
-# Model: binary unmeasured confounder U (complex/long CPB surgery)
-#   OR_UY  = OR of U → AKI (from literature)
-#   p1     = P(U=1 | treated)   — supplemented patients
-#   p0     = P(U=1 | untreated) — unsupplemented patients
-#
-# Bias factor = (OR_UY * p1 + (1-p1)) / (OR_UY * p0 + (1-p0))
-# Adjusted OR = Observed OR / Bias factor
 # ============================================================================
 cat(sprintf("\n%s\nF. QUANTITATIVE BIAS ANALYSIS\n%s\n",
             strrep("=", 65), strrep("=", 65)))
 
-# Grid of assumptions
 or_uy_grid <- c(1.5, 2.0, 2.5, 3.0)
 p0_grid    <- c(0.35, 0.40, 0.45)
 delta_grid <- c(0.05, 0.10, 0.15)
 
-# Observed estimates — defaults overwritten from CSVs below
 observed <- list(
   list(label = "AC primary (eICU)",     or = 0.75),
   list(label = "IPTW (eICU)",           or = 0.76),
@@ -219,7 +206,6 @@ observed <- list(
   list(label = "2.6-3.0 subband",       or = 0.35)
 )
 
-# Load actual values from pipeline CSVs
 res_path <- file.path(RESULTS, "02_results.csv")
 if (file.exists(res_path)) {
   res <- read.csv(res_path, stringsAsFactors = FALSE)
@@ -240,12 +226,11 @@ if (file.exists(mg_path)) {
                 mg$analysis == "ac_ow", mg_or_col]
   if (length(gt23_ac) > 0) observed[[4]]$or <- gt23_ac[1]
 }
-# Load 2.6-3.0 subband from hospital RE results
 re_path <- file.path(RESULTS, "08b_hospital_re.csv")
 if (file.exists(re_path)) {
   re <- read.csv(re_path, stringsAsFactors = FALSE)
   re_or_col <- if ("or" %in% names(re)) "or" else "or_"
-  sb26 <- re[re$stratum == ">2.3:2.6-3.0" & re$model == "fixed_subband",
+  sb26 <- re[re$stratum == ">2.3:2.6-3.0" & re$model == "firth_subband",
              re_or_col]
   if (length(sb26) > 0) {
     observed[[5]]$or <- sb26[1]
@@ -264,7 +249,6 @@ qba_rows <- list()
 
 for (obs in observed) {
   cat(sprintf("  ── %s (observed OR = %.3f) ──\n", obs$label, obs$or))
-
   is_stratified <- grepl(">2.3|2.6-3.0", obs$label)
 
   for (or_uy in or_uy_grid) {
@@ -309,7 +293,6 @@ for (obs in observed) {
   }
 }
 
-# Key summary table
 cat(sprintf("\n%s\nQBA SUMMARY: Does the estimate survive?\n%s\n",
             strrep("-", 65), strrep("-", 65)))
 cat("  Scenario: OR_UY=2.0, p0=0.40, delta=0.10 (moderate assumptions)\n")
@@ -331,7 +314,6 @@ cat(sprintf("  approximately constant by stratification, so the prevalence\n"))
 cat(sprintf("  difference shrinks → bias factor approaches 1 → adjusted\n"))
 cat(sprintf("  estimate stays protective.\n"))
 
-# ── Save ─────────────────────────────────────────────────────
 qba_df <- do.call(rbind, qba_rows)
 lac_df <- do.call(rbind, all_rows)
 write.csv(lac_df, file.path(RESULTS, "09_lactate_sensitivity.csv"),
