@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """
-11_cr_kinetics.py — Post-operative creatinine kinetics visualization
+11_cr_kinetics.py — Post-operative creatinine kinetics (v3)
 
-  Panel a: Cr trajectory (median + IQR) by treatment group over time
-  Panel b: Cr/baseline ratio over time (shows when KDIGO 1.5× threshold is crossed)
-  Panel c: Cumulative proportion meeting AKI criteria over time
-
-Reads: results/01_analysis_a_cohort.csv + raw lab tables
-Output: figs/fig_cr_kinetics.pdf
+  Saves 6 individual panel PDFs:
+    fig_cr_trajectory_{db}.pdf    — Cr over time (median + IQR)
+    fig_cr_ratio_{db}.pdf         — Cr/baseline P75/P90 fan
+    fig_cumulative_aki_{db}.pdf   — Cumulative KDIGO AKI (from precomputed)
 
 Run: python 11_cr_kinetics.py
 """
@@ -25,10 +23,14 @@ warnings.filterwarnings("ignore")
 mpl.rcParams.update(
     {
         "pdf.fonttype": 42,
+        "ps.fonttype": 42,
         "font.family": "sans-serif",
         "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
         "font.size": 7,
         "axes.labelsize": 7,
+        "axes.titlesize": 8,
+        "xtick.labelsize": 6,
+        "ytick.labelsize": 6,
         "axes.linewidth": 0.5,
         "xtick.major.width": 0.5,
         "ytick.major.width": 0.5,
@@ -36,6 +38,8 @@ mpl.rcParams.update(
         "axes.spines.right": False,
         "axes.grid": False,
         "legend.frameon": False,
+        "legend.fontsize": 6,
+        "lines.linewidth": 1.0,
         "savefig.dpi": 300,
         "savefig.bbox": "tight",
         "savefig.pad_inches": 0.02,
@@ -47,42 +51,38 @@ mpl.rcParams.update(
 C_BLUE = "#0072B2"
 C_VERM = "#D55E00"
 C_GRAY = "#999999"
-C_GREEN = "#009E73"
+W_SINGLE = 3.504
+
 RESULTS = os.path.expanduser("~/mg_aki/results")
 FIGS = os.path.expanduser("~/mg_aki/figs")
+os.makedirs(FIGS, exist_ok=True)
+
+T0_HOURS = 6  # time zero
 
 
+# ── Data loaders ─────────────────────────────────────────────────
 def gz(p):
     return p if os.path.exists(p) else p.replace(".csv.gz", ".csv")
 
 
-def run_eicu():
-    print("eICU: Loading Cr kinetics data...")
+def load_eicu():
     from importlib.util import module_from_spec, spec_from_file_location
 
-    _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "00_config.py")
-    _spec = spec_from_file_location("config", _cfg_path)
+    _spec = spec_from_file_location(
+        "config",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "00_config.py"),
+    )
     cfg = module_from_spec(_spec)
     _spec.loader.exec_module(cfg)
 
     cohort = pd.read_csv(os.path.join(RESULTS, "01_analysis_a_cohort.csv"))
     pids = set(cohort.patientunitstayid)
-
-    # Map pid → baseline_cr and treatment
     bl = dict(zip(cohort.patientunitstayid, cohort.baseline_cr))
-    trt = dict(
-        zip(
-            cohort.patientunitstayid,
-            (
-                cohort.mg_supplementation
-                if "mg_supplementation" in cohort.columns
-                else cohort.mg_supp
-            ),
-        )
+    trt_col = (
+        "mg_supplementation" if "mg_supplementation" in cohort.columns else "mg_supp"
     )
-    aki = dict(zip(cohort.patientunitstayid, cohort.aki_kdigo1))
+    trt = dict(zip(cohort.patientunitstayid, cohort[trt_col]))
 
-    # Load all Cr labs for cohort
     lab = pd.read_csv(gz(os.path.join(cfg.DATA_ROOT, "lab.csv.gz")), low_memory=False)
     lab.columns = lab.columns.str.lower()
     cr = lab[
@@ -94,29 +94,23 @@ def run_eicu():
     cr["bl_cr"] = cr.patientunitstayid.map(bl)
     cr["cr_ratio"] = cr.labresult / cr.bl_cr
     cr["trt"] = cr.patientunitstayid.map(trt)
-    cr["aki_flag"] = cr.patientunitstayid.map(aki)
-
-    # Filter: 0 to 168h (7 days)
     cr = cr[(cr.hours >= -6) & (cr.hours <= 168)].copy()
-    print(f"  {len(cr):,} Cr measurements, {cr.patientunitstayid.nunique()} patients")
+    print(
+        f"  eICU: {len(cr):,} Cr measurements, {cr.patientunitstayid.nunique()} patients"
+    )
     return cr, cohort, "eICU"
 
 
-def run_mimic():
-    print("MIMIC: Loading Cr kinetics data...")
+def load_mimic():
     MIMIC_HOSP = os.path.expanduser("~/mg_aki/mimic-iv-3.1/hosp")
-
     cohort = pd.read_csv(os.path.join(RESULTS, "04_mimic_cohort.csv"))
     cohort["intime"] = pd.to_datetime(cohort["intime"])
-    stays = set(cohort.stay_id)
     hadms = set(cohort.hadm_id.dropna().astype(int))
-
     bl = dict(zip(cohort.stay_id, cohort.baseline_cr))
     trt_col = (
         "mg_supplementation" if "mg_supplementation" in cohort.columns else "mg_supp"
     )
     trt = dict(zip(cohort.stay_id, cohort[trt_col]))
-    aki_d = dict(zip(cohort.stay_id, cohort.aki_kdigo1))
     intime_d = dict(zip(cohort.hadm_id.astype(int), cohort.intime))
     stay_d = dict(zip(cohort.hadm_id.astype(int), cohort.stay_id))
 
@@ -138,27 +132,43 @@ def run_mimic():
     cr["bl_cr"] = cr.stay_id.map(bl)
     cr["cr_ratio"] = cr.valuenum / cr.bl_cr
     cr["trt"] = cr.stay_id.map(trt)
-    cr["aki_flag"] = cr.stay_id.map(aki_d)
     cr = cr.rename(columns={"valuenum": "labresult"})
     cr = cr[(cr.hours >= -6) & (cr.hours <= 168)].copy()
-    print(f"  {len(cr):,} Cr measurements, {cr.stay_id.nunique()} patients")
+    print(f"  MIMIC: {len(cr):,} Cr measurements, {cr.stay_id.nunique()} patients")
     return cr, cohort, "MIMIC"
 
 
-def plot_kinetics(cr, cohort, db_name, axes_row):
-    """Plot 3-panel Cr kinetics on a row of axes."""
-    # Time bins: every 6h from -6 to 168
-    bins = np.arange(-6, 174, 6)
-    bin_centers = (bins[:-1] + bins[1:]) / 2
-    cr["time_bin"] = pd.cut(cr.hours, bins=bins, labels=bin_centers)
-    cr["time_bin"] = cr.time_bin.astype(float)
+# ── Panel functions (each saves its own PDF) ────────────────────
 
-    # ── Panel a: Cr trajectory by treatment group ────────────────
-    ax = axes_row[0]
-    for g, color, label in [(1, C_VERM, "Mg supp"), (0, C_BLUE, "No supp")]:
+
+def _t0_annotation(ax, ypos=None):
+    """Add T₀ vertical line."""
+    ax.axvline(T0_HOURS, color=C_GRAY, linestyle="--", linewidth=0.5, alpha=0.7)
+    if ypos is not None:
+        ax.text(T0_HOURS + 1, ypos, "T₀", fontsize=6, color=C_GRAY, va="top")
+
+
+def plot_trajectory(cr, cohort, db):
+    """Panel a/d: Cr trajectory (median + IQR) by treatment group."""
+    trt_col = (
+        "mg_supplementation" if "mg_supplementation" in cohort.columns else "mg_supp"
+    )
+    n_trt = int(cohort[trt_col].sum())
+    n_ctrl = len(cohort) - n_trt
+
+    bins = np.arange(-6, 174, 6)
+    cr["tbin"] = pd.cut(cr.hours, bins=bins, labels=(bins[:-1] + bins[1:]) / 2).astype(
+        float
+    )
+
+    fig, ax = plt.subplots(figsize=(W_SINGLE, 2.6))
+    for g, color, label, n in [
+        (1, C_VERM, f"Mg supp (n={n_trt})", n_trt),
+        (0, C_BLUE, f"No supp (n={n_ctrl})", n_ctrl),
+    ]:
         sub = cr[cr.trt == g]
-        stats = (
-            sub.groupby("time_bin")["labresult"]
+        s = (
+            sub.groupby("tbin")["labresult"]
             .agg(
                 [
                     "median",
@@ -169,138 +179,148 @@ def plot_kinetics(cr, cohort, db_name, axes_row):
             )
             .reset_index()
         )
-        stats.columns = ["t", "median", "n", "q25", "q75"]
-        stats = stats[stats.n >= 20]  # require ≥20 per bin
-        ax.fill_between(stats.t, stats.q25, stats.q75, alpha=0.15, color=color)
-        ax.plot(stats.t, stats["median"], color=color, linewidth=1.2, label=label)
-
-    ax.axvline(6, color=C_GRAY, linestyle="--", linewidth=0.5, alpha=0.7)
-    ax.text(7, ax.get_ylim()[1] * 0.95, "6h\nlandmark", fontsize=5, color=C_GRAY)
+        s.columns = ["t", "med", "n", "q25", "q75"]
+        s = s[s.n >= 20]
+        ax.fill_between(s.t, s.q25, s.q75, alpha=0.15, color=color)
+        ax.plot(s.t, s.med, color=color, linewidth=1.2, label=label)
+    _t0_annotation(ax, ax.get_ylim()[1] * 0.97)
     ax.set_xlabel("Hours from ICU admission")
     ax.set_ylabel("Serum creatinine (mg/dL)")
-    ax.set_title(f"{db_name}: Cr trajectory", fontsize=7, fontweight="bold")
-    ax.legend(fontsize=5, loc="upper right")
+    ax.set_title(
+        f"{db}: Creatinine trajectory (median, IQR)", fontsize=7, fontweight="bold"
+    )
+    ax.legend(loc="upper right", fontsize=5)
+    path = os.path.join(FIGS, f"fig_cr_trajectory_{db.lower()}.pdf")
+    fig.savefig(path)
+    fig.savefig(path.replace(".pdf", ".png"))
+    plt.close(fig)
+    print(f"  Saved: {path}")
 
-    # ── Panel b: Cr/baseline ratio — PERCENTILE FAN ────────────
-    #   Median hides the signal (80% never get AKI). Show upper
-    #   percentiles where AKI lives: P75, P90, P95.
-    ax = axes_row[1]
-    post_only = cr[(cr.hours > 0) & cr.cr_ratio.notna() & (cr.cr_ratio < 10)].copy()
 
-    for g, color, label in [(1, C_VERM, "Mg supp"), (0, C_BLUE, "No supp")]:
-        sub = post_only[post_only.trt == g]
-        stats = (
-            sub.groupby("time_bin")
+def plot_ratio(cr, db):
+    """Panel b/e: Cr/baseline ratio percentile fan (P50 dotted, P75 dashed, P90 solid)."""
+    bins = np.arange(0, 174, 6)
+    post = cr[(cr.hours > 0) & cr.cr_ratio.notna() & (cr.cr_ratio < 10)].copy()
+    post["tbin"] = pd.cut(
+        post.hours, bins=bins, labels=(bins[:-1] + bins[1:]) / 2
+    ).astype(float)
+
+    fig, ax = plt.subplots(figsize=(W_SINGLE, 2.6))
+    for g, color, glabel in [(1, C_VERM, "Mg supp"), (0, C_BLUE, "No supp")]:
+        sub = post[post.trt == g]
+        s = (
+            sub.groupby("tbin")
             .agg(
                 p50=("cr_ratio", "median"),
                 p75=("cr_ratio", lambda x: x.quantile(0.75)),
                 p90=("cr_ratio", lambda x: x.quantile(0.90)),
-                p95=("cr_ratio", lambda x: x.quantile(0.95)),
                 n=("cr_ratio", "count"),
             )
             .reset_index()
         )
-        stats = stats[stats.n >= 20]
-        t = stats.time_bin
-
-        # P75–P95 band
-        ax.fill_between(t, stats.p75, stats.p95, alpha=0.12, color=color)
-        # P90 line (this is where AKI patients live)
+        s = s[s.n >= 20]
+        t = s.tbin
+        ax.fill_between(t, s.p75, s.p90, alpha=0.12, color=color)
+        ax.plot(
+            t, s.p90, color=color, linewidth=1.2, linestyle="-", label=f"{glabel} P90"
+        )
+        ax.plot(
+            t, s.p75, color=color, linewidth=0.8, linestyle="--", label=f"{glabel} P75"
+        )
         ax.plot(
             t,
-            stats.p90,
+            s.p50,
             color=color,
-            linewidth=1.2,
-            linestyle="-",
-            label=f"{label} P90",
+            linewidth=0.5,
+            linestyle=":",
+            label=f"{glabel} P50",
+            alpha=0.6,
         )
-        # P75 line
-        ax.plot(t, stats.p75, color=color, linewidth=0.7, linestyle="--", alpha=0.7)
-        # P50 thin reference
-        ax.plot(t, stats.p50, color=color, linewidth=0.5, linestyle=":", alpha=0.5)
 
     ax.axhline(1.5, color="red", linestyle=":", linewidth=0.7, alpha=0.6)
-    ax.text(150, 1.52, "KDIGO 1.5×", fontsize=5, color="red", alpha=0.7)
+    ax.text(155, 1.52, "KDIGO 1.5×", fontsize=5, color="red", alpha=0.7)
     ax.axhline(1.0, color=C_GRAY, linestyle="-", linewidth=0.3, alpha=0.4)
-    ax.axvline(6, color=C_GRAY, linestyle="--", linewidth=0.5, alpha=0.7)
+    _t0_annotation(ax, 2.9)
     ax.set_xlabel("Hours from ICU admission")
     ax.set_ylabel("Cr / baseline ratio")
-    ax.set_ylim(0.6, 3.0)
-    ax.set_title(
-        f"{db_name}: Cr ratio percentiles (P50/P75/P90)", fontsize=7, fontweight="bold"
-    )
-    ax.legend(fontsize=5, loc="upper left")
-
-    # ── Panel c: Cumulative AKI proportion over time ─────────────
-    ax = axes_row[2]
-    # For each time point, what fraction of patients have met KDIGO by then
-    post_cr = cr[cr.hours > 6].copy()  # only after landmark
-
-    for g, color, label in [(1, C_VERM, "Mg supp"), (0, C_BLUE, "No supp")]:
-        sub = post_cr[post_cr.trt == g]
-        patient_ids = set(
-            sub.patientunitstayid if "patientunitstayid" in sub.columns else sub.stay_id
-        )
-        n_total = len(patient_ids)
-        if n_total == 0:
-            continue
-
-        cum_times = []
-        cum_props = []
-        aki_pids = set()
-        for t in sorted(bins[bins > 6]):
-            window = sub[sub.hours <= t]
-            # Patients meeting KDIGO by time t
-            hits = window[window.cr_ratio >= 1.5]
-            id_col = (
-                "patientunitstayid"
-                if "patientunitstayid" in hits.columns
-                else "stay_id"
-            )
-            aki_pids |= set(hits[id_col])
-            cum_times.append(t)
-            cum_props.append(len(aki_pids) / n_total)
-
-        ax.plot(
-            cum_times,
-            [p * 100 for p in cum_props],
-            color=color,
-            linewidth=1.2,
-            label=f"{label} (n={n_total})",
-        )
-
-    ax.axvline(6, color=C_GRAY, linestyle="--", linewidth=0.5, alpha=0.7)
-    ax.set_xlabel("Hours from ICU admission")
-    ax.set_ylabel("Cumulative AKI (%)")
-    ax.set_title(f"{db_name}: Cumulative AKI incidence", fontsize=7, fontweight="bold")
-    ax.legend(fontsize=5, loc="upper left")
-
-
-if __name__ == "__main__":
-    fig, axes = plt.subplots(2, 3, figsize=(7.205, 5.0))
-    fig.subplots_adjust(hspace=0.45, wspace=0.35)
-
-    cr_e, coh_e, _ = run_eicu()
-    plot_kinetics(cr_e, coh_e, "eICU", axes[0])
-
-    cr_m, coh_m, _ = run_mimic()
-    plot_kinetics(cr_m, coh_m, "MIMIC", axes[1])
-
-    for i, ax in enumerate(axes.flat):
-        ax.text(
-            -0.12,
-            1.06,
-            chr(ord("a") + i),
-            transform=ax.transAxes,
-            fontsize=8,
-            fontweight="bold",
-            va="top",
-            ha="right",
-        )
-
-    path = os.path.join(FIGS, "fig_cr_kinetics.pdf")
+    ax.set_ylim(0.7, 3.0)
+    ax.set_title(f"{db}: Cr ratio percentiles", fontsize=7, fontweight="bold")
+    ax.legend(loc="upper left", fontsize=5, ncol=2)
+    path = os.path.join(FIGS, f"fig_cr_ratio_{db.lower()}.pdf")
     fig.savefig(path)
     fig.savefig(path.replace(".pdf", ".png"))
     plt.close(fig)
-    print(f"\n  Saved: {path}")
-    print("Done. Show this to Drs. Su and Meng.")
+    print(f"  Saved: {path}")
+
+
+def plot_cumulative_aki(cohort, db):
+    """Panel c/f: Cumulative KDIGO AKI using precomputed aki_kdigo1 + time_to_aki_hours."""
+    trt_col = (
+        "mg_supplementation" if "mg_supplementation" in cohort.columns else "mg_supp"
+    )
+
+    # Use precomputed KDIGO (includes both ratio AND delta criteria)
+    has_timing = "time_to_aki_hours" in cohort.columns
+    if not has_timing:
+        # Fallback: aki_time_offset in minutes
+        if "aki_time_offset" in cohort.columns:
+            cohort = cohort.copy()
+            cohort["time_to_aki_hours"] = cohort.aki_time_offset / 60.0
+            has_timing = True
+
+    fig, ax = plt.subplots(figsize=(W_SINGLE, 2.6))
+    time_grid = np.arange(T0_HOURS, 169, 1)
+
+    for g, color, glabel in [(1, C_VERM, "Mg supp"), (0, C_BLUE, "No supp")]:
+        sub = cohort[cohort[trt_col] == g]
+        n_total = len(sub)
+        n_aki = int(sub.aki_kdigo1.sum())
+
+        if has_timing:
+            aki_pts = sub[sub.aki_kdigo1 == 1].copy()
+            # For patients with AKI but no timing, assume they hit criteria
+            # by the end of the observation window
+            aki_times = aki_pts["time_to_aki_hours"].fillna(168).values
+            cum = [np.sum(aki_times <= t) / n_total * 100 for t in time_grid]
+        else:
+            # No timing info: flat line at final AKI rate (crude fallback)
+            final_pct = n_aki / n_total * 100
+            cum = [0 if t <= T0_HOURS else final_pct for t in time_grid]
+
+        final_pct = n_aki / n_total * 100
+        ax.plot(
+            time_grid,
+            cum,
+            color=color,
+            linewidth=1.2,
+            label=f"{glabel} (n={n_total}, AKI={final_pct:.1f}%)",
+        )
+
+    _t0_annotation(ax, ax.get_ylim()[1] * 0.95 if ax.get_ylim()[1] > 0 else 1)
+    ax.set_xlabel("Hours from ICU admission")
+    ax.set_ylabel("Cumulative AKI (%)")
+    ax.set_title(f"{db}: Cumulative KDIGO Stage ≥1 AKI", fontsize=7, fontweight="bold")
+    ax.legend(loc="upper left", fontsize=5)
+    ax.set_xlim(0, 168)
+    path = os.path.join(FIGS, f"fig_cumulative_aki_{db.lower()}.pdf")
+    fig.savefig(path)
+    fig.savefig(path.replace(".pdf", ".png"))
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+# ── Main ────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    print("Cr kinetics (v3): separate panels, precomputed AKI timing\n")
+
+    cr_e, coh_e, _ = load_eicu()
+    plot_trajectory(cr_e, coh_e, "eICU")
+    plot_ratio(cr_e, "eICU")
+    plot_cumulative_aki(coh_e, "eICU")
+
+    cr_m, coh_m, _ = load_mimic()
+    plot_trajectory(cr_m, coh_m, "MIMIC")
+    plot_ratio(cr_m, "MIMIC")
+    plot_cumulative_aki(coh_m, "MIMIC")
+
+    print("\nDone. 6 panels saved individually.")
