@@ -1073,18 +1073,19 @@ def run_mimic():
     print(f"  labevents (filtered): {len(labs):,}")
 
     print("  Loading inputevents...")
+    _ie_want = {
+        "subject_id",
+        "stay_id",
+        "hadm_id",
+        "itemid",
+        "starttime",
+        "amount",
+        "amountuom",
+        "statusdescription",
+    }
     ie = pd.read_csv(
         gz(f"{MIMIC_ICU}/inputevents.csv.gz"),
-        usecols=[
-            "subject_id",
-            "stay_id",
-            "hadm_id",
-            "itemid",
-            "starttime",
-            "amount",
-            "amountuom",
-            "cancelreason",
-        ],
+        usecols=lambda c: c in _ie_want,
         low_memory=False,
     )
     print(f"  inputevents: {len(ie):,}")
@@ -1178,8 +1179,9 @@ def run_mimic():
     # ── IV Mg from inputevents ───────────────────────────────────
     print("\n── IV Magnesium identification ──")
     ie_mg = ie[(ie.stay_id.isin(stays)) & (ie.itemid.isin(MG_SUPP_ITEMS_MIMIC))].copy()
-    if "cancelreason" in ie_mg.columns:
-        ie_mg = ie_mg[ie_mg.cancelreason.isna() | (ie_mg.cancelreason == 0)]
+    # Filter out cancelled/rewritten orders
+    if "statusdescription" in ie_mg.columns:
+        ie_mg = ie_mg[~ie_mg.statusdescription.str.contains("Rewritten", na=False)]
     ie_mg = ie_mg[ie_mg.amount.notna() & (ie_mg.amount > 0)]
     ie_mg["starttime"] = pd.to_datetime(ie_mg["starttime"])
     ie_mg = ie_mg.merge(cardiac[["stay_id", "intime"]], on="stay_id")
@@ -1454,52 +1456,6 @@ def run_mimic():
         f"    transfusion_pre_t0: {pct(treated.transfusion_pre_t0.sum(), len(treated))}"
     )
 
-    # BMI
-    try:
-        ce_wt = pd.read_csv(
-            gz(f"{MIMIC_ICU}/chartevents.csv.gz"),
-            usecols=["stay_id", "itemid", "valuenum"],
-            chunksize=10_000_000,
-        )
-        wt_chunks = []
-        for ch in ce_wt:
-            wt_chunks.append(ch[ch.itemid == 226512])
-        wt_df = pd.concat(wt_chunks)
-        wt_first = (
-            wt_df[wt_df.stay_id.isin(set(treated.stay_id))]
-            .groupby("stay_id")["valuenum"]
-            .first()
-            .to_dict()
-        )
-        ht_chunks = []
-        ce_ht = pd.read_csv(
-            gz(f"{MIMIC_ICU}/chartevents.csv.gz"),
-            usecols=["stay_id", "itemid", "valuenum"],
-            chunksize=10_000_000,
-        )
-        for ch in ce_ht:
-            ht_chunks.append(ch[ch.itemid == 226730])
-        ht_df = pd.concat(ht_chunks)
-        ht_first = (
-            ht_df[ht_df.stay_id.isin(set(treated.stay_id))]
-            .groupby("stay_id")["valuenum"]
-            .first()
-            .to_dict()
-        )
-        treated["bmi"] = treated.stay_id.apply(
-            lambda x: (
-                wt_first.get(x, np.nan) / ((ht_first.get(x, np.nan) / 100) ** 2)
-                if pd.notna(wt_first.get(x))
-                and pd.notna(ht_first.get(x))
-                and ht_first.get(x, 0) > 0
-                else np.nan
-            )
-        )
-        treated.loc[~treated.bmi.between(10, 80), "bmi"] = np.nan
-    except Exception as e:
-        print(f"  BMI extraction failed: {e}")
-        treated["bmi"] = np.nan
-
     # Mortality
     treated["hosp_mortality"] = treated.hospital_expire_flag.fillna(0).astype(int)
 
@@ -1616,23 +1572,52 @@ def run_mimic():
         set(ie_early[ie_early.itemid.isin(BLOOD_ITEMS_MIMIC)].stay_id)
     ).astype(int)
 
-    # BMI for controls
-    try:
-        control["bmi"] = control.stay_id.apply(
-            lambda x: (
-                wt_first.get(x, np.nan) / ((ht_first.get(x, np.nan) / 100) ** 2)
-                if pd.notna(wt_first.get(x))
-                and pd.notna(ht_first.get(x))
-                and ht_first.get(x, 0) > 0
-                else np.nan
-            )
-        )
-        control.loc[~control.bmi.between(10, 80), "bmi"] = np.nan
-    except:
-        control["bmi"] = np.nan
-
     control["hosp_mortality"] = control.hospital_expire_flag.fillna(0).astype(int)
     consort["control_final"] = len(control)
+
+    # BMI — single chartevents pass for weight + height (both cohorts)
+    print("\n  BMI extraction (chartevents)...")
+    try:
+        _bmi_items = {226512, 226730}
+        bmi_chunks = []
+        for ch in pd.read_csv(
+            gz(f"{MIMIC_ICU}/chartevents.csv.gz"),
+            usecols=["stay_id", "itemid", "valuenum"],
+            chunksize=10_000_000,
+        ):
+            bmi_chunks.append(ch[ch.itemid.isin(_bmi_items) & ch.valuenum.notna()])
+        bmi_df = pd.concat(bmi_chunks, ignore_index=True)
+        all_bmi_stays = set(treated.stay_id) | set(control.stay_id)
+        bmi_df = bmi_df[bmi_df.stay_id.isin(all_bmi_stays)]
+        wt_first = (
+            bmi_df[bmi_df.itemid == 226512]
+            .groupby("stay_id")["valuenum"]
+            .first()
+            .to_dict()
+        )
+        ht_first = (
+            bmi_df[bmi_df.itemid == 226730]
+            .groupby("stay_id")["valuenum"]
+            .first()
+            .to_dict()
+        )
+        for df in [treated, control]:
+            df["bmi"] = df.stay_id.apply(
+                lambda x: (
+                    wt_first.get(x, np.nan) / ((ht_first.get(x, np.nan) / 100) ** 2)
+                    if pd.notna(wt_first.get(x))
+                    and pd.notna(ht_first.get(x))
+                    and ht_first.get(x, 0) > 0
+                    else np.nan
+                )
+            )
+            df.loc[~df.bmi.between(10, 80), "bmi"] = np.nan
+        print(f"    Treated BMI: {pct(treated.bmi.notna().sum(), len(treated))}")
+        print(f"    Control BMI: {pct(control.bmi.notna().sum(), len(control))}")
+    except Exception as e:
+        print(f"    BMI failed: {e}")
+        treated["bmi"] = np.nan
+        control["bmi"] = np.nan
 
     # All Cr for temporal matching
     all_s = set(treated.stay_id) | set(control.stay_id)
