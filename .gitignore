@@ -1,0 +1,8 @@
+# Patient-level data (PhysioNet DUA)
+results/did_treated_*.csv
+results/did_control_*.csv
+results/did_cr_all_*.csv
+results/did_matched_*.csv
+# Raw database files
+eicu-crd-2.0/
+mimic-iv-3.1/

@@ -1,0 +1,9 @@
+"subgroup","stratum","n_trt","n_ctl","did_adj","p_adj"
+"Mg_stratum","<1.8",338,338,-0.0101,0.695
+"Mg_stratum","1.8-2.0",376,376,-0.043,0.094
+"Mg_stratum","2.0-2.3",193,193,-0.0492,0.276
+"Mg_stratum",">2.3",181,181,0.0213,0.6423
+"Surgery","cabg",250,250,-0.0432,0.3732
+"Surgery","valve",165,165,0.0099,0.8859
+"Surgery","combined",49,49,-0.0335,0.8108
+"Surgery","other_cardiac",624,624,-0.0121,0.5831
