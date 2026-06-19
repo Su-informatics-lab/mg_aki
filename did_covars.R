@@ -1,30 +1,39 @@
 # ============================================================================
-# did_covars.R — Shared PS covariate specification (v4)
+# did_covars.R — PS covariate specifications (multi-model)
 #
-# v4: Dropped first_potassium (K+ repletion protocol confounds Mg treatment)
-#     Dropped steroids (intraop dexamethasone protocol-driven, worst SMD eICU)
-#     Primary model: 22 covariates
-#
-# v3: Nephrotoxic drugs -> chronic (home med) flags; dropped BB/AA/lactate
+# Models:
+#   v3:       24 covars — chronic drug flags, keep steroids/K+
+#   yan:      23 covars — original 28 minus {nsaids,ppi,acei_arb,beta_blockers,steroids}
+#   original: 28 covars — all pre-t0 drugs + lactate
 # ============================================================================
 
-PS_COVARS_PRIMARY <- c(
+# ── v3: chronic drug revision (24 covariates) ────────────────────────────
+PS_COVARS_V3 <- c(
   "age", "is_female", "bmi",
   "surg_cabg", "surg_valve", "surg_combined",
   "heart_failure", "hypertension", "diabetes", "ckd",
   "copd", "pvd", "stroke", "liver_disease",
   "egfr",
+  "steroids",
   "ppi_chronic", "loop_diuretic_chronic", "acei_arb_chronic", "nsaid_chronic",
-  "first_calcium", "first_heartrate", "first_mg_value"
+  "first_potassium", "first_calcium", "first_heartrate", "first_mg_value"
 )
 
-# Sensitivity A: +steroids +K+ (= v3 primary, 24 covars)
-PS_COVARS_SENS_A <- c(PS_COVARS_PRIMARY, "steroids", "first_potassium")
+# ── yan: drop 5 drugs from original (23 covariates) ─────────────────────
+# Dropped: nsaids, ppi, acei_arb, beta_blockers, steroids
+# Kept: loop_diuretics, antiarrhythmics (+ all non-drug covariates)
+PS_COVARS_YAN <- c(
+  "age", "is_female", "bmi",
+  "surg_cabg", "surg_valve", "surg_combined",
+  "heart_failure", "hypertension", "diabetes", "ckd",
+  "copd", "pvd", "stroke", "liver_disease",
+  "egfr",
+  "loop_diuretics", "antiarrhythmics",
+  "first_potassium", "first_calcium", "first_heartrate",
+  "first_mg_value", "first_lactate", "lactate_missing"
+)
 
-# Sensitivity B: +lactate (26 covars)
-PS_COVARS_SENS_B <- c(PS_COVARS_SENS_A, "first_lactate", "lactate_missing")
-
-# Sensitivity C: original 28
+# ── original 28 ──────────────────────────────────────────────────────────
 PS_COVARS_ORIGINAL <- c(
   "age", "is_female", "bmi",
   "surg_cabg", "surg_valve", "surg_combined",
@@ -36,6 +45,23 @@ PS_COVARS_ORIGINAL <- c(
   "first_potassium", "first_calcium", "first_heartrate",
   "first_mg_value", "first_lactate", "lactate_missing"
 )
+
+# ── Model selector ───────────────────────────────────────────────────────
+MODEL_REGISTRY <- list(
+  v3       = PS_COVARS_V3,
+  yan      = PS_COVARS_YAN,
+  original = PS_COVARS_ORIGINAL
+)
+
+select_model <- function(name) {
+  name <- tolower(name)
+  if (!name %in% names(MODEL_REGISTRY))
+    stop(sprintf("Unknown model '%s'. Available: %s", name,
+                 paste(names(MODEL_REGISTRY), collapse=", ")))
+  covars <- MODEL_REGISTRY[[name]]
+  cat(sprintf("  Model '%s': %d covariates\n", name, length(covars)))
+  covars
+}
 
 COVAR_NICE_NAMES <- c(
   age="Age", is_female="Female sex", bmi="BMI",
@@ -52,6 +78,5 @@ COVAR_NICE_NAMES <- c(
   first_lactate="Lactate", lactate_missing="Lactate missing"
 )
 
-cat(sprintf("  PS covariate config loaded: primary=%d, sensA=%d, sensB=%d, original=%d\n",
-            length(PS_COVARS_PRIMARY), length(PS_COVARS_SENS_A),
-            length(PS_COVARS_SENS_B), length(PS_COVARS_ORIGINAL)))
+cat(sprintf("  did_covars.R loaded: v3=%d, yan=%d, original=%d\n",
+            length(PS_COVARS_V3), length(PS_COVARS_YAN), length(PS_COVARS_ORIGINAL)))
