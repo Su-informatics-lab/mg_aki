@@ -145,7 +145,7 @@ def fig_raw_strip():
                     [gd],
                     positions=[xoff],
                     widths=0.35,
-                    showextremes=False,
+                    showextrema=False,
                     showmedians=False,
                 )
                 for pc in parts["bodies"]:
