@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
-00_did_etl.py — DiD cohort construction for Mg → AKI study (v2)
+00_did_etl.py — DiD cohort construction for Mg → AKI study (v3)
+
+  v3 changes (chronic drug revision, per Dr. Yan 2026-06-19):
+    - Added CHRONIC_DRUG_CLASSES: ppi_chronic, loop_diuretic_chronic,
+      acei_arb_chronic, nsaid_chronic
+    - eICU: chronic flags from admissionDrug (medication reconciliation)
+    - MIMIC: chronic flags from prescriptions (pre-admission + oral route)
+    - All existing pre-t0 combined flags retained for sensitivity analyses
 
   Design:
     - Time zero = first postop IV Mg administration (patient-specific)
-    - Cr_pre  = latest Cr between ICU admission and IV Mg (no hosp fallback)
+    - Cr_pre  = latest Cr between ICU admission and IV Mg (hosp fallback)
     - Cr_post = first Cr after IV Mg at three windows
     - Outcome = ΔCr (continuous)
     - Controls = patients who never received postop IV Mg
@@ -48,18 +55,16 @@ MIMIC_ICU = os.path.join(MIMIC_ROOT, "icu")
 # ═══════════════════════════════════════════════════════════════════
 MIN_AGE = 18
 CR_MIN, CR_MAX = 0.1, 25.0
-CR_POST_PLAUSIBLE_MAX = 15.0  # Cr_post > 15 = lab error (4 pts in eICU)
+CR_POST_PLAUSIBLE_MAX = 15.0
 BASELINE_CR_MAX = 4.0
 
-# Three Cr_post windows: (min_h, max_h) after IV Mg
 CR_POST_WINDOWS = {
-    "6_24h": (6, 24),  # primary
-    "6_48h": (6, 48),  # sensitivity: wider
-    "0_24h": (0, 24),  # sensitivity: no floor
+    "6_24h": (6, 24),
+    "6_48h": (6, 48),
+    "0_24h": (0, 24),
 }
 
 # ── Secondary outcome patterns ──────────────────────────────────────
-# POAF (new-onset atrial fibrillation/flutter)
 AF_PATTERNS_EICU = [
     "atrial fibrillation",
     "atrial flutter",
@@ -79,7 +84,6 @@ AF_ICD9 = ["42731", "42732"]
 AF_ICD10 = ["I480", "I481", "I482", "I4891", "I4811", "I4819", "I4821", "I4891"]
 AF_ICD10_PREFIX = "I48"
 
-# Encephalopathy / delirium
 ENCEPH_PATTERNS_EICU = [
     "encephalopathy",
     "delirium",
@@ -90,7 +94,6 @@ ENCEPH_PATTERNS_EICU = [
 ENCEPH_ICD9 = ["3481", "3489", "2930", "2931"]
 ENCEPH_ICD10_PREFIX = ["G93", "F05"]
 
-# Ventricular arrhythmia (VT/VF/cardiac arrest)
 VARR_PATTERNS_EICU = [
     "ventricular tachycardia",
     "ventricular fibrillation",
@@ -103,7 +106,6 @@ VARR_PATTERNS_EICU = [
 VARR_ICD9 = ["4271", "42741", "42742"]
 VARR_ICD10 = ["I472", "I490"]
 
-# eICU: cardiac surgery identification
 CARDIAC_DX_PATTERNS = [
     "cabg",
     "valve",
@@ -119,7 +121,6 @@ CARDIAC_DX_PATTERNS = [
 ]
 CARDIAC_UNIT_TYPES = {"CSICU", "CTICU", "CCU-CTICU"}
 
-# eICU: IV Mg drug patterns
 MG_SUPP_PATTERNS = [
     "magnesium",
     "mag sulfate",
@@ -130,7 +131,6 @@ MG_SUPP_PATTERNS = [
     "mag chloride",
 ]
 
-# MIMIC: item IDs
 MG_SUPP_ITEMS_MIMIC = [222011, 227523]
 LAB_CR_MIMIC = [50912, 52546]
 LAB_MG_MIMIC = [50960]
@@ -142,7 +142,6 @@ VASO_ITEMS_MIMIC = [221906, 221289, 222315, 221749, 221662, 221653, 221986]
 K_SUPP_ITEMS_MIMIC = [225166, 225168, 222139, 227521, 227522]
 BLOOD_ITEMS_MIMIC = [225168, 220970, 225170, 225171, 226368, 226369, 226370, 226371]
 
-# MIMIC: surgery ICD codes
 CABG_ICD9 = ["3610", "3611", "3612", "3613", "3614", "3615", "3616", "3617", "3619"]
 VALVE_ICD9 = [
     "3521",
@@ -162,7 +161,6 @@ CABG_ICD10 = ["0210", "0211", "0212", "0213"]
 VALVE_ICD10 = ["02RF", "02RG", "02RH", "02RJ", "02QF", "02QG", "02QH", "02QJ"]
 CVICU = "Cardiac Vascular Intensive Care Unit (CVICU)"
 
-# eICU comorbidity patterns (pastHistory)
 EICU_COMORB = {
     "heart_failure": ["heart failure", "chf", "cardiomyopathy"],
     "hypertension": ["hypertension"],
@@ -174,7 +172,6 @@ EICU_COMORB = {
     "liver_disease": ["cirrhosis", "hepatitis", "liver disease", "liver failure"],
 }
 
-# MIMIC comorbidity ICD codes
 MIMIC_COMORB_ICD = {
     "heart_failure": {9: ["4280", "4281", "4289", "428"], 10: ["I50"]},
     "hypertension": {
@@ -198,7 +195,7 @@ MIMIC_COMORB_ICD = {
     },
 }
 
-# Drug patterns for both databases
+# Drug patterns — combined pre-t0 flags (kept for sensitivity)
 DRUG_CLASSES = {
     "loop_diuretics": ["furosemide", "bumetanide", "torsemide", "lasix"],
     "nsaids": ["ibuprofen", "ketorolac", "naproxen", "diclofenac", "celecoxib"],
@@ -250,6 +247,47 @@ DRUG_CLASSES = {
     ],
 }
 
+# ◆ v3: Chronic (home medication) drug classes
+#   eICU source:  admissionDrug table (medication reconciliation)
+#   MIMIC source: prescriptions with starttime < admittime AND oral route
+CHRONIC_DRUG_CLASSES = {
+    "ppi_chronic": [
+        "omeprazole",
+        "pantoprazole",
+        "lansoprazole",
+        "esomeprazole",
+        "rabeprazole",
+    ],
+    "loop_diuretic_chronic": [
+        "furosemide",
+        "bumetanide",
+        "torsemide",
+        "lasix",
+    ],
+    "acei_arb_chronic": [
+        "lisinopril",
+        "enalapril",
+        "ramipril",
+        "captopril",
+        "losartan",
+        "valsartan",
+        "irbesartan",
+        "candesartan",
+        "olmesartan",
+        "telmisartan",
+    ],
+    "nsaid_chronic": [
+        "ibuprofen",
+        "ketorolac",
+        "naproxen",
+        "diclofenac",
+        "celecoxib",
+        "indomethacin",
+        "meloxicam",
+    ],
+}
+ORAL_ROUTE_RE = r"oral|po\b|tablet|capsule|cap\b|tab\b"
+
 ESKD_PATTERNS = [
     "dialysis",
     "esrd",
@@ -258,7 +296,6 @@ ESKD_PATTERNS = [
     "renal transplant",
     "kidney transplant",
 ]
-
 VASO_PATTERNS = [
     "norepinephrine",
     "vasopressin",
@@ -268,7 +305,6 @@ VASO_PATTERNS = [
     "dobutamine",
     "milrinone",
 ]
-
 TRANSFUSION_PATTERNS = [
     "transfusion",
     "blood product",
@@ -330,7 +366,6 @@ def desc(s, name, ind="    "):
 
 
 def matches_icd(dx_df, hadm_ids, code_map):
-    """Return set of hadm_ids matching ICD code prefixes."""
     sub = dx_df[dx_df.hadm_id.isin(hadm_ids)]
     hits = set()
     for ver, prefixes in code_map.items():
@@ -362,8 +397,62 @@ def classify_surgery_eicu(dx_str):
     return "other_cardiac"
 
 
+# ◆ v3: Shared chronic drug extraction helpers
+def extract_chronic_eicu(df, admDrug, id_set, label=""):
+    """Add chronic drug flags from eICU admissionDrug (home med reconciliation)."""
+    ad_sub = (
+        admDrug[admDrug.patientunitstayid.isin(id_set)]
+        if len(admDrug) > 0
+        else pd.DataFrame()
+    )
+    for col, pats in CHRONIC_DRUG_CLASSES.items():
+        chronic_pids = set()
+        if len(ad_sub) > 0 and "drugname" in ad_sub.columns:
+            chronic_pids = set(
+                ad_sub[matches_any(ad_sub.drugname, pats)].patientunitstayid
+            )
+        df[col] = df.patientunitstayid.isin(chronic_pids).astype(int)
+        if label:
+            print(f"    {col}: {pct(df[col].sum(), len(df))}")
+    return df
+
+
+def extract_chronic_mimic(df, presc_full, admissions_df, label=""):
+    """Add chronic drug flags from MIMIC prescriptions (pre-admission + oral route).
+
+    Chronic = starttime < admittime (any route)
+           OR starttime < intime AND oral route (home meds continued pre-op)
+    """
+    adm_times = admissions_df[["hadm_id", "admittime"]].copy()
+    adm_times["admittime"] = pd.to_datetime(adm_times["admittime"], errors="coerce")
+
+    hadm_ids = set(df.hadm_id.dropna().astype(int))
+    p = presc_full[presc_full.hadm_id.isin(hadm_ids)].copy()
+    p["starttime"] = pd.to_datetime(p["starttime"], errors="coerce")
+    p = p.merge(adm_times, on="hadm_id", how="left")
+    p = p.merge(
+        df[["hadm_id", "stay_id", "intime"]].drop_duplicates("hadm_id"),
+        on="hadm_id",
+        how="left",
+    )
+
+    is_pre_admit = p.starttime < p.admittime
+    is_pre_icu = p.starttime < p.intime
+    is_oral = p.route.str.lower().str.contains(ORAL_ROUTE_RE, na=False)
+    p_chronic = p[is_pre_admit | (is_pre_icu & is_oral)]
+
+    for col, pats in CHRONIC_DRUG_CLASSES.items():
+        drug_mask = p_chronic.drug.str.lower().str.contains(
+            "|".join(pat.lower() for pat in pats), na=False
+        )
+        chronic_stays = set(p_chronic.loc[drug_mask, "stay_id"].dropna())
+        df[col] = df.stay_id.isin(chronic_stays).astype(int)
+        if label:
+            print(f"    {col}: {pct(df[col].sum(), len(df))}")
+    return df
+
+
 def build_cohort_common(treated, control, db_tag):
-    """Shared final steps: surgery dummies, print summary, save."""
     for df in [treated, control]:
         df["surg_cabg"] = (df.surgery_type == "cabg").astype(int)
         df["surg_valve"] = (df.surgery_type == "valve").astype(int)
@@ -374,7 +463,6 @@ def build_cohort_common(treated, control, db_tag):
     treated["treated"] = 1
     control["treated"] = 0
 
-    # KDIGO staging for reference (from primary 6-24h window)
     if "cr_post_6_24h" in treated.columns:
         treated["aki_kdigo1_ref"] = (
             (treated.cr_post_6_24h / treated.cr_pre >= 1.5)
@@ -392,9 +480,22 @@ def build_cohort_common(treated, control, db_tag):
         f"  Saved: did_control_{tag}.csv ({len(control)} pts, {control.shape[1]} cols)"
     )
 
+    # ◆ v3: Print chronic drug prevalence comparison
+    print(f"\n  ◆ Chronic vs combined drug prevalence (treated):")
+    pairs = [
+        ("ppi", "ppi_chronic"),
+        ("loop_diuretics", "loop_diuretic_chronic"),
+        ("acei_arb", "acei_arb_chronic"),
+        ("nsaids", "nsaid_chronic"),
+    ]
+    for combined, chronic in pairs:
+        if combined in treated.columns and chronic in treated.columns:
+            nc = treated[combined].sum()
+            nh = treated[chronic].sum()
+            print(f"    {combined:<18s}: combined={nc:>5,}  chronic={nh:>5,}")
+
 
 def print_consort(consort, treated, db_tag):
-    """CONSORT summary and subgroup counts."""
     SEP = "=" * 70
     print(f"\n{SEP}\n{db_tag} CONSORT SUMMARY\n{SEP}")
     for label, key in [
@@ -404,11 +505,11 @@ def print_consort(consort, treated, db_tag):
         ("Received any postop IV Mg", "treated_any_ivmg"),
         ("  Has ICU Cr before IV Mg", "treated_has_cr_pre"),
         ("  No ICU Cr before IV Mg (LOST)", "treated_no_cr_pre"),
-        ("  Excl: Cr_pre ≥ 4.0", "excl_cr_high"),
+        ("  Excl: Cr_pre >= 4.0", "excl_cr_high"),
         ("  Excl: prevalent AKI", "excl_prevalent_aki"),
         ("  TREATED FINAL", "treated_final"),
         ("Never received IV Mg", "control_no_ivmg"),
-        ("  Has ≥2 postop Cr", "control_has_2cr"),
+        ("  Has >=2 postop Cr", "control_has_2cr"),
         ("  CONTROL FINAL", "control_final"),
     ]:
         print(f"  {label:<42s} {consort.get(key, 0):>8,}")
@@ -419,7 +520,7 @@ def print_consort(consort, treated, db_tag):
         col = f"cr_post_{wname}"
         if col in treated.columns:
             n = treated[col].notna().sum()
-            tag = " ◀ PRIMARY" if wname == "6_24h" else ""
+            tag = " < PRIMARY" if wname == "6_24h" else ""
             print(f"    {wname:>6s}: {pct(n, n_trt)}{tag}")
 
     for wname in CR_POST_WINDOWS:
@@ -430,7 +531,7 @@ def print_consort(consort, treated, db_tag):
             if n_ready > 0:
                 desc(
                     treated.loc[treated[col].notna(), f"delta_cr_{wname}"],
-                    f"ΔCr ({wname})",
+                    f"dCr ({wname})",
                 )
 
     print(f"\n  Surgery type (treated):")
@@ -453,17 +554,9 @@ def print_consort(consort, treated, db_tag):
 #  SECONDARY OUTCOME EXTRACTION
 # ═══════════════════════════════════════════════════════════════════
 def extract_secondary_eicu(treated, control, diag, pasthx, pids):
-    """Add POAF, encephalopathy, ventricular arrhythmia columns (eICU).
-
-    eICU advantage: diagnosisOffset gives per-stay timing.
-    For treated: flag both 'any during stay' and 'post-IV-Mg onset'.
-    For controls: 'any during stay' only (no IV Mg time to anchor).
-    Excludes pre-existing AF for POAF.
-    """
-    print("\n── Secondary outcomes (eICU) ──")
+    print("\n-- Secondary outcomes (eICU) --")
     all_pids = set(treated.patientunitstayid) | set(control.patientunitstayid)
 
-    # ── Prior AF (exclude from POAF) ──
     prior_af = set()
     if len(pasthx) > 0 and "pasthistorypath" in pasthx.columns:
         prior_af = set(
@@ -474,7 +567,6 @@ def extract_secondary_eicu(treated, control, diag, pasthx, pids):
         )
     print(f"  Prior AF (excluded from POAF): {len(prior_af)}")
 
-    # ── POAF: new-onset AF during stay, post-ICU ──
     af_dx = diag[
         diag.patientunitstayid.isin(all_pids)
         & matches_any(diag.diagnosisstring, AF_PATTERNS_EICU)
@@ -482,7 +574,6 @@ def extract_secondary_eicu(treated, control, diag, pasthx, pids):
     ]
     af_any = set(af_dx.patientunitstayid) - prior_af
 
-    # Post-IV-Mg onset: AF diagnosed AFTER first IV Mg
     mg_map = dict(zip(treated.patientunitstayid, treated.mg_offset_min))
     af_post_mg = set()
     for pid in treated.patientunitstayid:
@@ -503,7 +594,6 @@ def extract_secondary_eicu(treated, control, diag, pasthx, pids):
     )
     print(f"  POAF post-IV-Mg:  {treated.poaf_post_mg.sum()}")
 
-    # ── Encephalopathy / delirium ──
     enc_dx = diag[
         diag.patientunitstayid.isin(all_pids)
         & matches_any(diag.diagnosisstring, ENCEPH_PATTERNS_EICU)
@@ -513,11 +603,9 @@ def extract_secondary_eicu(treated, control, diag, pasthx, pids):
     treated["encephalopathy"] = treated.patientunitstayid.isin(enc_pids).astype(int)
     control["encephalopathy"] = control.patientunitstayid.isin(enc_pids).astype(int)
     print(
-        f"  Encephalopathy:   treated {treated.encephalopathy.sum()}, "
-        f"control {control.encephalopathy.sum()}"
+        f"  Encephalopathy:   treated {treated.encephalopathy.sum()}, control {control.encephalopathy.sum()}"
     )
 
-    # ── Ventricular arrhythmia ──
     varr_dx = diag[
         diag.patientunitstayid.isin(all_pids)
         & matches_any(diag.diagnosisstring, VARR_PATTERNS_EICU)
@@ -527,21 +615,14 @@ def extract_secondary_eicu(treated, control, diag, pasthx, pids):
     treated["vent_arrhythmia"] = treated.patientunitstayid.isin(varr_pids).astype(int)
     control["vent_arrhythmia"] = control.patientunitstayid.isin(varr_pids).astype(int)
     print(
-        f"  Vent arrhythmia:  treated {treated.vent_arrhythmia.sum()}, "
-        f"control {control.vent_arrhythmia.sum()}"
+        f"  Vent arrhythmia:  treated {treated.vent_arrhythmia.sum()}, control {control.vent_arrhythmia.sum()}"
     )
 
     return treated, control
 
 
 def extract_secondary_mimic(treated, control, dx):
-    """Add POAF, encephalopathy, ventricular arrhythmia columns (MIMIC).
-
-    MIMIC limitation: diagnoses_icd is hospital-level (no onset timing).
-    Excludes pre-existing AF via prior admission ICD codes.
-    """
-    print("\n── Secondary outcomes (MIMIC) ──")
-
+    print("\n-- Secondary outcomes (MIMIC) --")
     trt_hadms = set(treated.hadm_id)
     ctl_hadms = set(control.hadm_id)
     all_hadms = trt_hadms | ctl_hadms
@@ -550,7 +631,6 @@ def extract_secondary_mimic(treated, control, dx):
     dx["icd_code"] = dx["icd_code"].astype(str).str.strip()
     dx["icd_version"] = dx["icd_version"].astype(int)
 
-    # Helper: check ICD codes for a set of hadm_ids
     def has_icd(hadm_set, icd9_codes, icd10_prefixes):
         hits = set()
         for code in icd9_codes:
@@ -571,8 +651,6 @@ def extract_secondary_mimic(treated, control, dx):
             )
         return hits
 
-    # ── Prior AF: check ALL admissions for each subject, not just current ──
-    # Get all hadm_ids for these subjects (including prior admissions)
     all_subject_dx = dx[dx.subject_id.isin(all_sids)]
     af_all_hadms = set()
     for code in AF_ICD9:
@@ -589,7 +667,6 @@ def extract_secondary_mimic(treated, control, dx):
         ].hadm_id
     )
 
-    # Map hadm_id to subject_id
     hadm_to_sid = dict(
         zip(
             pd.concat(
@@ -601,23 +678,15 @@ def extract_secondary_mimic(treated, control, dx):
         )
     )
 
-    # Subjects with AF in ANY prior admission (not current surgery admission)
     prior_af_sids = set()
     for sid in all_sids:
         sid_hadms = set(all_subject_dx[all_subject_dx.subject_id == sid].hadm_id)
-        current_hadm = set()
-        for h, s in hadm_to_sid.items():
-            if s == sid:
-                current_hadm.add(h)
-        prior_hadms = sid_hadms - current_hadm
-        if prior_hadms & af_all_hadms:
+        current_hadm = {h for h, s in hadm_to_sid.items() if s == sid}
+        if (sid_hadms - current_hadm) & af_all_hadms:
             prior_af_sids.add(sid)
 
-    # Current admission AF (new-onset POAF)
     af_current = has_icd(all_hadms, AF_ICD9, [AF_ICD10_PREFIX])
-    poaf_hadms = af_current - set(
-        h for h, s in hadm_to_sid.items() if s in prior_af_sids
-    )
+    poaf_hadms = af_current - {h for h, s in hadm_to_sid.items() if s in prior_af_sids}
 
     treated["poaf"] = treated.hadm_id.isin(poaf_hadms).astype(int)
     treated["prior_af"] = treated.subject_id.isin(prior_af_sids).astype(int)
@@ -628,22 +697,18 @@ def extract_secondary_mimic(treated, control, dx):
         f"  POAF (new-onset): treated {treated.poaf.sum()}, control {control.poaf.sum()}"
     )
 
-    # ── Encephalopathy ──
     enc_hadms = has_icd(all_hadms, ENCEPH_ICD9, ENCEPH_ICD10_PREFIX)
     treated["encephalopathy"] = treated.hadm_id.isin(enc_hadms).astype(int)
     control["encephalopathy"] = control.hadm_id.isin(enc_hadms).astype(int)
     print(
-        f"  Encephalopathy:   treated {treated.encephalopathy.sum()}, "
-        f"control {control.encephalopathy.sum()}"
+        f"  Encephalopathy:   treated {treated.encephalopathy.sum()}, control {control.encephalopathy.sum()}"
     )
 
-    # ── Ventricular arrhythmia ──
     varr_hadms = has_icd(all_hadms, VARR_ICD9, VARR_ICD10)
     treated["vent_arrhythmia"] = treated.hadm_id.isin(varr_hadms).astype(int)
     control["vent_arrhythmia"] = control.hadm_id.isin(varr_hadms).astype(int)
     print(
-        f"  Vent arrhythmia:  treated {treated.vent_arrhythmia.sum()}, "
-        f"control {control.vent_arrhythmia.sum()}"
+        f"  Vent arrhythmia:  treated {treated.vent_arrhythmia.sum()}, control {control.vent_arrhythmia.sum()}"
     )
 
     return treated, control
@@ -654,10 +719,11 @@ def extract_secondary_mimic(treated, control, dx):
 # ═══════════════════════════════════════════════════════════════════
 def run_eicu():
     SEP = "=" * 70
-    print(f"\n{SEP}\neICU-CRD: DiD Cohort Construction\n  Data: {EICU_ROOT}\n{SEP}")
+    print(
+        f"\n{SEP}\neICU-CRD: DiD Cohort Construction (v3)\n  Data: {EICU_ROOT}\n{SEP}"
+    )
     consort = {}
 
-    # ── load tables ──────────────────────────────────────────────
     def ld(name, **kw):
         for ext in [".csv.gz", ".csv"]:
             p = os.path.join(EICU_ROOT, name + ext)
@@ -690,6 +756,7 @@ def run_eicu():
     vital = ld(
         "vitalPeriodic", usecols=["patientunitstayid", "observationoffset", "heartrate"]
     )
+    admDrug = ld("admissionDrug")  # ◆ v3: home medication reconciliation
 
     consort["total_icu"] = len(patient)
     print(f"\n  Total ICU admissions: {len(patient):,}")
@@ -714,7 +781,7 @@ def run_eicu():
     consort["cardiac_adult_first"] = len(cardiac)
     print(f"  Cardiac surgery, adult, 1st stay: {len(cardiac):,}")
 
-    # ── ESKD ─────────────────────────────────────────────────────
+    # ── ESKD exclusion ───────────────────────────────────────────
     eskd = set()
     if len(pasthx) > 0 and "pasthistorypath" in pasthx.columns:
         eskd |= set(
@@ -733,13 +800,12 @@ def run_eicu():
     cardiac = cardiac[~cardiac.patientunitstayid.isin(eskd)]
     pids = set(cardiac.patientunitstayid)
     consort["post_eskd"] = len(cardiac)
-    print(f"  ESKD excluded: {len(eskd):,} → remaining: {len(cardiac):,}")
+    print(f"  ESKD excluded: {len(eskd):,} -> remaining: {len(cardiac):,}")
 
-    # surgery type
     cardiac["surgery_type"] = cardiac.apacheadmissiondx.apply(classify_surgery_eicu)
 
-    # ── IV Mg: any postop ────────────────────────────────────────
-    print("\n── IV Magnesium identification ──")
+    # ── IV Mg identification ─────────────────────────────────────
+    print("\n-- IV Magnesium identification --")
     med_ok = (
         med[med.patientunitstayid.isin(pids) & (med.drugordercancelled != "Yes")]
         if len(med) > 0
@@ -803,7 +869,7 @@ def run_eicu():
         )
 
     # ── Creatinine ───────────────────────────────────────────────
-    print("\n── Creatinine ──")
+    print("\n-- Creatinine --")
     cr = lab[
         lab.patientunitstayid.isin(pids)
         & lab.labname.str.lower().str.contains("creatinine", na=False)
@@ -813,8 +879,7 @@ def run_eicu():
         f"  Cr measurements: {len(cr):,} across {cr.patientunitstayid.nunique():,} pts"
     )
 
-    # Cr_pre: latest ICU Cr before IV Mg
-    print("\n── Cr_pre (latest ICU Cr before IV Mg) ──")
+    print("\n-- Cr_pre (latest ICU Cr before IV Mg) --")
     cr_t = cr[cr.patientunitstayid.isin(treated_pids)].merge(
         first_mg[["patientunitstayid", "mg_offset_min"]], on="patientunitstayid"
     )
@@ -838,10 +903,10 @@ def run_eicu():
     print(f"  Has ICU Cr before IV Mg: {pct(n_has, len(treated_pids))}")
     print(f"  No ICU Cr before IV Mg:  {pct(n_no, len(treated_pids))}")
     desc(cr_pre.cr_pre, "Cr_pre (mg/dL)")
-    desc(cr_pre.gap_to_ivmg_h, "Gap Cr_pre → IV Mg (h)")
+    desc(cr_pre.gap_to_ivmg_h, "Gap Cr_pre -> IV Mg (h)")
 
-    # Comparison: ICU Cr_pre vs hosp Cr
-    print("\n── ICU Cr_pre vs hospitalization Cr ──")
+    # Hosp Cr comparison + fallback
+    print("\n-- ICU Cr_pre vs hospitalization Cr --")
     hosp_off = cardiac.set_index("patientunitstayid")["hospitaladmitoffset"].to_dict()
     cr_t["hosp_off"] = cr_t.patientunitstayid.map(hosp_off)
     cr_h = cr_t[
@@ -867,17 +932,15 @@ def run_eicu():
         print(f"  Both available: {nb}")
         desc(bv.cr_hosp, "Hosp Cr")
         desc(bv.cr_pre, "ICU Cr_pre")
-        desc(d, "Δ (ICU − hosp)")
+        desc(d, "d (ICU - hosp)")
         print(
-            f"    r = {bv.cr_pre.corr(bv.cr_hosp):.3f}, "
-            f"|Δ|>0.3: {pct((d.abs()>0.3).sum(), nb)}"
+            f"    r = {bv.cr_pre.corr(bv.cr_hosp):.3f}, |d|>0.3: {pct((d.abs()>0.3).sum(), nb)}"
         )
     n_recov = cr_hosp.patientunitstayid.isin(
         treated_pids - set(cr_pre.patientunitstayid)
     ).sum()
     print(f"  Lost patients recoverable via hosp Cr: {n_recov}")
 
-    # ── Hosp Cr fallback ──────────────────────────────────────────
     cr_pre["cr_pre_source"] = "icu"
     no_icu = treated_pids - set(cr_pre.patientunitstayid)
     rescue = cr_hosp[cr_hosp.patientunitstayid.isin(no_icu)].copy()
@@ -892,20 +955,18 @@ def run_eicu():
         rescue["cr_pre_source"] = "hosp_fallback"
         shared = [c for c in cr_pre.columns if c in rescue.columns]
         cr_pre = pd.concat([cr_pre[shared], rescue[shared]], ignore_index=True)
-        print(f"  ✚ Hosp Cr fallback: rescued {len(rescue)} patients")
+        print(f"  + Hosp Cr fallback: rescued {len(rescue)} patients")
         print(f"  Total Cr_pre (ICU + fallback): {len(cr_pre)}")
         n_has = len(cr_pre)
         consort["treated_has_cr_pre_with_fallback"] = n_has
         consort["treated_hosp_fallback"] = len(rescue)
 
     # Cr_post windows
-    print("\n── Cr_post windows ──")
+    print("\n-- Cr_post windows --")
     cr_post_all = cr_t[cr_t.labresultoffset > cr_t.mg_offset_min].copy()
     n_implaus = (cr_post_all.labresult > CR_POST_PLAUSIBLE_MAX).sum()
     if n_implaus > 0:
-        print(
-            f"  Cr_post > {CR_POST_PLAUSIBLE_MAX} (lab error): {n_implaus} measurements excluded"
-        )
+        print(f"  Cr_post > {CR_POST_PLAUSIBLE_MAX} (lab error): {n_implaus} excluded")
     cr_post_all = cr_post_all[cr_post_all.labresult <= CR_POST_PLAUSIBLE_MAX]
     cr_post_all["post_h"] = (
         cr_post_all.labresultoffset - cr_post_all.mg_offset_min
@@ -913,15 +974,13 @@ def run_eicu():
     for wname, (lo, hi) in CR_POST_WINDOWS.items():
         cand = cr_post_all[(cr_post_all.post_h >= lo) & (cr_post_all.post_h <= hi)]
         n = cand.groupby("patientunitstayid").ngroups
-        tag = " ◀ PRIMARY" if wname == "6_24h" else ""
+        tag = " < PRIMARY" if wname == "6_24h" else ""
         print(f"  {wname:>6s}: {pct(n, n_has)}{tag}")
 
-    # Exclusions
     cr_pre_ok = cr_pre[cr_pre.cr_pre < BASELINE_CR_MAX]
     consort["excl_cr_high"] = n_has - len(cr_pre_ok)
-    print(f"\n  Excl Cr_pre ≥ {BASELINE_CR_MAX}: {n_has - len(cr_pre_ok)}")
+    print(f"\n  Excl Cr_pre >= {BASELINE_CR_MAX}: {n_has - len(cr_pre_ok)}")
 
-    # Prevalent AKI
     cr_earliest = (
         cr_pre_cand.sort_values("labresultoffset")
         .groupby("patientunitstayid")
@@ -942,7 +1001,7 @@ def run_eicu():
     print(f"  Prevalent AKI: {pct(n_prev, len(prev))}")
 
     # ── TREATED ──────────────────────────────────────────────────
-    print(f"\n{'─'*50}\nBuilding treated cohort...")
+    print(f"\n{'~'*50}\nBuilding treated cohort...")
     keep_pids = set(cr_pre_ok.patientunitstayid) - set(
         prev[prev.prevalent == 1].patientunitstayid
     )
@@ -966,7 +1025,6 @@ def run_eicu():
     )
     treated["egfr"] = compute_egfr(treated.cr_pre, treated.age, treated.is_female)
 
-    # Cr_post at each window
     for wname, (lo, hi) in CR_POST_WINDOWS.items():
         cand = cr_post_all[
             cr_post_all.patientunitstayid.isin(set(treated.patientunitstayid))
@@ -987,10 +1045,8 @@ def run_eicu():
         )
         treated = treated.merge(fp, on="patientunitstayid", how="left")
         treated[f"delta_cr_{wname}"] = treated[f"cr_post_{wname}"] - treated.cr_pre
-
     consort["treated_final"] = len(treated)
 
-    # Comorbidities
     for como, pats in EICU_COMORB.items():
         cp = set()
         if len(pasthx) > 0 and "pasthistorypath" in pasthx.columns:
@@ -1002,8 +1058,8 @@ def run_eicu():
             )
         treated[como] = treated.patientunitstayid.isin(cp).astype(int)
 
-    # Drugs before t0 (patient-specific)
-    print("  Covariates (pre-t0)...")
+    # Combined drug flags (pre-t0, for sensitivity)
+    print("  Covariates (pre-t0 combined drugs)...")
     mg_off_d = dict(zip(treated.patientunitstayid, treated.mg_offset_min))
     tpids = set(treated.patientunitstayid)
     for dc, pats in DRUG_CLASSES.items():
@@ -1017,6 +1073,10 @@ def run_eicu():
                 if len(pt) > 0 and matches_any(pt.drugname, pats).any():
                     flagged.add(pid)
         treated[dc] = treated.patientunitstayid.isin(flagged).astype(int)
+
+    # ◆ v3: Chronic drug flags (admissionDrug = home meds)
+    print("  Chronic drug flags (admissionDrug)...")
+    treated = extract_chronic_eicu(treated, admDrug, tpids, label="treated")
 
     # Labs before t0
     for col, lab_pats in [
@@ -1041,7 +1101,6 @@ def run_eicu():
         treated[col] = treated.patientunitstayid.map(vals)
         print(f"    {col}: {pct(treated[col].notna().sum(), len(treated))}")
 
-    # ◆ Heart rate from vitalPeriodic — before t0
     if len(vital) > 0 and "heartrate" in vital.columns:
         vt = vital[
             vital.patientunitstayid.isin(tpids)
@@ -1064,9 +1123,7 @@ def run_eicu():
         )
     else:
         treated["first_heartrate"] = np.nan
-        print(f"    first_heartrate: vitalPeriodic not available")
 
-    # BMI
     if "admissionweight" in cardiac.columns and "admissionheight" in cardiac.columns:
         wt = cardiac.set_index("patientunitstayid")["admissionweight"].to_dict()
         ht = cardiac.set_index("patientunitstayid")["admissionheight"].to_dict()
@@ -1079,7 +1136,6 @@ def run_eicu():
         )
         treated.loc[~treated.bmi.between(10, 80), "bmi"] = np.nan
 
-    # Mortality
     mort_map_icu = (
         cardiac.set_index("patientunitstayid")["unitdischargestatus"]
         .str.lower()
@@ -1098,14 +1154,14 @@ def run_eicu():
     )
 
     # ── CONTROL ──────────────────────────────────────────────────
-    print(f"\n{'─'*50}\nBuilding control cohort...")
+    print(f"\n{'~'*50}\nBuilding control cohort...")
     cr_ctrl = cr[(cr.patientunitstayid.isin(control_pids)) & (cr.labresultoffset >= 0)]
     c2 = set(
         cr_ctrl.groupby("patientunitstayid").size().pipe(lambda s: s[s >= 2]).index
     )
     control = cardiac[cardiac.patientunitstayid.isin(c2)].copy()
     consort["control_has_2cr"] = len(control)
-    print(f"  Controls with ≥2 postop Cr: {pct(len(c2), len(control_pids))}")
+    print(f"  Controls with >=2 postop Cr: {pct(len(c2), len(control_pids))}")
 
     c1 = (
         cr_ctrl[cr_ctrl.patientunitstayid.isin(c2)]
@@ -1116,9 +1172,8 @@ def run_eicu():
     )
     excl = set(c1[c1.labresult >= BASELINE_CR_MAX].patientunitstayid)
     control = control[~control.patientunitstayid.isin(excl)].copy()
-    print(f"  Excl first Cr ≥ {BASELINE_CR_MAX}: {len(excl)}")
+    print(f"  Excl first Cr >= {BASELINE_CR_MAX}: {len(excl)}")
 
-    # eGFR
     c1_ok = c1[c1.patientunitstayid.isin(set(control.patientunitstayid))]
     control = control.merge(
         c1_ok[["patientunitstayid", "labresult", "labresultoffset"]].rename(
@@ -1134,7 +1189,6 @@ def run_eicu():
         control.first_postop_cr, control.age, control.is_female
     )
 
-    # Comorbidities
     for como, pats in EICU_COMORB.items():
         cp = set()
         if len(pasthx) > 0 and "pasthistorypath" in pasthx.columns:
@@ -1146,7 +1200,6 @@ def run_eicu():
             )
         control[como] = control.patientunitstayid.isin(cp).astype(int)
 
-    # Drugs: first 6h (common anchor for controls)
     cpids = set(control.patientunitstayid)
     for dc, pats in DRUG_CLASSES.items():
         f = set()
@@ -1160,7 +1213,9 @@ def run_eicu():
                 f = set(early[matches_any(early.drugname, pats)].patientunitstayid)
         control[dc] = control.patientunitstayid.isin(f).astype(int)
 
-    # Labs: first 6h
+    # ◆ v3: Chronic drug flags for controls
+    control = extract_chronic_eicu(control, admDrug, cpids)
+
     for col, lab_pats in [
         ("first_mg_value", ["magnesium"]),
         ("first_potassium", ["potassium"]),
@@ -1182,7 +1237,6 @@ def run_eicu():
         )
         control = control.merge(fv, on="patientunitstayid", how="left")
 
-    # Heart rate: first 6h
     if len(vital) > 0 and "heartrate" in vital.columns:
         vt_c = vital[
             vital.patientunitstayid.isin(cpids)
@@ -1202,7 +1256,6 @@ def run_eicu():
     else:
         control["first_heartrate"] = np.nan
 
-    # BMI
     if "admissionweight" in cardiac.columns and "admissionheight" in cardiac.columns:
         control["bmi"] = control.patientunitstayid.apply(
             lambda x: (
@@ -1213,7 +1266,6 @@ def run_eicu():
         )
         control.loc[~control.bmi.between(10, 80), "bmi"] = np.nan
 
-    # Mortality
     control["icu_mortality"] = (
         control.patientunitstayid.map(mort_map_icu).fillna(False).astype(int)
     )
@@ -1221,12 +1273,9 @@ def run_eicu():
         control.patientunitstayid.map(mort_map_hosp).fillna(False).astype(int)
     )
 
-    # ── Secondary outcomes ─────────────────────────────────────────
     treated, control = extract_secondary_eicu(treated, control, diag, pasthx, pids)
-
     consort["control_final"] = len(control)
 
-    # ── All Cr for temporal matching ─────────────────────────────
     all_pids = set(treated.patientunitstayid) | set(control.patientunitstayid)
     cr_exp = cr[
         cr.patientunitstayid.isin(all_pids)
@@ -1239,7 +1288,6 @@ def run_eicu():
         f"\n  Exported {len(cr_exp):,} Cr for {cr_exp.patientunitstayid.nunique()} pts"
     )
 
-    # ── save & report ────────────────────────────────────────────
     build_cohort_common(treated, control, "eicu")
     print_consort(consort, treated, "eICU")
     return consort
@@ -1250,10 +1298,11 @@ def run_eicu():
 # ═══════════════════════════════════════════════════════════════════
 def run_mimic():
     SEP = "=" * 70
-    print(f"\n{SEP}\nMIMIC-IV: DiD Cohort Construction\n  Data: {MIMIC_ROOT}\n{SEP}")
+    print(
+        f"\n{SEP}\nMIMIC-IV: DiD Cohort Construction (v3)\n  Data: {MIMIC_ROOT}\n{SEP}"
+    )
     consort = {}
 
-    # ── load ─────────────────────────────────────────────────────
     patients = pd.read_csv(gz(f"{MIMIC_HOSP}/patients.csv.gz"))
     admissions = pd.read_csv(gz(f"{MIMIC_HOSP}/admissions.csv.gz"))
     icustays = pd.read_csv(gz(f"{MIMIC_ICU}/icustays.csv.gz"))
@@ -1311,7 +1360,6 @@ def run_mimic():
     consort["total_icu"] = len(icustays)
     print(f"\n  Total ICU stays: {len(icustays):,}")
 
-    # ── cardiac surgery identification ───────────────────────────
     px["icd_code"] = px["icd_code"].astype(str).str.strip()
     dx["icd_code"] = dx["icd_code"].astype(str).str.strip()
 
@@ -1328,7 +1376,6 @@ def run_mimic():
             return "valve"
         return "other_cardiac"
 
-    # CVICU patients or those with cardiac surgery ICD codes
     icu = icustays.merge(
         patients[["subject_id", "gender", "anchor_age"]], on="subject_id"
     )
@@ -1339,7 +1386,6 @@ def run_mimic():
     icu["intime"] = pd.to_datetime(icu["intime"])
     icu["outtime"] = pd.to_datetime(icu["outtime"])
 
-    # Cardiac: CVICU or ICD procedure codes
     cardiac_hadms = set()
     for ver, codes in [(9, CABG_ICD9 + VALVE_ICD9), (10, CABG_ICD10 + VALVE_ICD10)]:
         v = px[px.icd_version == ver]
@@ -1359,7 +1405,6 @@ def run_mimic():
     consort["cardiac_adult_first"] = len(cardiac)
     print(f"  Cardiac surgery, adult, 1st stay: {len(cardiac):,}")
 
-    # ── ESKD ─────────────────────────────────────────────────────
     eskd_hadms = set()
     for pat in ESKD_PATTERNS:
         eskd_hadms |= set(
@@ -1368,7 +1413,6 @@ def run_mimic():
                 & dx.icd_code.str.lower().str.contains(pat.replace(" ", ""), na=False)
             ].hadm_id
         )
-    # Also check ICD codes for ESKD
     for ver, codes in [
         (9, ["5856", "V4511", "V560", "V561", "V562"]),
         (10, ["N186", "Z491", "Z492", "Z9911", "Z940"]),
@@ -1381,19 +1425,17 @@ def run_mimic():
     stays = set(cardiac.stay_id)
     hadms = set(cardiac.hadm_id.dropna().astype(int))
     consort["post_eskd"] = len(cardiac)
-    print(f"  ESKD excluded: {len(eskd_stays):,} → remaining: {len(cardiac):,}")
+    print(f"  ESKD excluded: {len(eskd_stays):,} -> remaining: {len(cardiac):,}")
 
-    # ── IV Mg from inputevents ───────────────────────────────────
-    print("\n── IV Magnesium identification ──")
+    print("\n-- IV Magnesium identification --")
     ie_mg = ie[(ie.stay_id.isin(stays)) & (ie.itemid.isin(MG_SUPP_ITEMS_MIMIC))].copy()
-    # Filter out cancelled/rewritten orders
     if "statusdescription" in ie_mg.columns:
         ie_mg = ie_mg[~ie_mg.statusdescription.str.contains("Rewritten", na=False)]
     ie_mg = ie_mg[ie_mg.amount.notna() & (ie_mg.amount > 0)]
     ie_mg["starttime"] = pd.to_datetime(ie_mg["starttime"])
     ie_mg = ie_mg.merge(cardiac[["stay_id", "intime"]], on="stay_id")
     ie_mg["mg_offset_h"] = (ie_mg.starttime - ie_mg.intime).dt.total_seconds() / 3600
-    ie_mg = ie_mg[ie_mg.mg_offset_h >= 0]  # postop only
+    ie_mg = ie_mg[ie_mg.mg_offset_h >= 0]
 
     first_mg = ie_mg.sort_values("mg_offset_h").groupby("stay_id").first().reset_index()
     first_mg["mg_offset_min"] = first_mg.mg_offset_h * 60
@@ -1410,8 +1452,7 @@ def run_mimic():
             f"    Within {c:2d}h: {pct((first_mg.mg_offset_h<=c).sum(), len(first_mg))}"
         )
 
-    # ── Creatinine ───────────────────────────────────────────────
-    print("\n── Creatinine ──")
+    print("\n-- Creatinine --")
     cr_labs = labs[
         labs.itemid.isin(LAB_CR_MIMIC)
         & labs.hadm_id.isin(hadms)
@@ -1425,8 +1466,7 @@ def run_mimic():
         f"  Cr measurements: {len(cr_labs):,} across {cr_labs.stay_id.nunique():,} pts"
     )
 
-    # Cr_pre: latest ICU Cr before IV Mg
-    print("\n── Cr_pre (latest ICU Cr before IV Mg) ──")
+    print("\n-- Cr_pre (latest ICU Cr before IV Mg) --")
     cr_t = cr_labs[cr_labs.stay_id.isin(treated_stays)].merge(
         first_mg[["stay_id", "mg_offset_h", "mg_offset_min"]], on="stay_id"
     )
@@ -1453,10 +1493,9 @@ def run_mimic():
     print(f"  Has ICU Cr before IV Mg: {pct(n_has, len(treated_stays))}")
     print(f"  No ICU Cr before IV Mg:  {pct(n_no, len(treated_stays))}")
     desc(cr_pre.cr_pre, "Cr_pre (mg/dL)")
-    desc(cr_pre.gap_to_ivmg_h, "Gap Cr_pre → IV Mg (h)")
+    desc(cr_pre.gap_to_ivmg_h, "Gap Cr_pre -> IV Mg (h)")
 
-    # Hosp Cr comparison
-    print("\n── ICU Cr_pre vs hospitalization Cr ──")
+    print("\n-- ICU Cr_pre vs hospitalization Cr --")
     adm_times = admissions[["hadm_id", "admittime"]].copy()
     adm_times["admittime"] = pd.to_datetime(adm_times["admittime"])
     cr_t2 = cr_t.merge(adm_times, on="hadm_id", how="left")
@@ -1466,7 +1505,9 @@ def run_mimic():
     cr_h = cr_t2[
         (cr_t2.h_from_admit >= -24) & (cr_t2.h_from_admit <= 24) & (cr_t2.offset_h < 0)
     ]
+    cr_hosp = pd.DataFrame()
     if len(cr_h) > 0:
+        cr_h = cr_h.copy()
         cr_h["dist"] = cr_h.h_from_admit.abs()
         cr_hosp = cr_h.sort_values("dist").groupby("stay_id").first().reset_index()
         both = cr_pre[["stay_id", "cr_pre"]].merge(
@@ -1481,16 +1522,13 @@ def run_mimic():
             print(f"  Both available: {nb}")
             desc(bv.cr_hosp, "Hosp Cr")
             desc(bv.cr_pre, "ICU Cr_pre")
-            desc(d, "Δ (ICU − hosp)")
+            desc(d, "d (ICU - hosp)")
             print(
-                f"    r = {bv.cr_pre.corr(bv.cr_hosp):.3f}, "
-                f"|Δ|>0.3: {pct((d.abs()>0.3).sum(), nb)}"
+                f"    r = {bv.cr_pre.corr(bv.cr_hosp):.3f}, |d|>0.3: {pct((d.abs()>0.3).sum(), nb)}"
             )
     else:
         print(f"  No pre-ICU Cr found for comparison")
-        cr_hosp = pd.DataFrame()
 
-    # ── Hosp Cr fallback ──────────────────────────────────────────
     cr_pre["cr_pre_source"] = "icu"
     no_icu = treated_stays - set(cr_pre.stay_id)
     if len(cr_hosp) > 0:
@@ -1509,34 +1547,28 @@ def run_mimic():
             rescue["cr_pre_source"] = "hosp_fallback"
             shared = [c for c in cr_pre.columns if c in rescue.columns]
             cr_pre = pd.concat([cr_pre[shared], rescue[shared]], ignore_index=True)
-            print(f"  ✚ Hosp Cr fallback: rescued {len(rescue)} patients")
-            print(f"  Total Cr_pre (ICU + fallback): {len(cr_pre)}")
+            print(f"  + Hosp Cr fallback: rescued {len(rescue)} patients")
             n_has = len(cr_pre)
             consort["treated_has_cr_pre_with_fallback"] = n_has
             consort["treated_hosp_fallback"] = len(rescue)
 
-    # Cr_post windows
-    print("\n── Cr_post windows ──")
+    print("\n-- Cr_post windows --")
     cr_post_all = cr_t[cr_t.offset_min > cr_t.mg_offset_min].copy()
     n_implaus = (cr_post_all.valuenum > CR_POST_PLAUSIBLE_MAX).sum()
     if n_implaus > 0:
-        print(
-            f"  Cr_post > {CR_POST_PLAUSIBLE_MAX} (lab error): {n_implaus} measurements excluded"
-        )
+        print(f"  Cr_post > {CR_POST_PLAUSIBLE_MAX} (lab error): {n_implaus} excluded")
     cr_post_all = cr_post_all[cr_post_all.valuenum <= CR_POST_PLAUSIBLE_MAX]
     cr_post_all["post_h"] = (cr_post_all.offset_min - cr_post_all.mg_offset_min) / 60.0
     for wname, (lo, hi) in CR_POST_WINDOWS.items():
         cand = cr_post_all[(cr_post_all.post_h >= lo) & (cr_post_all.post_h <= hi)]
         n = cand.groupby("stay_id").ngroups
-        tag = " ◀ PRIMARY" if wname == "6_24h" else ""
+        tag = " < PRIMARY" if wname == "6_24h" else ""
         print(f"  {wname:>6s}: {pct(n, n_has)}{tag}")
 
-    # Exclusions
     cr_pre_ok = cr_pre[cr_pre.cr_pre < BASELINE_CR_MAX]
     consort["excl_cr_high"] = n_has - len(cr_pre_ok)
-    print(f"\n  Excl Cr_pre ≥ {BASELINE_CR_MAX}: {n_has - len(cr_pre_ok)}")
+    print(f"\n  Excl Cr_pre >= {BASELINE_CR_MAX}: {n_has - len(cr_pre_ok)}")
 
-    # Prevalent AKI
     cr_earliest = (
         cr_pre_cand.sort_values("offset_min")
         .groupby("stay_id")
@@ -1555,7 +1587,7 @@ def run_mimic():
     print(f"  Prevalent AKI: {pct(n_prev, len(prev))}")
 
     # ── TREATED ──────────────────────────────────────────────────
-    print(f"\n{'─'*50}\nBuilding treated cohort...")
+    print(f"\n{'~'*50}\nBuilding treated cohort...")
     keep = set(cr_pre_ok.stay_id) - set(prev[prev.prevalent == 1].stay_id)
     treated = cardiac[cardiac.stay_id.isin(keep)].copy()
     treated = treated.merge(
@@ -1599,24 +1631,21 @@ def run_mimic():
         )
         treated = treated.merge(fp, on="stay_id", how="left")
         treated[f"delta_cr_{wname}"] = treated[f"cr_post_{wname}"] - treated.cr_pre
-
     consort["treated_final"] = len(treated)
 
-    # Comorbidities
     for como, code_map in MIMIC_COMORB_ICD.items():
         treated[como] = treated.hadm_id.isin(
             matches_icd(dx, set(treated.hadm_id.dropna().astype(int)), code_map)
         ).astype(int)
 
-    # Drugs before t0
-    print("  Covariates (pre-t0)...")
+    # Combined drug flags (pre-t0, for sensitivity)
+    print("  Covariates (pre-t0 combined drugs)...")
     presc["starttime"] = pd.to_datetime(presc["starttime"], errors="coerce")
     presc_t = presc[
         presc.hadm_id.isin(set(treated.hadm_id.dropna().astype(int)))
     ].merge(treated[["hadm_id", "stay_id", "intime", "mg_starttime"]], on="hadm_id")
     presc_t["ptime"] = pd.to_datetime(presc_t["starttime"])
     presc_pre = presc_t[presc_t.ptime <= presc_t.mg_starttime]
-
     for dc, pats in DRUG_CLASSES.items():
         f = set(
             presc_pre[
@@ -1627,15 +1656,16 @@ def run_mimic():
         )
         treated[dc] = treated.stay_id.isin(f).astype(int)
 
-    # Labs before t0
+    # ◆ v3: Chronic drug flags (pre-admission + oral route)
+    print("  Chronic drug flags (pre-admission oral prescriptions)...")
+    treated = extract_chronic_mimic(treated, presc, admissions, label="treated")
+
     for col, items in [
         ("first_mg_value", LAB_MG_MIMIC),
         ("first_potassium", LAB_K_MIMIC),
         ("first_calcium", LAB_CA_MIMIC),
         ("first_lactate", LAB_LAC_MIMIC),
     ]:
-        lsub = cr_labs  # reuse merged labs with offset
-        # Need fresh merge for non-Cr labs
         ll = labs[labs.itemid.isin(items) & labs.hadm_id.isin(hadms)].copy()
         ll["charttime"] = pd.to_datetime(ll["charttime"])
         ll = ll.merge(
@@ -1653,7 +1683,6 @@ def run_mimic():
         treated = treated.merge(fv, on="stay_id", how="left")
         print(f"    {col}: {pct(treated[col].notna().sum(), len(treated))}")
 
-    # Heart rate before t0
     if len(ce_hr) > 0:
         ce = ce_hr[ce_hr.stay_id.isin(set(treated.stay_id))].copy()
         ce["charttime"] = pd.to_datetime(ce["charttime"])
@@ -1678,17 +1707,16 @@ def run_mimic():
     else:
         treated["first_heartrate"] = np.nan
 
-    # Mortality
     treated["hosp_mortality"] = treated.hospital_expire_flag.fillna(0).astype(int)
 
     # ── CONTROL ──────────────────────────────────────────────────
-    print(f"\n{'─'*50}\nBuilding control cohort...")
-    LANDMARK_H = 6  # common anchor for controls
+    print(f"\n{'~'*50}\nBuilding control cohort...")
+    LANDMARK_H = 6
     cr_ctrl = cr_labs[cr_labs.stay_id.isin(control_stays) & (cr_labs.offset_h >= 0)]
     c2 = set(cr_ctrl.groupby("stay_id").size().pipe(lambda s: s[s >= 2]).index)
     control = cardiac[cardiac.stay_id.isin(c2)].copy()
     consort["control_has_2cr"] = len(control)
-    print(f"  Controls with ≥2 postop Cr: {pct(len(c2), len(control_stays))}")
+    print(f"  Controls with >=2 postop Cr: {pct(len(c2), len(control_stays))}")
 
     c1 = (
         cr_ctrl[cr_ctrl.stay_id.isin(c2)]
@@ -1699,7 +1727,7 @@ def run_mimic():
     )
     excl = set(c1[c1.valuenum >= BASELINE_CR_MAX].stay_id)
     control = control[~control.stay_id.isin(excl)].copy()
-    print(f"  Excl first Cr ≥ {BASELINE_CR_MAX}: {len(excl)}")
+    print(f"  Excl first Cr >= {BASELINE_CR_MAX}: {len(excl)}")
 
     c1_ok = c1[c1.stay_id.isin(set(control.stay_id))]
     control = control.merge(
@@ -1713,13 +1741,11 @@ def run_mimic():
         control.first_postop_cr, control.age, control.is_female
     )
 
-    # Comorbidities
     for como, code_map in MIMIC_COMORB_ICD.items():
         control[como] = control.hadm_id.isin(
             matches_icd(dx, set(control.hadm_id.dropna().astype(int)), code_map)
         ).astype(int)
 
-    # Drugs: first 6h
     ctrl_hadms = set(control.hadm_id.dropna().astype(int))
     presc_c = presc[presc.hadm_id.isin(ctrl_hadms)].merge(
         control[["hadm_id", "stay_id", "intime"]], on="hadm_id"
@@ -1727,7 +1753,6 @@ def run_mimic():
     presc_c["ptime"] = pd.to_datetime(presc_c["starttime"], errors="coerce")
     presc_c["off_h"] = (presc_c.ptime - presc_c.intime).dt.total_seconds() / 3600
     presc_early = presc_c[(presc_c.off_h >= 0) & (presc_c.off_h <= LANDMARK_H)]
-
     for dc, pats in DRUG_CLASSES.items():
         f = set(
             presc_early[
@@ -1738,7 +1763,9 @@ def run_mimic():
         )
         control[dc] = control.stay_id.isin(f).astype(int)
 
-    # Labs: first 6h
+    # ◆ v3: Chronic drug flags for controls
+    control = extract_chronic_mimic(control, presc, admissions)
+
     for col, items in [
         ("first_mg_value", LAB_MG_MIMIC),
         ("first_potassium", LAB_K_MIMIC),
@@ -1759,7 +1786,6 @@ def run_mimic():
         )
         control = control.merge(fv, on="stay_id", how="left")
 
-    # HR: first 6h
     if len(ce_hr) > 0:
         ce_c = ce_hr[ce_hr.stay_id.isin(set(control.stay_id))].copy()
         ce_c["charttime"] = pd.to_datetime(ce_c["charttime"])
@@ -1784,7 +1810,6 @@ def run_mimic():
     control["hosp_mortality"] = control.hospital_expire_flag.fillna(0).astype(int)
     consort["control_final"] = len(control)
 
-    # BMI — single chartevents pass for weight + height (both cohorts)
     print("\n  BMI extraction (chartevents)...")
     try:
         _bmi_items = {226512, 226730}
@@ -1828,10 +1853,8 @@ def run_mimic():
         treated["bmi"] = np.nan
         control["bmi"] = np.nan
 
-    # ── Secondary outcomes ─────────────────────────────────────────
     treated, control = extract_secondary_mimic(treated, control, dx)
 
-    # All Cr for temporal matching
     all_s = set(treated.stay_id) | set(control.stay_id)
     cr_exp = cr_labs[
         cr_labs.stay_id.isin(all_s)
@@ -1854,8 +1877,9 @@ def run_mimic():
 # ═══════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("=" * 70)
-    print("00_did_etl.py — DiD Cohort Construction (v2: +MIMIC, +HR fix)")
+    print("00_did_etl.py — DiD Cohort Construction (v3: chronic drug revision)")
     print("  Windows: 6-24h (primary), 6-48h, 0-24h")
+    print("  Chronic drugs: ppi, loop, acei/arb, nsaid (from home med records)")
     print("=" * 70)
 
     args = [a.lower() for a in sys.argv[1:]]
@@ -1881,7 +1905,8 @@ if __name__ == "__main__":
     print(f"\n{'='*70}")
     print("NEXT STEPS")
     print("=" * 70)
-    print("  1. Review CONSORT numbers — check attrition")
-    print("  2. Run 21_did_matching.R (1:4 PSM + temporal alignment)")
-    print("  3. Run 22_did_analysis.R (DiD estimation)")
+    print("  1. Review CONSORT numbers + chronic drug prevalence")
+    print("  2. Rscript 01_did_analysis.R eicu   (uses did_covars.R)")
+    print("  3. Rscript 01_did_analysis.R mimic")
+    print("  4. Rscript fig_love_plot.R eicu mimic  (verify balance)")
     print("=" * 70)
