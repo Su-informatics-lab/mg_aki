@@ -58,6 +58,51 @@ CR_POST_WINDOWS = {
     "0_24h": (0, 24),  # sensitivity: no floor
 }
 
+# ── Secondary outcome patterns ──────────────────────────────────────
+# POAF (new-onset atrial fibrillation/flutter)
+AF_PATTERNS_EICU = [
+    "atrial fibrillation",
+    "atrial flutter",
+    "a-fib",
+    "afib",
+    "a fib",
+    "new onset af",
+]
+AF_PRIOR_PATTERNS_EICU = [
+    "atrial fibrillation",
+    "atrial flutter",
+    "a-fib",
+    "afib",
+    "chronic af",
+]
+AF_ICD9 = ["42731", "42732"]
+AF_ICD10 = ["I480", "I481", "I482", "I4891", "I4811", "I4819", "I4821", "I4891"]
+AF_ICD10_PREFIX = "I48"
+
+# Encephalopathy / delirium
+ENCEPH_PATTERNS_EICU = [
+    "encephalopathy",
+    "delirium",
+    "altered mental",
+    "acute confusional",
+    "metabolic encephalopathy",
+]
+ENCEPH_ICD9 = ["3481", "3489", "2930", "2931"]
+ENCEPH_ICD10_PREFIX = ["G93", "F05"]
+
+# Ventricular arrhythmia (VT/VF/cardiac arrest)
+VARR_PATTERNS_EICU = [
+    "ventricular tachycardia",
+    "ventricular fibrillation",
+    "v-tach",
+    "v-fib",
+    "vtach",
+    "vfib",
+    "cardiac arrest",
+]
+VARR_ICD9 = ["4271", "42741", "42742"]
+VARR_ICD10 = ["I472", "I490"]
+
 # eICU: cardiac surgery identification
 CARDIAC_DX_PATTERNS = [
     "cabg",
@@ -402,6 +447,206 @@ def print_consort(consort, treated, db_tag):
         ]:
             n = treated.first_mg_value.between(lo, hi, inclusive="left").sum()
             print(f"    {lbl:<10s}: {pct(n, n_trt)}")
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  SECONDARY OUTCOME EXTRACTION
+# ═══════════════════════════════════════════════════════════════════
+def extract_secondary_eicu(treated, control, diag, pasthx, pids):
+    """Add POAF, encephalopathy, ventricular arrhythmia columns (eICU).
+
+    eICU advantage: diagnosisOffset gives per-stay timing.
+    For treated: flag both 'any during stay' and 'post-IV-Mg onset'.
+    For controls: 'any during stay' only (no IV Mg time to anchor).
+    Excludes pre-existing AF for POAF.
+    """
+    print("\n── Secondary outcomes (eICU) ──")
+    all_pids = set(treated.patientunitstayid) | set(control.patientunitstayid)
+
+    # ── Prior AF (exclude from POAF) ──
+    prior_af = set()
+    if len(pasthx) > 0 and "pasthistorypath" in pasthx.columns:
+        prior_af = set(
+            pasthx[
+                pasthx.patientunitstayid.isin(all_pids)
+                & matches_any(pasthx.pasthistorypath, AF_PRIOR_PATTERNS_EICU)
+            ].patientunitstayid
+        )
+    print(f"  Prior AF (excluded from POAF): {len(prior_af)}")
+
+    # ── POAF: new-onset AF during stay, post-ICU ──
+    af_dx = diag[
+        diag.patientunitstayid.isin(all_pids)
+        & matches_any(diag.diagnosisstring, AF_PATTERNS_EICU)
+        & (diag.diagnosisoffset > 0)
+    ]
+    af_any = set(af_dx.patientunitstayid) - prior_af
+
+    # Post-IV-Mg onset: AF diagnosed AFTER first IV Mg
+    mg_map = dict(zip(treated.patientunitstayid, treated.mg_offset_min))
+    af_post_mg = set()
+    for pid in treated.patientunitstayid:
+        if pid not in af_any:
+            continue
+        mg_off = mg_map.get(pid, 0)
+        sub = af_dx[(af_dx.patientunitstayid == pid) & (af_dx.diagnosisoffset > mg_off)]
+        if len(sub) > 0:
+            af_post_mg.add(pid)
+
+    treated["poaf"] = treated.patientunitstayid.isin(af_any).astype(int)
+    treated["poaf_post_mg"] = treated.patientunitstayid.isin(af_post_mg).astype(int)
+    treated["prior_af"] = treated.patientunitstayid.isin(prior_af).astype(int)
+    control["poaf"] = control.patientunitstayid.isin(af_any).astype(int)
+    control["prior_af"] = control.patientunitstayid.isin(prior_af).astype(int)
+    print(
+        f"  POAF (new-onset): treated {treated.poaf.sum()}, control {control.poaf.sum()}"
+    )
+    print(f"  POAF post-IV-Mg:  {treated.poaf_post_mg.sum()}")
+
+    # ── Encephalopathy / delirium ──
+    enc_dx = diag[
+        diag.patientunitstayid.isin(all_pids)
+        & matches_any(diag.diagnosisstring, ENCEPH_PATTERNS_EICU)
+        & (diag.diagnosisoffset > 0)
+    ]
+    enc_pids = set(enc_dx.patientunitstayid)
+    treated["encephalopathy"] = treated.patientunitstayid.isin(enc_pids).astype(int)
+    control["encephalopathy"] = control.patientunitstayid.isin(enc_pids).astype(int)
+    print(
+        f"  Encephalopathy:   treated {treated.encephalopathy.sum()}, "
+        f"control {control.encephalopathy.sum()}"
+    )
+
+    # ── Ventricular arrhythmia ──
+    varr_dx = diag[
+        diag.patientunitstayid.isin(all_pids)
+        & matches_any(diag.diagnosisstring, VARR_PATTERNS_EICU)
+        & (diag.diagnosisoffset > 0)
+    ]
+    varr_pids = set(varr_dx.patientunitstayid)
+    treated["vent_arrhythmia"] = treated.patientunitstayid.isin(varr_pids).astype(int)
+    control["vent_arrhythmia"] = control.patientunitstayid.isin(varr_pids).astype(int)
+    print(
+        f"  Vent arrhythmia:  treated {treated.vent_arrhythmia.sum()}, "
+        f"control {control.vent_arrhythmia.sum()}"
+    )
+
+    return treated, control
+
+
+def extract_secondary_mimic(treated, control, dx):
+    """Add POAF, encephalopathy, ventricular arrhythmia columns (MIMIC).
+
+    MIMIC limitation: diagnoses_icd is hospital-level (no onset timing).
+    Excludes pre-existing AF via prior admission ICD codes.
+    """
+    print("\n── Secondary outcomes (MIMIC) ──")
+
+    trt_hadms = set(treated.hadm_id)
+    ctl_hadms = set(control.hadm_id)
+    all_hadms = trt_hadms | ctl_hadms
+    all_sids = set(treated.subject_id) | set(control.subject_id)
+
+    dx["icd_code"] = dx["icd_code"].astype(str).str.strip()
+    dx["icd_version"] = dx["icd_version"].astype(int)
+
+    # Helper: check ICD codes for a set of hadm_ids
+    def has_icd(hadm_set, icd9_codes, icd10_prefixes):
+        hits = set()
+        for code in icd9_codes:
+            hits |= set(
+                dx[
+                    (dx.hadm_id.isin(hadm_set))
+                    & (dx.icd_version == 9)
+                    & (dx.icd_code.str.startswith(code))
+                ].hadm_id
+            )
+        for prefix in icd10_prefixes:
+            hits |= set(
+                dx[
+                    (dx.hadm_id.isin(hadm_set))
+                    & (dx.icd_version == 10)
+                    & (dx.icd_code.str.startswith(prefix))
+                ].hadm_id
+            )
+        return hits
+
+    # ── Prior AF: check ALL admissions for each subject, not just current ──
+    # Get all hadm_ids for these subjects (including prior admissions)
+    all_subject_dx = dx[dx.subject_id.isin(all_sids)]
+    af_all_hadms = set()
+    for code in AF_ICD9:
+        af_all_hadms |= set(
+            all_subject_dx[
+                (all_subject_dx.icd_version == 9)
+                & (all_subject_dx.icd_code.str.startswith(code))
+            ].hadm_id
+        )
+    af_all_hadms |= set(
+        all_subject_dx[
+            (all_subject_dx.icd_version == 10)
+            & (all_subject_dx.icd_code.str.startswith(AF_ICD10_PREFIX))
+        ].hadm_id
+    )
+
+    # Map hadm_id to subject_id
+    hadm_to_sid = dict(
+        zip(
+            pd.concat(
+                [treated[["hadm_id", "subject_id"]], control[["hadm_id", "subject_id"]]]
+            ).hadm_id,
+            pd.concat(
+                [treated[["hadm_id", "subject_id"]], control[["hadm_id", "subject_id"]]]
+            ).subject_id,
+        )
+    )
+
+    # Subjects with AF in ANY prior admission (not current surgery admission)
+    prior_af_sids = set()
+    for sid in all_sids:
+        sid_hadms = set(all_subject_dx[all_subject_dx.subject_id == sid].hadm_id)
+        current_hadm = set()
+        for h, s in hadm_to_sid.items():
+            if s == sid:
+                current_hadm.add(h)
+        prior_hadms = sid_hadms - current_hadm
+        if prior_hadms & af_all_hadms:
+            prior_af_sids.add(sid)
+
+    # Current admission AF (new-onset POAF)
+    af_current = has_icd(all_hadms, AF_ICD9, [AF_ICD10_PREFIX])
+    poaf_hadms = af_current - set(
+        h for h, s in hadm_to_sid.items() if s in prior_af_sids
+    )
+
+    treated["poaf"] = treated.hadm_id.isin(poaf_hadms).astype(int)
+    treated["prior_af"] = treated.subject_id.isin(prior_af_sids).astype(int)
+    control["poaf"] = control.hadm_id.isin(poaf_hadms).astype(int)
+    control["prior_af"] = control.subject_id.isin(prior_af_sids).astype(int)
+    print(f"  Prior AF: {len(prior_af_sids)} subjects")
+    print(
+        f"  POAF (new-onset): treated {treated.poaf.sum()}, control {control.poaf.sum()}"
+    )
+
+    # ── Encephalopathy ──
+    enc_hadms = has_icd(all_hadms, ENCEPH_ICD9, ENCEPH_ICD10_PREFIX)
+    treated["encephalopathy"] = treated.hadm_id.isin(enc_hadms).astype(int)
+    control["encephalopathy"] = control.hadm_id.isin(enc_hadms).astype(int)
+    print(
+        f"  Encephalopathy:   treated {treated.encephalopathy.sum()}, "
+        f"control {control.encephalopathy.sum()}"
+    )
+
+    # ── Ventricular arrhythmia ──
+    varr_hadms = has_icd(all_hadms, VARR_ICD9, VARR_ICD10)
+    treated["vent_arrhythmia"] = treated.hadm_id.isin(varr_hadms).astype(int)
+    control["vent_arrhythmia"] = control.hadm_id.isin(varr_hadms).astype(int)
+    print(
+        f"  Vent arrhythmia:  treated {treated.vent_arrhythmia.sum()}, "
+        f"control {control.vent_arrhythmia.sum()}"
+    )
+
+    return treated, control
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -953,6 +1198,9 @@ def run_eicu():
     control["hosp_mortality"] = (
         control.patientunitstayid.map(mort_map_hosp).fillna(False).astype(int)
     )
+
+    # ── Secondary outcomes ─────────────────────────────────────────
+    treated, control = extract_secondary_eicu(treated, control, diag, pasthx, pids)
 
     consort["control_final"] = len(control)
 
@@ -1530,6 +1778,9 @@ def run_mimic():
         print(f"    BMI failed: {e}")
         treated["bmi"] = np.nan
         control["bmi"] = np.nan
+
+    # ── Secondary outcomes ─────────────────────────────────────────
+    treated, control = extract_secondary_mimic(treated, control, dx)
 
     # All Cr for temporal matching
     all_s = set(treated.stay_id) | set(control.stay_id)
