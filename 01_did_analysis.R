@@ -63,7 +63,7 @@ did_robust <- function(df, ps_vars, pair_col="match_pair_id") {
   smds <- compute_smds(df, ps_vars)
   adj <- names(smds[!is.na(smds) & smds > 0.05])
   adj <- intersect(adj, names(df))
-  adj <- adj[sapply(adj, function(v) var(df[[v]],na.rm=T)>1e-10)]
+  adj <- adj[vapply(adj, function(v) var(df[[v]],na.rm=T)>1e-10, logical(1))]
 
   get_vcov <- function(fit) {
     if (pair_col %in% names(df) && length(unique(df[[pair_col]]))>1)
@@ -105,7 +105,7 @@ binary_outcome <- function(df, outcome_col, ps_vars, pair_col="match_pair_id") {
   smds <- compute_smds(df, ps_vars)
   adj <- names(smds[!is.na(smds) & smds > 0.05])
   adj <- intersect(adj, names(df))
-  adj <- adj[sapply(adj, function(v) var(df[[v]],na.rm=T)>1e-10)]
+  adj <- adj[vapply(adj, function(v) var(df[[v]],na.rm=T)>1e-10, logical(1))]
 
   if (length(adj)>0) {
     fml <- as.formula(paste("y ~ treated +", paste(adj,collapse="+")))
@@ -451,7 +451,7 @@ run_analysis <- function(db) {
   }
 
   avail_adj <- intersect(ps_vars[ps_vars!="first_mg_value"], names(pm))
-  avail_adj <- avail_adj[sapply(avail_adj, function(v) var(pm[[v]],na.rm=T)>1e-10)]
+  avail_adj <- avail_adj[vapply(avail_adj, function(v) var(pm[[v]],na.rm=T)>1e-10, logical(1))]
   int_fml <- as.formula(paste("delta_cr ~ treated * first_mg_value +",
                                paste(avail_adj,collapse="+")))
   int_fit <- tryCatch(lm(int_fml, data=pm), error=function(e) NULL)
