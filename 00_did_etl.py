@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-20_did_etl.py — DiD cohort construction for Mg → AKI study (v2)
+00_did_etl.py — DiD cohort construction for Mg → AKI study (v2)
 
   Design:
     - Time zero = first postop IV Mg administration (patient-specific)
@@ -10,14 +10,14 @@
     - Controls = patients who never received postop IV Mg
 
   Outputs per database:
-    20_did_treated_{db}.csv   — treated arm
-    20_did_control_{db}.csv   — control arm
-    20_did_cr_all_{db}.csv    — all Cr for temporal matching
-    20_did_consort.csv        — CONSORT numbers
+    did_treated_{db}.csv   — treated arm
+    did_control_{db}.csv   — control arm
+    did_cr_all_{db}.csv    — all Cr for temporal matching
+    did_consort.csv        — CONSORT numbers
 
-  Run:  python 20_did_etl.py          # both
-        python 20_did_etl.py eicu     # eICU only
-        python 20_did_etl.py mimic    # MIMIC only
+  Run:  python 00_did_etl.py          # both
+        python 00_did_etl.py eicu     # eICU only
+        python 00_did_etl.py mimic    # MIMIC only
 """
 
 import os
@@ -383,13 +383,13 @@ def build_cohort_common(treated, control, db_tag):
         treated.loc[treated.cr_post_6_24h.isna(), "aki_kdigo1_ref"] = np.nan
 
     tag = db_tag.lower()
-    treated.to_csv(os.path.join(RESULTS, f"20_did_treated_{tag}.csv"), index=False)
-    control.to_csv(os.path.join(RESULTS, f"20_did_control_{tag}.csv"), index=False)
+    treated.to_csv(os.path.join(RESULTS, f"did_treated_{tag}.csv"), index=False)
+    control.to_csv(os.path.join(RESULTS, f"did_control_{tag}.csv"), index=False)
     print(
-        f"\n  Saved: 20_did_treated_{tag}.csv ({len(treated)} pts, {treated.shape[1]} cols)"
+        f"\n  Saved: did_treated_{tag}.csv ({len(treated)} pts, {treated.shape[1]} cols)"
     )
     print(
-        f"  Saved: 20_did_control_{tag}.csv ({len(control)} pts, {control.shape[1]} cols)"
+        f"  Saved: did_control_{tag}.csv ({len(control)} pts, {control.shape[1]} cols)"
     )
 
 
@@ -1212,7 +1212,7 @@ def run_eicu():
         & (cr.labresult <= CR_POST_PLAUSIBLE_MAX)
     ][["patientunitstayid", "labresult", "labresultoffset"]].copy()
     cr_exp["cr_offset_h"] = cr_exp.labresultoffset / 60.0
-    cr_exp.to_csv(os.path.join(RESULTS, "20_did_cr_all_eicu.csv"), index=False)
+    cr_exp.to_csv(os.path.join(RESULTS, "did_cr_all_eicu.csv"), index=False)
     print(
         f"\n  Exported {len(cr_exp):,} Cr for {cr_exp.patientunitstayid.nunique()} pts"
     )
@@ -1792,7 +1792,7 @@ def run_mimic():
     cr_exp = cr_exp.rename(
         columns={"valuenum": "labresult", "offset_min": "labresultoffset"}
     )
-    cr_exp.to_csv(os.path.join(RESULTS, "20_did_cr_all_mimic.csv"), index=False)
+    cr_exp.to_csv(os.path.join(RESULTS, "did_cr_all_mimic.csv"), index=False)
     print(f"\n  Exported {len(cr_exp):,} Cr for {cr_exp.stay_id.nunique()} pts")
 
     build_cohort_common(treated, control, "mimic")
@@ -1805,7 +1805,7 @@ def run_mimic():
 # ═══════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("=" * 70)
-    print("20_did_etl.py — DiD Cohort Construction (v2: +MIMIC, +HR fix)")
+    print("00_did_etl.py — DiD Cohort Construction (v2: +MIMIC, +HR fix)")
     print("  Windows: 6-24h (primary), 6-48h, 0-24h")
     print("=" * 70)
 
@@ -1826,10 +1826,8 @@ if __name__ == "__main__":
             rows.append(c)
 
     if rows:
-        pd.DataFrame(rows).to_csv(
-            os.path.join(RESULTS, "20_did_consort.csv"), index=False
-        )
-        print(f"\n  Saved: 20_did_consort.csv")
+        pd.DataFrame(rows).to_csv(os.path.join(RESULTS, "did_consort.csv"), index=False)
+        print(f"\n  Saved: did_consort.csv")
 
     print(f"\n{'='*70}")
     print("NEXT STEPS")
