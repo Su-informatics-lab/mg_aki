@@ -28,7 +28,8 @@ PRIMARY_TARGET <- 24
 PRIMARY_TOL    <- 6
 
 # ◆ v4: Alignment mode — "closest" (default) or "tolerance" (old)
-ALIGN_MODE <- "closest"
+# ALIGN_MODE <- "closest"
+ALIGN_MODE <- "tolerance"
 
 PS_COVARS <- PS_COVARS_PRIMARY
 
