@@ -1,18 +1,13 @@
 #!/usr/bin/env Rscript
 # ============================================================================
-# 01_did_analysis.R — Complete DiD analysis for Mg -> AKI study (v3)
+# 01_did_analysis.R v4 — DiD analysis with closest-Cr alignment
 #
-# v3: PS covariates loaded from did_covars.R (chronic drug revision)
-#     Primary model: 24 covariates (chronic home-med flags replace ICU drugs)
-#     Sensitivity models available via PS_COVARS_SENS_A/B/ORIGINAL
-#
-# Sections:
-#   A. PS matching (r=1, caliper=0.2, replace=TRUE)
-#   B. Time course: 6-36h post-IV-Mg (every 3h), +/-2/4/6h tolerance
-#   C. Primary DiD (24h +/-6h, doubly robust)
-#   D. Subgroups: Mg strata, surgery type
-#   E. Secondary binary outcomes (mortality, POAF, encephalopathy, arrhythmia)
-#   F. Summary
+# v4 changes:
+#   - PS model: 22 covariates (dropped steroids + K+)
+#   - Temporal alignment: closest available Cr (no +/-window cutoff)
+#     -> Every matched pair with >=2 Cr contributes -> much better power
+#   - Reports temporal distance (median, IQR) as quality metric
+#   - Old tolerance-based approach available via ALIGN_MODE="tolerance"
 #
 # Run:  Rscript 01_did_analysis.R eicu
 #       Rscript 01_did_analysis.R mimic
@@ -24,21 +19,17 @@ suppressPackageStartupMessages({
   library(lmtest)
 })
 
-# ◆ v3: Load shared covariate config
 source(file.path(path.expand("~/mg_aki"), "did_covars.R"))
 
 RESULTS   <- path.expand("~/mg_aki/results")
 CALIPER   <- 0.2
 TARGETS   <- seq(6, 36, by = 3)
-TOLERANCES <- c(2, 4, 6)
 PRIMARY_TARGET <- 24
 PRIMARY_TOL    <- 6
 
-# ◆ v3: Primary model (24 covariates, chronic drug revision per Dr. Yan)
-# To run sensitivity, change this one line:
-#   PS_COVARS <- PS_COVARS_SENS_A    # +combined ACEi/NSAIDs (26)
-#   PS_COVARS <- PS_COVARS_SENS_B    # +lactate (26)
-#   PS_COVARS <- PS_COVARS_ORIGINAL  # original 28
+# ◆ v4: Alignment mode — "closest" (default) or "tolerance" (old)
+ALIGN_MODE <- "closest"
+
 PS_COVARS <- PS_COVARS_PRIMARY
 
 MG_BINS <- list("<1.8"=c(0,1.8), "1.8-2.0"=c(1.8,2.0),
@@ -108,10 +99,8 @@ binary_outcome <- function(df, outcome_col, ps_vars, pair_col="match_pair_id") {
   rate1 <- mean(df$y[df$treated==1]); rate0 <- mean(df$y[df$treated==0])
   if (rate1==0 && rate0==0) return(NULL)
 
-  fit0 <- tryCatch(glm(y ~ treated, data=df, family=quasibinomial()),
-                   error=function(e) NULL)
-  if (is.null(fit0)) return(NULL)
-  if (!"treated" %in% names(coef(fit0))) return(NULL)
+  fit0 <- tryCatch(glm(y ~ treated, data=df, family=quasibinomial()), error=function(e) NULL)
+  if (is.null(fit0) || !"treated" %in% names(coef(fit0))) return(NULL)
 
   smds <- compute_smds(df, ps_vars)
   adj <- names(smds[!is.na(smds) & smds > 0.05])
@@ -122,36 +111,68 @@ binary_outcome <- function(df, outcome_col, ps_vars, pair_col="match_pair_id") {
     fml <- as.formula(paste("y ~ treated +", paste(adj,collapse="+")))
     fit <- tryCatch(glm(fml, data=df, family=quasibinomial()), error=function(e) NULL)
     if (is.null(fit) || !"treated" %in% names(coef(fit))) fit <- fit0
-  } else {
-    fit <- fit0
-  }
+  } else fit <- fit0
 
   vc <- tryCatch({
     if (pair_col %in% names(df) && length(unique(df[[pair_col]]))>1)
       vcovCL(fit, cluster=df[[pair_col]])
     else vcovHC(fit, type="HC1")
-  }, error=function(e) {
-    tryCatch(vcovHC(fit, type="HC1"), error=function(e2) vcov(fit))
-  })
+  }, error=function(e) tryCatch(vcovHC(fit, type="HC1"), error=function(e2) vcov(fit)))
 
   ct <- tryCatch(coeftest(fit, vcov.=vc), error=function(e) NULL)
   if (is.null(ct)) return(NULL)
-
   trt_row <- which(rownames(ct) == "treated")
-  if (length(trt_row) == 0) return(NULL)
+  if (length(trt_row)==0) return(NULL)
   p_col <- grep("^Pr", colnames(ct))
-  if (length(p_col) == 0) return(NULL)
+  if (length(p_col)==0) return(NULL)
 
   or <- exp(ct[trt_row, "Estimate"])
   list(outcome=outcome_col, n_trt=nt, n_ctl=nc,
-       rate_trt=round(rate1,4), rate_ctl=round(rate0,4),
-       or=round(or,3),
+       rate_trt=round(rate1,4), rate_ctl=round(rate0,4), or=round(or,3),
        or_lo=round(exp(ct[trt_row,"Estimate"]-1.96*ct[trt_row,"Std. Error"]),3),
        or_hi=round(exp(ct[trt_row,"Estimate"]+1.96*ct[trt_row,"Std. Error"]),3),
        p=round(ct[trt_row, p_col],4))
 }
 
-temporal_align <- function(trt_valid, pairs_df, cr_list, tol_min) {
+# ◆ v4: Closest-Cr temporal alignment (no tolerance cutoff)
+# For each matched pair: find control's Cr closest to treated's measurement times.
+# Every pair with >=2 control Cr contributes. Reports temporal distance.
+temporal_align_closest <- function(trt_valid, pairs_df, cr_list) {
+  n_valid <- 0; ctl_rows <- list(); t_dists <- c()
+  for (r in seq_len(nrow(pairs_df))) {
+    tpid <- pairs_df$trt_pid[r]; cpid <- pairs_df$ctl_pid[r]
+    tidx <- which(trt_valid$pid==tpid)[1]
+    if (is.na(tidx)) next
+    t_pre <- trt_valid$cr_pre_offset_min[tidx]
+    t_post <- trt_valid$cr_post_offset_min[tidx]
+    cc <- cr_list[[as.character(cpid)]]
+    if (is.null(cc) || nrow(cc)<2) next
+
+    # Closest Cr to treated's pre time
+    pd <- abs(cc$labresultoffset - t_pre); pi <- which.min(pd)
+    # Closest Cr AFTER that pre measurement to treated's post time
+    pc <- cc[cc$labresultoffset > cc$labresultoffset[pi], ]
+    if (nrow(pc)==0) next
+    pod <- abs(pc$labresultoffset - t_post); poi <- which.min(pod)
+
+    n_valid <- n_valid + 1
+    t_dists <- c(t_dists, pd[pi]/60, pod[poi]/60)  # hours
+
+    ctl_rows[[n_valid]] <- data.frame(
+      pid=cpid, cr_pre=cc$labresult[pi],
+      cr_pre_offset_min=cc$labresultoffset[pi],
+      cr_post=pc$labresult[poi],
+      cr_post_offset_min=pc$labresultoffset[poi],
+      delta_cr=pc$labresult[poi] - cc$labresult[pi],
+      treated=0, match_pair_id=tidx, stringsAsFactors=F)
+  }
+  if (n_valid==0) return(list(data=NULL, tdist=NULL))
+  list(data=do.call(rbind, ctl_rows),
+       tdist=t_dists)
+}
+
+# Legacy: tolerance-based alignment (for sensitivity)
+temporal_align_tol <- function(trt_valid, pairs_df, cr_list, tol_min) {
   n_valid <- 0; ctl_rows <- list()
   for (r in seq_len(nrow(pairs_df))) {
     tpid <- pairs_df$trt_pid[r]; cpid <- pairs_df$ctl_pid[r]
@@ -196,10 +217,9 @@ build_matched <- function(trt_valid, ctl_matched, covar_lu, ps_vars) {
 run_analysis <- function(db) {
   tag <- tolower(db)
   SEP <- paste(rep("=",70),collapse="")
-  cat(sprintf("\n%s\n%s: Complete DiD Analysis (v3: %d PS covariates)\n%s\n",
-              SEP, db, length(PS_COVARS), SEP))
+  cat(sprintf("\n%s\n%s: DiD Analysis v4 (%d PS covariates, %s alignment)\n%s\n",
+              SEP, db, length(PS_COVARS), ALIGN_MODE, SEP))
 
-  # ── A. Load + PS match ───────────────────────────────────────────────────
   trt <- read.csv(file.path(RESULTS,sprintf("did_treated_%s.csv",tag)),stringsAsFactors=F)
   ctl <- read.csv(file.path(RESULTS,sprintf("did_control_%s.csv",tag)),stringsAsFactors=F)
   cr_all <- read.csv(file.path(RESULTS,sprintf("did_cr_all_%s.csv",tag)),stringsAsFactors=F)
@@ -211,20 +231,18 @@ run_analysis <- function(db) {
   if(!"labresultoffset" %in% names(cr_all)) cr_all$labresultoffset <- cr_all$offset_min
 
   ps_vars <- intersect(PS_COVARS, intersect(names(trt),names(ctl)))
-  cat(sprintf("  PS covariates: %d requested, %d available in data\n",
-              length(PS_COVARS), length(ps_vars)))
-  missing_vars <- setdiff(PS_COVARS, names(trt))
-  if (length(missing_vars) > 0)
-    cat(sprintf("  WARNING: missing in data: %s\n", paste(missing_vars, collapse=", ")))
+  cat(sprintf("  PS covariates: %d requested, %d available\n", length(PS_COVARS), length(ps_vars)))
+  missing_v <- setdiff(PS_COVARS, names(trt))
+  if (length(missing_v)>0) cat(sprintf("  WARNING missing: %s\n", paste(missing_v,collapse=", ")))
 
   stack_cols <- intersect(unique(c("pid","treated",ps_vars)), intersect(names(trt),names(ctl)))
   combined <- rbind(trt[,stack_cols], ctl[,stack_cols])
   rownames(combined) <- seq_len(nrow(combined))
   combined <- median_impute(combined, ps_vars)
-
   cat(sprintf("  Loaded: %d treated + %d control\n",
               sum(combined$treated==1), sum(combined$treated==0)))
 
+  # ── A. PS matching ──────────────────────────────────────────────────────
   cat("  PS matching (r=1, caliper=0.2, replace=T)...\n")
   ps_fml <- as.formula(paste("treated ~", paste(ps_vars,collapse="+")))
   m <- suppressWarnings(matchit(ps_fml, data=combined, method="nearest",
@@ -235,13 +253,10 @@ run_analysis <- function(db) {
   cat(sprintf("  Raw max SMD: %.3f | Matched max SMD: %.3f | n>0.1: %d/%d\n",
               max(smds_raw,na.rm=T), max(smds_matched,na.rm=T),
               sum(smds_matched>0.1,na.rm=T), length(ps_vars)))
-
-  # Print worst offenders
   worst <- sort(smds_matched[smds_matched > 0.1], decreasing=TRUE)
-  if (length(worst) > 0) {
+  if (length(worst)>0) {
     cat("  Covariates with matched SMD > 0.1:\n")
-    for (nm in names(worst))
-      cat(sprintf("    %-25s %.3f\n", nm, worst[nm]))
+    for (nm in names(worst)) cat(sprintf("    %-25s %.3f\n", nm, worst[nm]))
   }
 
   mm <- m$match.matrix; trt_idx <- as.integer(rownames(mm))
@@ -271,8 +286,8 @@ run_analysis <- function(db) {
   covar_lu <- covar_lu[!duplicated(covar_lu$pid),]
 
   # ── B. Time course ──────────────────────────────────────────────────────
-  cat(sprintf("\n%s\nB. TIME COURSE (6-36h post-IV-Mg, +/-2/4/6h)\n%s\n",
-              paste(rep("-",60),collapse=""), paste(rep("-",60),collapse="")))
+  cat(sprintf("\n%s\nB. TIME COURSE (6-36h, %s alignment)\n%s\n",
+              paste(rep("-",60),collapse=""), ALIGN_MODE, paste(rep("-",60),collapse="")))
 
   tc_results <- list(); tidx <- 0
 
@@ -290,25 +305,50 @@ run_analysis <- function(db) {
     tv$treated <- 1
     pv <- pairs_df[pairs_df$trt_pid %in% tv$pid,]
 
-    for (tol_h in TOLERANCES) {
-      ctl_m <- temporal_align(tv, pv, cr_list, tol_h*60)
+    if (ALIGN_MODE == "closest") {
+      aln <- temporal_align_closest(tv, pv, cr_list)
+      ctl_m <- aln$data; tdist <- aln$tdist
       if (is.null(ctl_m) || nrow(ctl_m)<10) {
         tidx <- tidx+1
-        tc_results[[tidx]] <- data.frame(target_h=target_h, tol_h=tol_h,
-          n_trt=0, n_ctl=0, did_adj=NA, se_adj=NA, p_adj=NA,
-          ci_lo=NA, ci_hi=NA, stringsAsFactors=F)
+        tc_results[[tidx]] <- data.frame(target_h=target_h, n_trt=0, n_ctl=0,
+          did_adj=NA, se_adj=NA, p_adj=NA, ci_lo=NA, ci_hi=NA,
+          tdist_median_h=NA, stringsAsFactors=F)
         next
       }
       mdf <- build_matched(tv, ctl_m, covar_lu, ps_vars)
       res <- did_robust(mdf, ps_vars)
       tidx <- tidx+1
       if (!is.null(res)) {
-        tc_results[[tidx]] <- data.frame(target_h=target_h, tol_h=tol_h,
+        tc_results[[tidx]] <- data.frame(target_h=target_h,
           n_trt=res$n_trt, n_ctl=res$n_ctl,
           did_adj=round(res$did_adj,4), se_adj=round(res$se_adj,4),
           p_adj=round(res$p_adj,4),
           ci_lo=round(res$ci_lo,4), ci_hi=round(res$ci_hi,4),
+          tdist_median_h=round(median(tdist,na.rm=T),1),
           stringsAsFactors=F)
+      }
+    } else {
+      # Legacy tolerance mode
+      for (tol_h in c(2, 4, 6)) {
+        ctl_m <- temporal_align_tol(tv, pv, cr_list, tol_h*60)
+        if (is.null(ctl_m) || nrow(ctl_m)<10) {
+          tidx <- tidx+1
+          tc_results[[tidx]] <- data.frame(target_h=target_h, tol_h=tol_h,
+            n_trt=0, n_ctl=0, did_adj=NA, se_adj=NA, p_adj=NA,
+            ci_lo=NA, ci_hi=NA, stringsAsFactors=F)
+          next
+        }
+        mdf <- build_matched(tv, ctl_m, covar_lu, ps_vars)
+        res <- did_robust(mdf, ps_vars)
+        tidx <- tidx+1
+        if (!is.null(res)) {
+          tc_results[[tidx]] <- data.frame(target_h=target_h, tol_h=tol_h,
+            n_trt=res$n_trt, n_ctl=res$n_ctl,
+            did_adj=round(res$did_adj,4), se_adj=round(res$se_adj,4),
+            p_adj=round(res$p_adj,4),
+            ci_lo=round(res$ci_lo,4), ci_hi=round(res$ci_hi,4),
+            stringsAsFactors=F)
+        }
       }
     }
   }
@@ -316,22 +356,36 @@ run_analysis <- function(db) {
   tc <- do.call(rbind, tc_results)
   write.csv(tc, file.path(RESULTS,sprintf("did_timecourse_%s.csv",tag)), row.names=F)
 
-  cat("\n  target  tol   n_trt  n_ctl    DiD      P       95% CI\n")
-  cat("  ------  ---  -----  -----  --------  ------  --------------\n")
-  for(i in seq_len(nrow(tc))) {
-    r <- tc[i,]
-    if(is.na(r$did_adj)) next
-    primary <- (r$target_h==PRIMARY_TARGET && r$tol_h==PRIMARY_TOL)
-    sig <- if(r$p_adj<0.05) " *" else ""
-    tag_str <- if(primary) " < PRIMARY" else ""
-    cat(sprintf("  %4dh   +/-%dh  %5d  %5d  %+.4f  %.4f  [%+.4f,%+.4f]%s%s\n",
-                r$target_h,r$tol_h,r$n_trt,r$n_ctl,r$did_adj,r$p_adj,
-                r$ci_lo,r$ci_hi,sig,tag_str))
+  if (ALIGN_MODE == "closest") {
+    cat("\n  target  n_trt  n_ctl  tdist(h)   DiD       P        95% CI\n")
+    cat("  ------  -----  -----  --------  --------  ------  ----------------\n")
+    for(i in seq_len(nrow(tc))) {
+      r <- tc[i,]; if(is.na(r$did_adj)) next
+      primary <- (r$target_h==PRIMARY_TARGET)
+      sig <- if(r$p_adj<0.05) " *" else ""
+      tag_str <- if(primary) " << PRIMARY" else ""
+      cat(sprintf("  %4dh  %5d  %5d   %5.1f   %+.4f  %.4f  [%+.4f,%+.4f]%s%s\n",
+                  r$target_h,r$n_trt,r$n_ctl,r$tdist_median_h,r$did_adj,r$p_adj,
+                  r$ci_lo,r$ci_hi,sig,tag_str))
+    }
+  } else {
+    cat("\n  target  tol   n_trt  n_ctl    DiD      P       95% CI\n")
+    cat("  ------  ---  -----  -----  --------  ------  --------------\n")
+    for(i in seq_len(nrow(tc))) {
+      r <- tc[i,]; if(is.na(r$did_adj)) next
+      primary <- (r$target_h==PRIMARY_TARGET && r$tol_h==PRIMARY_TOL)
+      sig <- if(r$p_adj<0.05) " *" else ""
+      tag_str <- if(primary) " << PRIMARY" else ""
+      cat(sprintf("  %4dh   +/-%dh  %5d  %5d  %+.4f  %.4f  [%+.4f,%+.4f]%s%s\n",
+                  r$target_h,r$tol_h,r$n_trt,r$n_ctl,r$did_adj,r$p_adj,
+                  r$ci_lo,r$ci_hi,sig,tag_str))
+    }
   }
 
-  # ── C. Primary result (24h +/-6h) ───────────────────────────────────────
-  cat(sprintf("\n%s\nC. PRIMARY DiD (24h post-IV-Mg, +/-6h)\n%s\n",
-              paste(rep("-",60),collapse=""), paste(rep("-",60),collapse="")))
+  # ── C. Primary result ──────────────────────────────────────────────────
+  cat(sprintf("\n%s\nC. PRIMARY DiD (%dh, %s)\n%s\n",
+              paste(rep("-",60),collapse=""), PRIMARY_TARGET, ALIGN_MODE,
+              paste(rep("-",60),collapse="")))
 
   cw24 <- cr_trt[cr_trt$post_h>=12 & cr_trt$post_h<=36,]
   cw24$dist <- abs(cw24$post_h - 24)
@@ -343,7 +397,14 @@ run_analysis <- function(db) {
   tv24 <- s24[,c("pid","cr_pre","cr_pre_offset_min","cr_post","cr_post_offset_min","delta_cr")]
   tv24$treated <- 1
   pv24 <- pairs_df[pairs_df$trt_pid %in% tv24$pid,]
-  ctl24 <- temporal_align(tv24, pv24, cr_list, PRIMARY_TOL*60)
+
+  if (ALIGN_MODE == "closest") {
+    aln24 <- temporal_align_closest(tv24, pv24, cr_list)
+    ctl24 <- aln24$data; tdist24 <- aln24$tdist
+  } else {
+    ctl24 <- temporal_align_tol(tv24, pv24, cr_list, PRIMARY_TOL*60)
+    tdist24 <- NULL
+  }
   primary_matched <- build_matched(tv24, ctl24, covar_lu, ps_vars)
 
   res24 <- did_robust(primary_matched, ps_vars)
@@ -353,8 +414,13 @@ run_analysis <- function(db) {
   cat(sprintf("  95%% CI: [%+.4f, %+.4f]\n", res24$ci_lo, res24$ci_hi))
   cat(sprintf("  n = %d treated, %d controls, %d covariates adjusted\n",
               res24$n_trt, res24$n_ctl, res24$n_adjust))
+  if (!is.null(tdist24) && length(tdist24)>0)
+    cat(sprintf("  Temporal distance: median=%.1fh, IQR=[%.1f-%.1f]h\n",
+                median(tdist24,na.rm=T), quantile(tdist24,.25,na.rm=T),
+                quantile(tdist24,.75,na.rm=T)))
 
-  write.csv(primary_matched, file.path(RESULTS,sprintf("did_matched_%s_24h.csv",tag)), row.names=F)
+  write.csv(primary_matched,
+            file.path(RESULTS,sprintf("did_matched_%s_24h.csv",tag)), row.names=F)
 
   # ── D. Subgroups ─────────────────────────────────────────────────────────
   cat(sprintf("\n%s\nD. SUBGROUP ANALYSIS\n%s\n",
@@ -371,7 +437,7 @@ run_analysis <- function(db) {
     in_st <- !is.na(trt_mg) & trt_mg>=lo & trt_mg<hi
     sub <- pm[pm$match_pair_id %in% pair_ids[in_st],]
     nt <- sum(sub$treated==1); nc <- sum(sub$treated==0)
-    res <- if(nt>=10 && nc>=10) did_robust(sub, ps_vars) else NULL
+    res <- if(nt>=10&&nc>=10) did_robust(sub, ps_vars) else NULL
     sig <- if(!is.null(res) && res$p_adj<0.05) " *" else ""
     if(!is.null(res))
       cat(sprintf("    %s: n=%d/%d, DiD=%+.4f, P=%.4f%s\n",
@@ -381,8 +447,7 @@ run_analysis <- function(db) {
     sg_results[[sidx]] <- data.frame(
       subgroup="Mg_stratum", stratum=mg_nm, n_trt=nt, n_ctl=nc,
       did_adj=if(!is.null(res)) round(res$did_adj,4) else NA,
-      p_adj=if(!is.null(res)) round(res$p_adj,4) else NA,
-      stringsAsFactors=F)
+      p_adj=if(!is.null(res)) round(res$p_adj,4) else NA, stringsAsFactors=F)
   }
 
   avail_adj <- intersect(ps_vars[ps_vars!="first_mg_value"], names(pm))
@@ -406,7 +471,7 @@ run_analysis <- function(db) {
       in_st <- !is.na(trt_st) & trt_st==st
       sub <- pm[pm$match_pair_id %in% pair_ids[in_st],]
       nt <- sum(sub$treated==1); nc <- sum(sub$treated==0)
-      res <- if(nt>=10 && nc>=10) did_robust(sub, ps_vars) else NULL
+      res <- if(nt>=10&&nc>=10) did_robust(sub, ps_vars) else NULL
       sig <- if(!is.null(res) && res$p_adj<0.05) " *" else ""
       if(!is.null(res))
         cat(sprintf("    %s: n=%d/%d, DiD=%+.4f, P=%.4f%s\n",
@@ -416,8 +481,7 @@ run_analysis <- function(db) {
       sg_results[[sidx]] <- data.frame(
         subgroup="Surgery", stratum=st, n_trt=nt, n_ctl=nc,
         did_adj=if(!is.null(res)) round(res$did_adj,4) else NA,
-        p_adj=if(!is.null(res)) round(res$p_adj,4) else NA,
-        stringsAsFactors=F)
+        p_adj=if(!is.null(res)) round(res$p_adj,4) else NA, stringsAsFactors=F)
     }
   }
 
@@ -425,53 +489,43 @@ run_analysis <- function(db) {
   write.csv(sg_df, file.path(RESULTS,sprintf("did_subgroups_%s.csv",tag)), row.names=F)
 
   # ── E. Secondary outcomes ────────────────────────────────────────────────
-  cat(sprintf("\n%s\nE. SECONDARY OUTCOMES (binary, in primary matched set)\n%s\n",
+  cat(sprintf("\n%s\nE. SECONDARY OUTCOMES\n%s\n",
               paste(rep("-",60),collapse=""), paste(rep("-",60),collapse="")))
-
   cat("  outcome                n_trt  n_ctl  rate_trt  rate_ctl  OR (95% CI)       P\n")
   cat("  --------------------- ------ ------ -------- -------- ------------------ ------\n")
-
   sec_results <- list()
   for (oc in SECONDARY_OUTCOMES) {
     res <- binary_outcome(pm, oc, ps_vars)
     if (is.null(res)) {
-      cat(sprintf("  %-23s  -- not available or too few events\n",
-                  ifelse(oc %in% names(OUTCOME_LABELS), OUTCOME_LABELS[oc], oc)))
-      next
+      cat(sprintf("  %-23s  -- unavailable\n",
+                  ifelse(oc %in% names(OUTCOME_LABELS), OUTCOME_LABELS[oc], oc))); next
     }
     label <- ifelse(oc %in% names(OUTCOME_LABELS), OUTCOME_LABELS[oc], oc)
-    sig <- if(res$p < 0.05) " *" else ""
+    sig <- if(res$p<0.05) " *" else ""
     cat(sprintf("  %-23s %5d  %5d    %.1f%%    %.1f%%  %.2f (%.2f-%.2f)  %.4f%s\n",
-                label, res$n_trt, res$n_ctl,
-                100*res$rate_trt, 100*res$rate_ctl,
-                res$or, res$or_lo, res$or_hi, res$p, sig))
+                label,res$n_trt,res$n_ctl,100*res$rate_trt,100*res$rate_ctl,
+                res$or,res$or_lo,res$or_hi,res$p,sig))
     sec_results[[oc]] <- as.data.frame(res, stringsAsFactors=F)
   }
-
   if (length(sec_results)>0) {
     sec_df <- do.call(rbind, sec_results)
     write.csv(sec_df, file.path(RESULTS,sprintf("did_secondary_%s.csv",tag)), row.names=F)
   }
 
   # ── F. Summary ──────────────────────────────────────────────────────────
-  cat(sprintf("\n%s\n%s: ANALYSIS COMPLETE (v3: %d PS covariates)\n%s\n",
-              SEP, db, length(ps_vars), SEP))
-  cat(sprintf("  Outputs:\n"))
-  cat(sprintf("    did_timecourse_%s.csv  -- time course (B)\n", tag))
-  cat(sprintf("    did_matched_%s_24h.csv -- primary matched set (C)\n", tag))
-  cat(sprintf("    did_subgroups_%s.csv   -- subgroups (D)\n", tag))
-  cat(sprintf("    did_secondary_%s.csv   -- secondary outcomes (E)\n", tag))
+  cat(sprintf("\n%s\n%s: COMPLETE (v4: %d covars, %s align)\n%s\n",
+              SEP,db,length(ps_vars),ALIGN_MODE,SEP))
+  cat(sprintf("  did_timecourse_%s.csv\n  did_matched_%s_24h.csv\n", tag, tag))
+  cat(sprintf("  did_subgroups_%s.csv\n  did_secondary_%s.csv\n", tag, tag))
 }
 
 # ============================================================================
 cat("======================================================================\n")
-cat("01_did_analysis.R v3 -- chronic drug revision (did_covars.R)\n")
+cat(sprintf("01_did_analysis.R v4 -- 22 covars + %s alignment\n", ALIGN_MODE))
 cat(sprintf("  PS model: %d covariates (%s)\n", length(PS_COVARS),
-            if(identical(PS_COVARS, PS_COVARS_PRIMARY)) "PRIMARY"
-            else if(identical(PS_COVARS, PS_COVARS_ORIGINAL)) "ORIGINAL"
-            else "CUSTOM"))
-cat(sprintf("  Primary: %dh post-IV-Mg, +/-%dh, r=1, doubly robust\n",
-            PRIMARY_TARGET, PRIMARY_TOL))
+            if(identical(PS_COVARS,PS_COVARS_PRIMARY)) "PRIMARY"
+            else if(identical(PS_COVARS,PS_COVARS_ORIGINAL)) "ORIGINAL" else "CUSTOM"))
+cat(sprintf("  Primary: %dh post-IV-Mg, doubly robust\n", PRIMARY_TARGET))
 cat("======================================================================\n")
 
 args <- commandArgs(trailingOnly=TRUE)
