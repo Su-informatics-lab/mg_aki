@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-fig_did.py — All publication figures for Mg→AKI DiD (AIPW framework)
+fig_did.py — Publication figures (AIPW only, no sIPTW)
 
-Fig 1:  AIPW + sIPTW_DR time course (from t=0, 2 panels)
-Fig 2:  Sensitivity forest (5 models × 2 dbs)
-Fig 3:  AKI subgroup forest (MIMIC KDIGO≥1)
-Fig 4:  Love plot — raw vs weighted SMD (2 panels)
+Fig 1:  AIPW time course (from t=0, 2 panels)
+Fig 2:  AIPW sensitivity forest (5 models × 2 dbs)
+Fig 3:  AIPW risk difference forest (subgroups, MIMIC KDIGO≥1)
+Fig 4:  Love plot — raw vs IPTW-weighted SMD (2 panels)
 Fig 5:  Spaghetti Cr trajectories (2 panels per db)
-Fig S1: Specification curve (256 specs)
+Fig S1: AIPW specification curve (256 specs)
 
 Output: ~/mg_aki/figs/
-Reads:  ~/mg_aki/results/
 """
 
 import os
@@ -24,7 +23,6 @@ from sklearn.linear_model import LogisticRegression
 
 warnings.filterwarnings("ignore")
 
-# ── Nature style ────────────────────────────────────────────────────────
 for k, v in {
     "pdf.fonttype": 42,
     "ps.fonttype": 42,
@@ -72,8 +70,9 @@ W = {
 
 RESULTS = os.path.expanduser("~/mg_aki/results")
 FIGS = os.path.expanduser("~/mg_aki/figs")
-FIGW2 = 7.205  # double-column 183mm
-FIGW1 = 3.504  # single-column 89mm
+FIGW2 = 7.205
+FIGW1 = 3.504
+os.makedirs(FIGS, exist_ok=True)
 
 PS_COVARS = [
     "age",
@@ -98,7 +97,6 @@ PS_COVARS = [
     "lactate_missing",
     "first_mg_value",
 ]
-
 NICE = {
     "age": "Age",
     "is_female": "Female sex",
@@ -107,7 +105,7 @@ NICE = {
     "surg_valve": "Valve",
     "surg_combined": "Combined",
     "heart_failure": "Heart failure",
-    "hypertension": "Hypertension",
+    "hypertension": "HTN",
     "diabetes": "Diabetes",
     "ckd": "CKD",
     "copd": "COPD",
@@ -116,14 +114,12 @@ NICE = {
     "liver_disease": "Liver disease",
     "egfr": "eGFR",
     "first_heartrate": "Heart rate",
-    "first_potassium": "Potassium",
-    "first_calcium": "Calcium",
+    "first_potassium": "K+",
+    "first_calcium": "Ca",
     "first_lactate": "Lactate",
-    "lactate_missing": "Lactate missing",
+    "lactate_missing": "Lactate (miss)",
     "first_mg_value": "Serum Mg",
 }
-
-os.makedirs(FIGS, exist_ok=True)
 
 
 def save(fig, name):
@@ -133,7 +129,6 @@ def save(fig, name):
 
 
 def load_combined(tag):
-    """Load treated + control, stack, median-impute."""
     trt = pd.read_csv(os.path.join(RESULTS, f"did_treated_{tag}.csv"))
     ctl = pd.read_csv(os.path.join(RESULTS, f"did_control_{tag}.csv"))
     id_col = "patientunitstayid" if "patientunitstayid" in trt.columns else "stay_id"
@@ -141,56 +136,49 @@ def load_combined(tag):
     ctl["pid"] = ctl[id_col]
     shared = list(set(trt.columns) & set(ctl.columns))
     df = pd.concat([trt[shared], ctl[shared]], ignore_index=True)
-    avail = [c for c in PS_COVARS if c in df.columns]
-    for c in avail:
-        if df[c].isna().any():
+    for c in PS_COVARS:
+        if c in df.columns and df[c].isna().any():
             df[c] = df[c].fillna(df[c].median())
+    avail = [c for c in PS_COVARS if c in df.columns]
     return df, avail
 
 
-def compute_smd(df, var, trt_col="treated"):
-    x1 = df.loc[df[trt_col] == 1, var].dropna()
-    x0 = df.loc[df[trt_col] == 0, var].dropna()
+def compute_smd(df, var):
+    x1 = df.loc[df.treated == 1, var].dropna()
+    x0 = df.loc[df.treated == 0, var].dropna()
     sp = np.sqrt((x1.var() + x0.var()) / 2)
     return abs(x1.mean() - x0.mean()) / sp if sp > 1e-10 else 0
 
 
-def compute_wsmd(df, var, w_col="w", trt_col="treated"):
-    t1 = df[trt_col] == 1
-    t0 = df[trt_col] == 0
-    w1 = df.loc[t1, w_col]
-    w0 = df.loc[t0, w_col]
-    x1 = df.loc[t1, var]
-    x0 = df.loc[t0, var]
-    m1 = np.average(x1.fillna(0), weights=w1)
-    m0 = np.average(x0.fillna(0), weights=w0)
-    sp = np.sqrt((x1.var() + x0.var()) / 2)
+def compute_wsmd(df, var):
+    t1 = df.treated == 1
+    t0 = df.treated == 0
+    m1 = np.average(df.loc[t1, var].fillna(0), weights=df.loc[t1, "w"])
+    m0 = np.average(df.loc[t0, var].fillna(0), weights=df.loc[t0, "w"])
+    sp = np.sqrt((df.loc[t1, var].var() + df.loc[t0, var].var()) / 2)
     return abs(m1 - m0) / sp if sp > 1e-10 else 0
 
 
 def compute_iptw(df, avail):
-    """Fit PS, compute stabilized IPTW, trim 1/99."""
     X = df[avail].values
     y = df["treated"].values
     lr = LogisticRegression(max_iter=1000, C=1e6, solver="lbfgs")
     lr.fit(X, y)
-    ps = lr.predict_proba(X)[:, 1]
-    ps = np.clip(ps, 0.01, 0.99)
+    ps = np.clip(lr.predict_proba(X)[:, 1], 0.01, 0.99)
     prev = y.mean()
     w = np.where(y == 1, prev / ps, (1 - prev) / (1 - ps))
     q01, q99 = np.percentile(w, [1, 99])
     w = np.clip(w, q01, q99)
     df = df.copy()
     df["w"] = w
-    df["ps"] = ps
     return df
 
 
 # ============================================================================
-# FIG 1: Time course (AIPW + sIPTW_DR)
+# FIG 1: AIPW time course (only AIPW, no sIPTW)
 # ============================================================================
 def fig1():
-    print("── Fig 1: Time course ──")
+    print("── Fig 1: AIPW time course ──")
     fig, axes = plt.subplots(1, 2, figsize=(FIGW2, 3.0), sharey=True)
 
     for idx, (db, title) in enumerate([("eicu", "eICU-CRD"), ("mimic", "MIMIC-IV")]):
@@ -200,7 +188,6 @@ def fig1():
             continue
         df = pd.read_csv(path).dropna(subset=["aipw_did"])
 
-        # Add t=0 anchor
         anchor = pd.DataFrame(
             {
                 "target_h": [0],
@@ -208,8 +195,6 @@ def fig1():
                 "aipw_lo": [0],
                 "aipw_hi": [0],
                 "aipw_p": [1],
-                "siptw_did": [0],
-                "siptw_p": [1],
             }
         )
         df = pd.concat([anchor, df], ignore_index=True).sort_values("target_h")
@@ -221,7 +206,7 @@ def fig1():
         sig = df["aipw_p"].values < 0.05
 
         ax.fill_between(x, lo, hi, color=W["blue"], alpha=0.12, zorder=1)
-        ax.plot(x, y, color=W["blue"], lw=1.2, zorder=3, label="AIPW")
+        ax.plot(x, y, color=W["blue"], lw=1.2, zorder=3)
         ax.plot(
             x[sig],
             y[sig],
@@ -234,20 +219,6 @@ def fig1():
         )
         ax.plot(
             x[~sig], y[~sig], "o", color=W["blue"], ms=3, fillstyle="none", zorder=4
-        )
-
-        ys = df["siptw_did"].values
-        ax.plot(
-            x,
-            ys,
-            color=W["vermil"],
-            lw=0.8,
-            ls="--",
-            marker="s",
-            ms=2.5,
-            label="sIPTW-DR",
-            alpha=0.8,
-            zorder=2,
         )
 
         ax.axhline(0, color="grey", lw=0.5, zorder=0)
@@ -266,12 +237,11 @@ def fig1():
         )
 
     axes[0].set_ylabel("AIPW DiD estimate, ΔΔCr (mg/dL)")
-    axes[0].legend(loc="lower left")
     fig.text(
         0.5,
         -0.02,
         "Filled circles = P < 0.05; open = not significant. "
-        "Negative = IV Mg protective.",
+        "Negative values = IV Mg associated with less Cr rise.",
         ha="center",
         fontsize=5.5,
         fontstyle="italic",
@@ -282,10 +252,10 @@ def fig1():
 
 
 # ============================================================================
-# FIG 2: Sensitivity forest
+# FIG 2: Sensitivity forest (AIPW only)
 # ============================================================================
 def fig2():
-    print("── Fig 2: Sensitivity forest ──")
+    print("── Fig 2: AIPW sensitivity forest ──")
     models = [
         ("primary", "Primary (21, labs only)"),
         ("sens_a", "Sens A (18, K+ Ca)"),
@@ -366,62 +336,66 @@ def fig2():
 
 
 # ============================================================================
-# FIG 3: AKI subgroup forest (MIMIC)
+# FIG 3: AIPW Risk Difference forest (subgroups)
 # ============================================================================
 def fig3():
-    print("── Fig 3: AKI subgroup forest ──")
-    p = os.path.join(RESULTS, "did_subgroups_full_mimic.csv")
-    if not os.path.exists(p):
-        return
-    df = pd.read_csv(p)
-    k1 = df[(df.outcome == "AKI KDIGO>=1") & df["or"].notna()].copy()
-    k1 = k1[k1["or"] < 50].reset_index(drop=True)
+    print("── Fig 3: AIPW RD subgroup forest ──")
+    for db_tag, db_title in [("mimic", "MIMIC-IV"), ("eicu", "eICU-CRD")]:
+        p = os.path.join(RESULTS, f"did_subgroups_full_{db_tag}.csv")
+        if not os.path.exists(p):
+            continue
+        df = pd.read_csv(p)
+        k1 = df[(df.outcome == "AKI KDIGO>=1") & df["rd"].notna()].copy()
+        k1 = k1.reset_index(drop=True)
 
-    # Build display label
-    k1["label"] = k1.apply(
-        lambda r: f"{r['subgroup']}: {r['level']}"
-        + (" (ref)" if str(r.get("ref", "")) == "ref" else ""),
-        axis=1,
-    )
-
-    fig, ax = plt.subplots(figsize=(FIGW1 * 1.5, len(k1) * 0.22 + 0.8))
-    for i, r in k1.iterrows():
-        is_ref = str(r.get("ref", "")) == "ref"
-        c = "grey" if is_ref else (W["blue"] if r["or"] < 1 else W["vermil"])
-        ms = 3 if is_ref else 5
-        marker = "D" if is_ref else "o"
-        ax.errorbar(
-            r["or"],
-            i,
-            xerr=[[r["or"] - r["or_lo"]], [r["or_hi"] - r["or"]]],
-            fmt=marker,
-            color=c,
-            ms=ms,
-            lw=0.8,
-            capsize=1.5,
-            capthick=0.5,
+        k1["label"] = k1.apply(
+            lambda r: f"{r['subgroup']}: {r['level']}"
+            + (" (ref)" if str(r.get("ref", "")) == "ref" else ""),
+            axis=1,
         )
-        if not is_ref and r["p"] < 0.05:
-            ax.text(
-                max(r["or_hi"], 1.05) + 0.05,
-                i,
-                "*",
-                fontsize=7,
-                va="center",
-                color=W["blue"],
-                fontweight="bold",
-            )
-    ax.axvline(1, color="grey", lw=0.5, ls="--")
-    ax.set_yticks(range(len(k1)))
-    ax.set_yticklabels(k1["label"].values, fontsize=5.5)
-    ax.set_xlabel("OR (95% CI) for AKI KDIGO ≥ 1")
-    ax.set_title(
-        "MIMIC-IV: Subgroup analysis (sIPTW-DR)", fontweight="bold", fontsize=8
-    )
-    ax.set_xlim(0, min(k1["or_hi"].max() * 1.15, 4))
-    ax.invert_yaxis()
-    save(fig, "fig3_aki_subgroups")
-    plt.close(fig)
+
+        fig, ax = plt.subplots(figsize=(FIGW1 * 1.5, len(k1) * 0.22 + 0.8))
+        for i, r in k1.iterrows():
+            is_ref = str(r.get("ref", "")) == "ref"
+            c = "grey" if is_ref else (W["blue"] if r["rd"] < 0 else W["vermil"])
+            ms = 3 if is_ref else 5
+            marker = "D" if is_ref else "o"
+            if pd.notna(r["rd_lo"]) and pd.notna(r["rd_hi"]):
+                ax.errorbar(
+                    r["rd"],
+                    i,
+                    xerr=[[r["rd"] - r["rd_lo"]], [r["rd_hi"] - r["rd"]]],
+                    fmt=marker,
+                    color=c,
+                    ms=ms,
+                    lw=0.8,
+                    capsize=1.5,
+                    capthick=0.5,
+                )
+            else:
+                ax.plot(r["rd"], i, marker, color=c, ms=ms)
+            if not is_ref and pd.notna(r["p"]) and r["p"] < 0.05:
+                xpos = r["rd_hi"] if pd.notna(r["rd_hi"]) else r["rd"]
+                ax.text(
+                    xpos + 0.3,
+                    i,
+                    "*",
+                    fontsize=7,
+                    va="center",
+                    color=W["blue"],
+                    fontweight="bold",
+                )
+
+        ax.axvline(0, color="grey", lw=0.5, ls="--")
+        ax.set_yticks(range(len(k1)))
+        ax.set_yticklabels(k1["label"].values, fontsize=5.5)
+        ax.set_xlabel("AIPW risk difference, % (negative = protective)")
+        ax.set_title(
+            f"{db_title}: AKI subgroup analysis (AIPW)", fontweight="bold", fontsize=8
+        )
+        ax.invert_yaxis()
+        save(fig, f"fig3_aki_subgroups_{db_tag}")
+        plt.close(fig)
 
 
 # ============================================================================
@@ -430,7 +404,6 @@ def fig3():
 def fig4():
     print("── Fig 4: Love plot ──")
     fig, axes = plt.subplots(1, 2, figsize=(FIGW2, 4.0), sharey=True)
-
     for idx, (tag, title) in enumerate([("eicu", "eICU-CRD"), ("mimic", "MIMIC-IV")]):
         ax = axes[idx]
         try:
@@ -439,16 +412,12 @@ def fig4():
         except Exception as e:
             print(f"  {tag}: {e}")
             continue
-
         names_plot = [c for c in avail if c in NICE]
         raw_smds = [compute_smd(df, c) for c in names_plot]
         wt_smds = [compute_wsmd(df, c) for c in names_plot]
         labels = [NICE.get(c, c) for c in names_plot]
-
-        # Sort by raw SMD descending
         order = np.argsort(raw_smds)[::-1]
         y = np.arange(len(names_plot))
-
         for i, oi in enumerate(order):
             ax.plot([raw_smds[oi], wt_smds[oi]], [i, i], color="grey", lw=0.3, zorder=1)
         ax.scatter(
@@ -467,10 +436,9 @@ def fig4():
             c=W["blue"],
             s=15,
             marker="s",
-            label="sIPTW weighted",
+            label="Weighted (AIPW PS)",
             zorder=3,
         )
-
         ax.axvline(0.1, color="grey", lw=0.5, ls="--")
         ax.axvline(0.05, color="grey", lw=0.3, ls=":")
         ax.set_yticks(y)
@@ -488,22 +456,19 @@ def fig4():
             va="top",
         )
         ax.set_xlim(-0.01, max(max(raw_smds) * 1.1, 0.2))
-
     save(fig, "fig4_loveplot")
     plt.close(fig)
 
 
 # ============================================================================
-# FIG 5: Spaghetti Cr trajectories (ICU-time anchor)
+# FIG 5: Spaghetti Cr trajectories
 # ============================================================================
 def fig5():
-    print("── Fig 5: Spaghetti Cr trajectories ──")
-
+    print("── Fig 5: Spaghetti ──")
     for tag, title in [("eicu", "eICU-CRD"), ("mimic", "MIMIC-IV")]:
         cr_path = os.path.join(RESULTS, f"did_cr_all_{tag}.csv")
         if not os.path.exists(cr_path):
             continue
-
         try:
             df, avail = load_combined(tag)
         except:
@@ -516,52 +481,41 @@ def fig5():
             cr["labresultoffset"] = cr["offset_min"]
         cr["offset_h"] = cr["labresultoffset"] / 60
 
-        # Cr_pre: first Cr within 0-6h
         pre = cr[(cr.offset_h >= 0) & (cr.offset_h <= 6)].sort_values(
             ["pid", "offset_h"]
         )
         pre = pre.drop_duplicates("pid", keep="first")[["pid", "labresult"]].rename(
             columns={"labresult": "cr_pre"}
         )
-
-        # Merge
         cr2 = cr.merge(pre, on="pid").merge(df[["pid", "treated"]], on="pid")
-        cr2["dcr"] = cr2["labresult"] - cr2["cr_pre"]
+        cr2["dcr"] = (cr2["labresult"] - cr2["cr_pre"]).clip(-2, 3)
         cr2 = cr2[(cr2.offset_h >= 0) & (cr2.offset_h <= 48)]
-        cr2["dcr"] = cr2["dcr"].clip(-2, 3)  # winsorize for display
         cr2["group"] = cr2["treated"].map({1: "IV Mg", 0: "Control"})
 
         fig, axes = plt.subplots(1, 2, figsize=(FIGW2, 3.5), sharey=True)
-
-        for gi, (grp, color, marker) in enumerate(
-            [("IV Mg", W["blue"], "o"), ("Control", W["vermil"], "s")]
+        for gi, (grp, color) in enumerate(
+            [("IV Mg", W["blue"]), ("Control", W["vermil"])]
         ):
             ax = axes[gi]
             gd = cr2[cr2.group == grp]
-
-            # Subsample for readability
             pids = gd.pid.unique()
             np.random.seed(42)
             show_pids = np.random.choice(pids, min(400, len(pids)), replace=False)
-            gd_show = gd[gd.pid.isin(show_pids)]
-
-            for pid, pdf in gd_show.groupby("pid"):
-                pdf = pdf.sort_values("offset_h")
-                ax.plot(pdf.offset_h, pdf.dcr, color=color, alpha=0.04, lw=0.2)
-
-            # Mean trend (3h bins)
+            for pid, pdf in gd[gd.pid.isin(show_pids)].groupby("pid"):
+                ax.plot(
+                    pdf.offset_h.values, pdf.dcr.values, color=color, alpha=0.04, lw=0.2
+                )
+            gd = gd.copy()
             gd["tbin"] = (gd.offset_h / 3).round() * 3
-            mean_t = gd.groupby("tbin").dcr.agg(["mean", "sem"]).reset_index()
+            mt = gd.groupby("tbin").dcr.agg(["mean", "sem"]).reset_index()
             ax.fill_between(
-                mean_t.tbin,
-                mean_t["mean"] - 1.96 * mean_t["sem"],
-                mean_t["mean"] + 1.96 * mean_t["sem"],
+                mt.tbin,
+                mt["mean"] - 1.96 * mt["sem"],
+                mt["mean"] + 1.96 * mt["sem"],
                 color=color,
                 alpha=0.25,
             )
-            ax.plot(mean_t.tbin, mean_t["mean"], color=color, lw=1.5)
-            ax.plot(mean_t.tbin, mean_t["mean"], marker, color=color, ms=2.5)
-
+            ax.plot(mt.tbin, mt["mean"], color=color, lw=1.5)
             ax.axhline(0, color="grey", lw=0.5, ls="--")
             ax.set_xlabel("Hours from ICU admission")
             ax.set_xticks(range(0, 49, 6))
@@ -575,7 +529,6 @@ def fig5():
                 fontweight="bold",
                 va="top",
             )
-
         axes[0].set_ylabel("ΔCr from baseline (mg/dL)")
         fig.suptitle(
             f"{title}: Individual Cr trajectories", fontsize=8, fontweight="bold"
@@ -585,14 +538,13 @@ def fig5():
 
 
 # ============================================================================
-# FIG S1: Specification curve
+# FIG S1: Specification curve (AIPW)
 # ============================================================================
 def figs1():
     print("── Fig S1: Spec curve ──")
     path = os.path.join(RESULTS, "did_sweep.csv")
     if not os.path.exists(path):
         return
-
     df = pd.read_csv(path)
     s24 = df[df.target_h == 24].dropna(subset=["e_aipw", "m_aipw"]).copy()
     s24 = s24.sort_values("m_aipw").reset_index(drop=True)
@@ -606,15 +558,19 @@ def figs1():
         gridspec_kw={"height_ratios": [2, 2, 1.2]},
         sharex=True,
     )
-
-    # Panel a: eICU
     ax = axes[0]
-    c_e = [W["blue"] if bn else W["vermil"] for bn in both_neg]
-    ax.scatter(x, s24.e_aipw, c=c_e, s=4, alpha=0.6, edgecolors="none")
+    ax.scatter(
+        x,
+        s24.e_aipw,
+        c=[W["blue"] if bn else W["vermil"] for bn in both_neg],
+        s=4,
+        alpha=0.6,
+        edgecolors="none",
+    )
     ax.axhline(0, color="grey", lw=0.5, ls="--")
     ax.set_ylabel("eICU AIPW DiD")
     ax.set_title(
-        "Specification curve: 256 covariate sets, 24 h from ICU, AIPW",
+        "Specification curve: 256 covariate sets, 24 h, AIPW",
         fontsize=7,
         fontweight="bold",
     )
@@ -628,10 +584,15 @@ def figs1():
         va="top",
     )
 
-    # Panel b: MIMIC (sorted)
     ax = axes[1]
-    c_m = [W["blue"] if v < 0 else W["vermil"] for v in s24.m_aipw]
-    ax.scatter(x, s24.m_aipw, c=c_m, s=4, alpha=0.6, edgecolors="none")
+    ax.scatter(
+        x,
+        s24.m_aipw,
+        c=[W["blue"] if v < 0 else W["vermil"] for v in s24.m_aipw],
+        s=4,
+        alpha=0.6,
+        edgecolors="none",
+    )
     ax.axhline(0, color="grey", lw=0.5, ls="--")
     ax.set_ylabel("MIMIC AIPW DiD")
     ax.text(
@@ -644,7 +605,6 @@ def figs1():
         va="top",
     )
 
-    # Panel c: Toggle indicators
     ax = axes[2]
     tcols = ["D1", "D2", "D3", "D4", "L1", "L2", "L3", "L4"]
     tlabels = [
@@ -678,12 +638,17 @@ def figs1():
     )
 
     n_conc = both_neg.sum()
+    n_bsn = (
+        (s24.e_aipw < 0)
+        & (s24.e_aipw_p < 0.05)
+        & (s24.m_aipw < 0)
+        & (s24.m_aipw_p < 0.05)
+    ).sum()
     fig.text(
         0.02,
         -0.03,
         f"Blue = both negative ({n_conc}/256, {100*n_conc/256:.0f}%); "
-        f"Red = discordant. AIPW both-sig-negative: "
-        f"{((s24.e_aipw<0)&(s24.e_aipw_p<0.05)&(s24.m_aipw<0)&(s24.m_aipw_p<0.05)).sum()}/256",
+        f"both significant: {n_bsn}/256",
         fontsize=5.5,
         color="grey",
     )
@@ -691,7 +656,6 @@ def figs1():
     plt.close(fig)
 
 
-# ============================================================================
 if __name__ == "__main__":
     fig1()
     fig2()
