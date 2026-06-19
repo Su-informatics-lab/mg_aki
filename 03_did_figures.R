@@ -95,116 +95,102 @@ fig1_timecourse <- function() {
 }
 
 # ============================================================================
-# FIG 2: KM-STYLE CUMULATIVE AKI INCIDENCE
+# FIG 2: Cr TRAJECTORY + ADJUSTED AKI BARS
 # ============================================================================
-fig2_km_aki <- function() {
-  cat("\n── Fig 2: Cumulative AKI Incidence ──\n")
+fig2_cr_trajectory <- function() {
+  cat("\n── Fig 2: Cr Trajectory + AKI Bars ──\n")
 
   plots <- list()
   panel_idx <- 0
 
   for (db in c("eicu","mimic")) {
     path <- file.path(RESULTS, sprintf("did_matched_%s_24h.csv", db))
-    if (!file.exists(path)) { cat("  Missing:", path, "\n"); next }
-    df <- read.csv(path, stringsAsFactors=FALSE)
-
-    # Compute time-to-AKI from all Cr measurements
     cr_path <- file.path(RESULTS, sprintf("did_cr_all_%s.csv", db))
-    if (!file.exists(cr_path)) next
+    if (!file.exists(path) || !file.exists(cr_path)) next
+
+    df <- read.csv(path, stringsAsFactors=FALSE)
     cr_all <- read.csv(cr_path, stringsAsFactors=FALSE)
     id_col <- if ("patientunitstayid" %in% names(cr_all)) "patientunitstayid" else "stay_id"
     cr_all$pid <- cr_all[[id_col]]
-
     db_label <- ifelse(db=="eicu", "eICU-CRD", "MIMIC-IV")
 
-    # For each patient in matched set, find time of first ΔCr ≥ 0.3
-    time_points <- c(6, 12, 18, 24, 36, 48)
-    cum_aki <- list()
+    # For each patient in matched set, get Cr from cr_all + compute ΔCr
+    matched_pids <- unique(df$pid)
+    cr_sub <- cr_all[cr_all$pid %in% matched_pids, ]
 
-    for (grp in c(0, 1)) {
-      pids <- df$pid[df$treated == grp]
-      n_total <- length(pids)
-      cr_sub <- cr_all[cr_all$pid %in% pids, ]
+    # Merge cr_pre and treated flag
+    cr_sub <- merge(cr_sub, df[, c("pid","cr_pre","treated")], by="pid", all.x=FALSE)
+    cr_sub$delta_cr <- cr_sub$labresult - cr_sub$cr_pre
+    cr_sub$hour_bin <- floor(cr_sub$labresultoffset / 60 / 6) * 6  # 6h bins
 
-      rates <- numeric(length(time_points))
-      for (j in seq_along(time_points)) {
-        tp <- time_points[j]
-        cr_window <- cr_sub[cr_sub$labresultoffset <= tp * 60, ]
-        # Merge baseline Cr
-        cr_window <- merge(cr_window, df[df$treated==grp, c("pid","cr_pre")], by="pid")
-        cr_window$delta <- cr_window$labresult - cr_window$cr_pre
-        aki_pids <- unique(cr_window$pid[cr_window$delta >= 0.3])
-        rates[j] <- length(aki_pids) / n_total
-      }
+    # Keep reasonable time range
+    cr_sub <- cr_sub[cr_sub$hour_bin >= 0 & cr_sub$hour_bin <= 48, ]
+    cr_sub$group <- ifelse(cr_sub$treated==1, "IV Mg", "Control")
 
-      grp_label <- ifelse(grp==1, "IV Mg", "Control")
-      cum_aki[[grp_label]] <- data.frame(
-        time = time_points, rate = rates * 100,
-        group = grp_label, db = db_label, stringsAsFactors = FALSE)
-    }
+    # Aggregate: mean ΔCr ± SE per group per time bin
+    agg <- aggregate(delta_cr ~ group + hour_bin, data=cr_sub,
+                     FUN=function(x) c(mean=mean(x,na.rm=T), se=sd(x,na.rm=T)/sqrt(sum(!is.na(x)))))
+    agg <- do.call(data.frame, agg)
+    names(agg) <- c("group","hour_bin","mean","se")
+    agg$lo <- agg$mean - 1.96 * agg$se
+    agg$hi <- agg$mean + 1.96 * agg$se
 
-    cum_df <- do.call(rbind, cum_aki)
-
-    # Overall
+    # --- Panel: Overall Cr trajectory ---
     panel_idx <- panel_idx + 1
-    p <- ggplot(cum_df, aes(x=time, y=rate, color=group, linetype=group)) +
-      geom_step(linewidth=0.8) +
+    p1 <- ggplot(agg, aes(x=hour_bin, y=mean, color=group, fill=group)) +
+      geom_hline(yintercept=0, color="grey70", linewidth=0.3, linetype="dashed") +
+      geom_ribbon(aes(ymin=lo, ymax=hi), alpha=0.15, color=NA) +
+      geom_line(linewidth=0.8) +
       geom_point(size=1.5) +
       scale_color_manual(values=c("IV Mg"=WONG[["blue"]], "Control"=WONG[["vermil"]])) +
-      scale_linetype_manual(values=c("IV Mg"="solid", "Control"="dashed")) +
-      scale_x_continuous(breaks=time_points) +
-      labs(x="Hours from ICU admission", y="Cumulative AKI incidence (%)",
+      scale_fill_manual(values=c("IV Mg"=WONG[["blue"]], "Control"=WONG[["vermil"]])) +
+      scale_x_continuous(breaks=seq(0,48,6)) +
+      labs(x="Hours from ICU admission",
+           y=expression(Delta*"Cr from baseline (mg/dL)"),
            title=sprintf("(%s) %s — Overall", letters[panel_idx], db_label),
-           color=NULL, linetype=NULL) +
+           color=NULL, fill=NULL) +
+      annotate("text", x=3, y=max(agg$hi)*0.9, hjust=0, size=2.2, color="grey40",
+               label="Both groups start at 0 (matched baseline Cr)") +
       theme_nature() +
-      theme(legend.position=c(0.2, 0.85))
+      theme(legend.position=c(0.15, 0.85),
+            legend.background=element_blank())
 
-    plots[[panel_idx]] <- p
+    plots[[panel_idx]] <- p1
 
-    # Key subgroup: eGFR 60-90 for eICU, Male for MIMIC
+    # --- Panel: Key subgroup ---
     if (db == "eicu") {
-      sg_df <- df[!is.na(df$egfr) & df$egfr >= 60 & df$egfr < 90, ]
+      sg_pids <- df$pid[!is.na(df$egfr) & df$egfr >= 60 & df$egfr < 90]
       sg_label <- "eGFR 60\u201390"
     } else {
-      sg_df <- df[!is.na(df$is_female) & df$is_female == 0, ]
+      sg_pids <- df$pid[!is.na(df$is_female) & df$is_female == 0]
       sg_label <- "Males"
     }
 
-    if (nrow(sg_df) >= 40) {
-      cum_sg <- list()
-      for (grp in c(0, 1)) {
-        pids <- sg_df$pid[sg_df$treated == grp]
-        n_total <- length(pids)
-        if (n_total < 10) next
-        cr_sub <- cr_all[cr_all$pid %in% pids, ]
-        rates <- numeric(length(time_points))
-        for (j in seq_along(time_points)) {
-          tp <- time_points[j]
-          cr_window <- cr_sub[cr_sub$labresultoffset <= tp * 60, ]
-          cr_window <- merge(cr_window, sg_df[sg_df$treated==grp, c("pid","cr_pre")], by="pid")
-          cr_window$delta <- cr_window$labresult - cr_window$cr_pre
-          aki_pids <- unique(cr_window$pid[cr_window$delta >= 0.3])
-          rates[j] <- length(aki_pids) / n_total
-        }
-        grp_label <- ifelse(grp==1, "IV Mg", "Control")
-        cum_sg[[grp_label]] <- data.frame(
-          time = time_points, rate = rates * 100,
-          group = grp_label, db = db_label, stringsAsFactors = FALSE)
-      }
-      cum_sg_df <- do.call(rbind, cum_sg)
+    cr_sg <- cr_sub[cr_sub$pid %in% sg_pids, ]
+    if (nrow(cr_sg) > 100) {
+      agg_sg <- aggregate(delta_cr ~ group + hour_bin, data=cr_sg,
+                           FUN=function(x) c(mean=mean(x,na.rm=T), se=sd(x,na.rm=T)/sqrt(sum(!is.na(x)))))
+      agg_sg <- do.call(data.frame, agg_sg)
+      names(agg_sg) <- c("group","hour_bin","mean","se")
+      agg_sg$lo <- agg_sg$mean - 1.96 * agg_sg$se
+      agg_sg$hi <- agg_sg$mean + 1.96 * agg_sg$se
 
       panel_idx <- panel_idx + 1
-      p2 <- ggplot(cum_sg_df, aes(x=time, y=rate, color=group, linetype=group)) +
-        geom_step(linewidth=0.8) +
+      p2 <- ggplot(agg_sg, aes(x=hour_bin, y=mean, color=group, fill=group)) +
+        geom_hline(yintercept=0, color="grey70", linewidth=0.3, linetype="dashed") +
+        geom_ribbon(aes(ymin=lo, ymax=hi), alpha=0.15, color=NA) +
+        geom_line(linewidth=0.8) +
         geom_point(size=1.5) +
         scale_color_manual(values=c("IV Mg"=WONG[["blue"]], "Control"=WONG[["vermil"]])) +
-        scale_linetype_manual(values=c("IV Mg"="solid", "Control"="dashed")) +
-        scale_x_continuous(breaks=time_points) +
-        labs(x="Hours from ICU admission", y="Cumulative AKI incidence (%)",
+        scale_fill_manual(values=c("IV Mg"=WONG[["blue"]], "Control"=WONG[["vermil"]])) +
+        scale_x_continuous(breaks=seq(0,48,6)) +
+        labs(x="Hours from ICU admission",
+             y=expression(Delta*"Cr from baseline (mg/dL)"),
              title=sprintf("(%s) %s — %s", letters[panel_idx], db_label, sg_label),
-             color=NULL, linetype=NULL) +
+             color=NULL, fill=NULL) +
         theme_nature() +
-        theme(legend.position=c(0.2, 0.85))
+        theme(legend.position=c(0.15, 0.85),
+              legend.background=element_blank())
 
       plots[[panel_idx]] <- p2
     }
@@ -212,9 +198,10 @@ fig2_km_aki <- function() {
 
   if (length(plots) > 0) {
     g <- arrangeGrob(grobs=plots, ncol=2)
-    ggsave(file.path(RESULTS, "fig2_km_aki.pdf"), g, width=7.2, height=5, device=cairo_pdf)
-    ggsave(file.path(RESULTS, "fig2_km_aki.png"), g, width=7.2, height=5, dpi=300)
-    cat("  Saved: fig2_km_aki.pdf / .png\n")
+    ggsave(file.path(RESULTS, "fig2_cr_trajectory.pdf"), g, width=7.2, height=5,
+           device=cairo_pdf)
+    ggsave(file.path(RESULTS, "fig2_cr_trajectory.png"), g, width=7.2, height=5, dpi=300)
+    cat("  Saved: fig2_cr_trajectory.pdf / .png\n")
   }
 }
 
@@ -347,7 +334,7 @@ cat("03_did_figures.R — Publication + presentation figures\n")
 cat("======================================================================\n")
 
 fig1_timecourse()
-fig2_km_aki()
+fig2_cr_trajectory()
 fig3_forest()
 fig4_secondary()
 efig1_iptw()
