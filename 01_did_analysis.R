@@ -117,14 +117,15 @@ binary_outcome <- function(df, outcome_col, ps_vars, pair_col="match_pair_id") {
   rate1 <- mean(df$y[df$treated==1]); rate0 <- mean(df$y[df$treated==0])
   if (rate1==0 && rate0==0) return(NULL)
 
-  get_vcov <- function(fit) {
-    if (pair_col %in% names(df) && length(unique(df[[pair_col]]))>1)
-      tryCatch(vcovCL(fit,cluster=df[[pair_col]]),
-               error=function(e) vcovHC(fit,type="HC1"))
-    else vcovHC(fit, type="HC1")
-  }
+  # Simple unadjusted first
+  fit0 <- tryCatch(glm(y ~ treated, data=df, family=quasibinomial()),
+                   error=function(e) NULL)
+  if (is.null(fit0)) return(NULL)
 
-  # Adjusted
+  # Check "treated" is in coefficients
+  if (!"treated" %in% names(coef(fit0))) return(NULL)
+
+  # Try adjusted model
   smds <- compute_smds(df, ps_vars)
   adj <- names(smds[!is.na(smds) & smds > 0.05])
   adj <- intersect(adj, names(df))
@@ -132,22 +133,38 @@ binary_outcome <- function(df, outcome_col, ps_vars, pair_col="match_pair_id") {
 
   if (length(adj)>0) {
     fml <- as.formula(paste("y ~ treated +", paste(adj,collapse="+")))
+    fit <- tryCatch(glm(fml, data=df, family=quasibinomial()), error=function(e) NULL)
+    if (is.null(fit) || !"treated" %in% names(coef(fit))) fit <- fit0
   } else {
-    fml <- y ~ treated
+    fit <- fit0
   }
 
-  fit <- tryCatch(glm(fml, data=df, family=quasibinomial()), error=function(e) NULL)
-  if (is.null(fit)) return(NULL)
-  ct <- tryCatch(coeftest(fit, vcov.=get_vcov(fit)), error=function(e) NULL)
-  if (is.null(ct) || !"treated" %in% rownames(ct)) return(NULL)
+  # Robust SEs
+  vc <- tryCatch({
+    if (pair_col %in% names(df) && length(unique(df[[pair_col]]))>1)
+      vcovCL(fit, cluster=df[[pair_col]])
+    else vcovHC(fit, type="HC1")
+  }, error=function(e) {
+    tryCatch(vcovHC(fit, type="HC1"), error=function(e2) vcov(fit))
+  })
 
-  or <- exp(ct["treated","Estimate"])
+  ct <- tryCatch(coeftest(fit, vcov.=vc), error=function(e) NULL)
+  if (is.null(ct)) return(NULL)
+
+  # Find treated row
+  trt_row <- which(rownames(ct) == "treated")
+  if (length(trt_row) == 0) return(NULL)
+  # GLM coeftest uses z-test: column is "Pr(>|z|)" not "Pr(>|t|)"
+  p_col <- grep("^Pr", colnames(ct))
+  if (length(p_col) == 0) return(NULL)
+
+  or <- exp(ct[trt_row, "Estimate"])
   list(outcome=outcome_col, n_trt=nt, n_ctl=nc,
        rate_trt=round(rate1,4), rate_ctl=round(rate0,4),
        or=round(or,3),
-       or_lo=round(exp(ct["treated","Estimate"]-1.96*ct["treated","Std. Error"]),3),
-       or_hi=round(exp(ct["treated","Estimate"]+1.96*ct["treated","Std. Error"]),3),
-       p=round(ct["treated","Pr(>|t|)"],4))
+       or_lo=round(exp(ct[trt_row,"Estimate"]-1.96*ct[trt_row,"Std. Error"]),3),
+       or_hi=round(exp(ct[trt_row,"Estimate"]+1.96*ct[trt_row,"Std. Error"]),3),
+       p=round(ct[trt_row, p_col],4))
 }
 
 # Temporal alignment: given matched pairs + Cr index, align control Cr
