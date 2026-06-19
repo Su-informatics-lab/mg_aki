@@ -877,6 +877,27 @@ def run_eicu():
     ).sum()
     print(f"  Lost patients recoverable via hosp Cr: {n_recov}")
 
+    # ── Hosp Cr fallback ──────────────────────────────────────────
+    cr_pre["cr_pre_source"] = "icu"
+    no_icu = treated_pids - set(cr_pre.patientunitstayid)
+    rescue = cr_hosp[cr_hosp.patientunitstayid.isin(no_icu)].copy()
+    if len(rescue) > 0:
+        rescue = rescue.rename(
+            columns={"labresult": "cr_pre", "labresultoffset": "cr_pre_offset_min"}
+        )
+        rescue["cr_pre_offset_h"] = rescue.cr_pre_offset_min / 60.0
+        rescue["gap_to_ivmg_h"] = (
+            rescue.mg_offset_min - rescue.cr_pre_offset_min
+        ) / 60.0
+        rescue["cr_pre_source"] = "hosp_fallback"
+        shared = [c for c in cr_pre.columns if c in rescue.columns]
+        cr_pre = pd.concat([cr_pre[shared], rescue[shared]], ignore_index=True)
+        print(f"  ✚ Hosp Cr fallback: rescued {len(rescue)} patients")
+        print(f"  Total Cr_pre (ICU + fallback): {len(cr_pre)}")
+        n_has = len(cr_pre)
+        consort["treated_has_cr_pre_with_fallback"] = n_has
+        consort["treated_hosp_fallback"] = len(rescue)
+
     # Cr_post windows
     print("\n── Cr_post windows ──")
     cr_post_all = cr_t[cr_t.labresultoffset > cr_t.mg_offset_min].copy()
@@ -938,6 +959,7 @@ def run_eicu():
                 "cr_pre_offset_min",
                 "cr_pre_offset_h",
                 "gap_to_ivmg_h",
+                "cr_pre_source",
             ]
         ],
         on="patientunitstayid",
@@ -1466,6 +1488,32 @@ def run_mimic():
             )
     else:
         print(f"  No pre-ICU Cr found for comparison")
+        cr_hosp = pd.DataFrame()
+
+    # ── Hosp Cr fallback ──────────────────────────────────────────
+    cr_pre["cr_pre_source"] = "icu"
+    no_icu = treated_stays - set(cr_pre.stay_id)
+    if len(cr_hosp) > 0:
+        rescue = cr_hosp[cr_hosp.stay_id.isin(no_icu)].copy()
+        if len(rescue) > 0:
+            rescue = rescue.rename(
+                columns={
+                    "valuenum": "cr_pre",
+                    "offset_min": "cr_pre_offset_min",
+                    "offset_h": "cr_pre_offset_h",
+                }
+            )
+            rescue["gap_to_ivmg_h"] = (
+                rescue.mg_offset_min - rescue.cr_pre_offset_min
+            ) / 60.0
+            rescue["cr_pre_source"] = "hosp_fallback"
+            shared = [c for c in cr_pre.columns if c in rescue.columns]
+            cr_pre = pd.concat([cr_pre[shared], rescue[shared]], ignore_index=True)
+            print(f"  ✚ Hosp Cr fallback: rescued {len(rescue)} patients")
+            print(f"  Total Cr_pre (ICU + fallback): {len(cr_pre)}")
+            n_has = len(cr_pre)
+            consort["treated_has_cr_pre_with_fallback"] = n_has
+            consort["treated_hosp_fallback"] = len(rescue)
 
     # Cr_post windows
     print("\n── Cr_post windows ──")
@@ -1524,6 +1572,7 @@ def run_mimic():
                 "cr_pre_offset_min",
                 "cr_pre_offset_h",
                 "gap_to_ivmg_h",
+                "cr_pre_source",
             ]
         ],
         on="stay_id",
