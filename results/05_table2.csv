@@ -1,8 +1,0 @@
-"Outcome","eICU","MIMIC","Pooled","I2"
-"Primary: AC (Mg+K vs K-only, OW)","—","—","—","—"
-"Sensitivity: IPTW","—","—","—","—"
-"Sensitivity: Overlap weighting","—","—","—","—"
-"Sensitivity: PS matching","—","—","—","—"
-"Hospital mortality (OW)","—","—","—","—"
-"Encephalopathy (OW)","—","—","—","—"
-"Fracture neg. control (OW)","—","—","—","—"

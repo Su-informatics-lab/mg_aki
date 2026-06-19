@@ -1,5 +1,0 @@
-"db","step","hr","lo","hi","p"
-"eICU","prognostic_untreated",1.472,1.296,1.671,0
-"MIMIC","prognostic_untreated",1.127,0.938,1.355,0.2018
-"eICU","cox_interaction",0.617,NA,NA,0.0469
-"MIMIC","cox_interaction",1.095,NA,NA,0.6346
