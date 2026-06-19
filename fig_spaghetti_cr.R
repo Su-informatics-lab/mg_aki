@@ -15,6 +15,7 @@
 suppressPackageStartupMessages({
   library(ggplot2)
   library(gridExtra)
+  library(grid)
 })
 
 RESULTS <- path.expand("~/mg_aki/results")
