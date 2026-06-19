@@ -70,8 +70,16 @@ fig1_timecourse <- function() {
   if (length(dfs)==0) { cat("  No data\n"); return(NULL) }
   tc <- do.call(rbind, dfs)
   tc <- tc[!is.na(tc$did_adj), ]
-  tc$tol_label <- factor(sprintf("\u00b1%dh", tc$tol_h), levels=c("\u00b12h","\u00b14h","\u00b16h"))
+  tc$tol_label <- factor(sprintf("+/-%dh", tc$tol_h), levels=c("+/-2h","+/-4h","+/-6h"))
   tc$sig <- tc$p_adj < 0.05
+
+  # Add t=0 anchor (DiD=0 by construction) for each db × tolerance
+  anchors <- unique(tc[, c("db","db_label","tol_h","tol_label")])
+  anchors$target_h <- 0; anchors$did_adj <- 0; anchors$se_adj <- 0
+  anchors$p_adj <- 1; anchors$ci_lo <- 0; anchors$ci_hi <- 0
+  anchors$n_trt <- NA; anchors$n_ctl <- NA; anchors$sig <- FALSE
+  tc <- rbind(tc, anchors[, names(tc)])
+  tc <- tc[order(tc$db, tc$tol_h, tc$target_h), ]
 
   p <- ggplot(tc, aes(x=target_h, y=did_adj, color=tol_label, shape=tol_label)) +
     geom_hline(yintercept=0, color="grey70", linewidth=0.3) +
@@ -83,8 +91,9 @@ fig1_timecourse <- function() {
     facet_wrap(~db_label, nrow=1) +
     scale_color_manual(values=c(WONG[["skyblue"]], WONG[["orange"]], WONG[["blue"]])) +
     scale_fill_manual(values=c(WONG[["skyblue"]], WONG[["orange"]], WONG[["blue"]])) +
-    scale_x_continuous(breaks=seq(6,36,6)) +
-    labs(x="Hours after IV MgSO\u2084", y="DiD estimate, \u0394\u0394Cr (mg/dL)",
+    scale_x_continuous(breaks=seq(0,36,6)) +
+    labs(x="Hours after IV MgSO4",
+         y="DiD estimate, DDCr (mg/dL)",
          color="Temporal tolerance", fill="Temporal tolerance",
          shape="Temporal tolerance") +
     theme_nature() +
@@ -160,7 +169,7 @@ fig2_cr_trajectory <- function() {
     # --- Panel: Key subgroup ---
     if (db == "eicu") {
       sg_pids <- df$pid[!is.na(df$egfr) & df$egfr >= 60 & df$egfr < 90]
-      sg_label <- "eGFR 60\u201390"
+      sg_label <- "eGFR 60-90"
     } else {
       sg_pids <- df$pid[!is.na(df$is_female) & df$is_female == 0]
       sg_label <- "Males"
@@ -240,7 +249,7 @@ fig3_forest <- function() {
     scale_color_manual(values=c("eICU-CRD"=WONG[["blue"]], "MIMIC-IV"=WONG[["vermil"]])) +
     scale_shape_manual(values=c("TRUE"=16, "FALSE"=1), guide="none") +
     scale_x_log10(limits=c(0.1, 10), breaks=c(0.1, 0.25, 0.5, 1, 2, 4)) +
-    labs(x="Odds Ratio (AKI KDIGO \u2265 Stage 1)", y=NULL, color=NULL) +
+    labs(x="Odds Ratio (AKI KDIGO >= Stage 1)", y=NULL, color=NULL) +
     theme_nature() +
     theme(legend.position="bottom")
 
@@ -317,7 +326,7 @@ efig1_iptw <- function() {
                                     sIPTW_t95="dashed", sIPTW_DR="solid",
                                     AIPW="solid")) +
     scale_x_continuous(breaks=seq(6,36,6)) +
-    labs(x="Hours from ICU admission", y="DiD estimate, \u0394\u0394Cr (mg/dL)",
+    labs(x="Hours from ICU admission", y="DiD estimate, DDCr (mg/dL)",
          color="IPTW variant", linetype="IPTW variant") +
     theme_nature() +
     theme(legend.position="bottom")
