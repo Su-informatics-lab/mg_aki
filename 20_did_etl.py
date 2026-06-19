@@ -48,6 +48,7 @@ MIMIC_ICU = os.path.join(MIMIC_ROOT, "icu")
 # ═══════════════════════════════════════════════════════════════════
 MIN_AGE = 18
 CR_MIN, CR_MAX = 0.1, 25.0
+CR_POST_PLAUSIBLE_MAX = 15.0  # Cr_post > 15 = lab error (4 pts in eICU)
 BASELINE_CR_MAX = 4.0
 
 # Three Cr_post windows: (min_h, max_h) after IV Mg
@@ -634,6 +635,12 @@ def run_eicu():
     # Cr_post windows
     print("\n── Cr_post windows ──")
     cr_post_all = cr_t[cr_t.labresultoffset > cr_t.mg_offset_min].copy()
+    n_implaus = (cr_post_all.labresult > CR_POST_PLAUSIBLE_MAX).sum()
+    if n_implaus > 0:
+        print(
+            f"  Cr_post > {CR_POST_PLAUSIBLE_MAX} (lab error): {n_implaus} measurements excluded"
+        )
+    cr_post_all = cr_post_all[cr_post_all.labresult <= CR_POST_PLAUSIBLE_MAX]
     cr_post_all["post_h"] = (
         cr_post_all.labresultoffset - cr_post_all.mg_offset_min
     ) / 60.0
@@ -792,43 +799,6 @@ def run_eicu():
         treated["first_heartrate"] = np.nan
         print(f"    first_heartrate: vitalPeriodic not available")
 
-    # Vasopressor & transfusion before t0
-    if len(med_ok) > 0:
-        vp = set()
-        for pid in tpids:
-            mo = mg_off_d.get(pid, 0)
-            pt = med_ok[
-                (med_ok.patientunitstayid == pid)
-                & (med_ok.drugstartoffset >= 0)
-                & (med_ok.drugstartoffset <= mo)
-            ]
-            if len(pt) > 0 and matches_any(pt.drugname, VASO_PATTERNS).any():
-                vp.add(pid)
-        treated["vasopressor_pre_t0"] = treated.patientunitstayid.isin(vp).astype(int)
-        print(
-            f"    vasopressor_pre_t0: {pct(treated.vasopressor_pre_t0.sum(), len(treated))}"
-        )
-
-    if len(tx_tbl) > 0:
-        tp = set()
-        tx_m = tx_tbl[
-            tx_tbl.patientunitstayid.isin(tpids)
-            & matches_any(tx_tbl.treatmentstring, TRANSFUSION_PATTERNS)
-        ]
-        for pid in tpids:
-            mo = mg_off_d.get(pid, 0)
-            pt = tx_m[
-                (tx_m.patientunitstayid == pid)
-                & (tx_m.treatmentoffset >= 0)
-                & (tx_m.treatmentoffset <= mo)
-            ]
-            if len(pt) > 0:
-                tp.add(pid)
-        treated["transfusion_pre_t0"] = treated.patientunitstayid.isin(tp).astype(int)
-        print(
-            f"    transfusion_pre_t0: {pct(treated.transfusion_pre_t0.sum(), len(treated))}"
-        )
-
     # BMI
     if "admissionweight" in cardiac.columns and "admissionheight" in cardiac.columns:
         wt = cardiac.set_index("patientunitstayid")["admissionweight"].to_dict()
@@ -965,31 +935,6 @@ def run_eicu():
     else:
         control["first_heartrate"] = np.nan
 
-    # Vasopressor/transfusion: first 6h
-    if len(med_ok) > 0:
-        ve = med_ok[
-            (med_ok.patientunitstayid.isin(cpids))
-            & (med_ok.drugstartoffset >= 0)
-            & (med_ok.drugstartoffset <= 360)
-        ]
-        vp = (
-            set(ve[matches_any(ve.drugname, VASO_PATTERNS)].patientunitstayid)
-            if len(ve) > 0
-            else set()
-        )
-        control["vasopressor_pre_t0"] = control.patientunitstayid.isin(vp).astype(int)
-
-    if len(tx_tbl) > 0:
-        te = tx_tbl[
-            tx_tbl.patientunitstayid.isin(cpids)
-            & matches_any(tx_tbl.treatmentstring, TRANSFUSION_PATTERNS)
-            & (tx_tbl.treatmentoffset >= 0)
-            & (tx_tbl.treatmentoffset <= 360)
-        ]
-        control["transfusion_pre_t0"] = control.patientunitstayid.isin(
-            set(te.patientunitstayid)
-        ).astype(int)
-
     # BMI
     if "admissionweight" in cardiac.columns and "admissionheight" in cardiac.columns:
         control["bmi"] = control.patientunitstayid.apply(
@@ -1013,24 +958,16 @@ def run_eicu():
 
     # ── All Cr for temporal matching ─────────────────────────────
     all_pids = set(treated.patientunitstayid) | set(control.patientunitstayid)
-    cr_exp = cr[cr.patientunitstayid.isin(all_pids) & (cr.labresultoffset >= 0)][
-        ["patientunitstayid", "labresult", "labresultoffset"]
-    ].copy()
+    cr_exp = cr[
+        cr.patientunitstayid.isin(all_pids)
+        & (cr.labresultoffset >= 0)
+        & (cr.labresult <= CR_POST_PLAUSIBLE_MAX)
+    ][["patientunitstayid", "labresult", "labresultoffset"]].copy()
     cr_exp["cr_offset_h"] = cr_exp.labresultoffset / 60.0
     cr_exp.to_csv(os.path.join(RESULTS, "20_did_cr_all_eicu.csv"), index=False)
     print(
         f"\n  Exported {len(cr_exp):,} Cr for {cr_exp.patientunitstayid.nunique()} pts"
     )
-
-    # ── SMD check ────────────────────────────────────────────────
-    print(f"\n{'─'*50}\nCOVARIATE TIMING ASSESSMENT")
-    for v in ["vasopressor_pre_t0", "transfusion_pre_t0"]:
-        if v in treated.columns and v in control.columns:
-            tr = treated[v].mean()
-            cr_ = control[v].mean()
-            smd = abs(tr - cr_) / np.sqrt((tr * (1 - tr) + cr_ * (1 - cr_)) / 2 + 1e-10)
-            warn = " ⚠ consider dropping" if smd > 0.25 else ""
-            print(f"  {v}: trt={100*tr:.1f}% ctrl={100*cr_:.1f}% SMD={smd:.3f}{warn}")
 
     # ── save & report ────────────────────────────────────────────
     build_cohort_common(treated, control, "eicu")
@@ -1285,6 +1222,12 @@ def run_mimic():
     # Cr_post windows
     print("\n── Cr_post windows ──")
     cr_post_all = cr_t[cr_t.offset_min > cr_t.mg_offset_min].copy()
+    n_implaus = (cr_post_all.valuenum > CR_POST_PLAUSIBLE_MAX).sum()
+    if n_implaus > 0:
+        print(
+            f"  Cr_post > {CR_POST_PLAUSIBLE_MAX} (lab error): {n_implaus} measurements excluded"
+        )
+    cr_post_all = cr_post_all[cr_post_all.valuenum <= CR_POST_PLAUSIBLE_MAX]
     cr_post_all["post_h"] = (cr_post_all.offset_min - cr_post_all.mg_offset_min) / 60.0
     for wname, (lo, hi) in CR_POST_WINDOWS.items():
         cand = cr_post_all[(cr_post_all.post_h >= lo) & (cr_post_all.post_h <= hi)]
@@ -1438,24 +1381,6 @@ def run_mimic():
     else:
         treated["first_heartrate"] = np.nan
 
-    # Vasopressor before t0
-    ie_t = ie[ie.stay_id.isin(set(treated.stay_id))].copy()
-    ie_t["starttime"] = pd.to_datetime(ie_t["starttime"])
-    ie_t = ie_t.merge(treated[["stay_id", "intime", "mg_starttime"]], on="stay_id")
-    ie_pre = ie_t[ie_t.starttime <= ie_t.mg_starttime]
-    vp = set(ie_pre[ie_pre.itemid.isin(VASO_ITEMS_MIMIC)].stay_id)
-    treated["vasopressor_pre_t0"] = treated.stay_id.isin(vp).astype(int)
-    print(
-        f"    vasopressor_pre_t0: {pct(treated.vasopressor_pre_t0.sum(), len(treated))}"
-    )
-
-    # Transfusion before t0
-    bp = set(ie_pre[ie_pre.itemid.isin(BLOOD_ITEMS_MIMIC)].stay_id)
-    treated["transfusion_pre_t0"] = treated.stay_id.isin(bp).astype(int)
-    print(
-        f"    transfusion_pre_t0: {pct(treated.transfusion_pre_t0.sum(), len(treated))}"
-    )
-
     # Mortality
     treated["hosp_mortality"] = treated.hospital_expire_flag.fillna(0).astype(int)
 
@@ -1559,19 +1484,6 @@ def run_mimic():
     else:
         control["first_heartrate"] = np.nan
 
-    # Vasopressor/transfusion: first 6h
-    ie_c = ie[ie.stay_id.isin(set(control.stay_id))].copy()
-    ie_c["starttime"] = pd.to_datetime(ie_c["starttime"])
-    ie_c = ie_c.merge(control[["stay_id", "intime"]], on="stay_id")
-    ie_c["off_h"] = (ie_c.starttime - ie_c.intime).dt.total_seconds() / 3600
-    ie_early = ie_c[(ie_c.off_h >= 0) & (ie_c.off_h <= LANDMARK_H)]
-    control["vasopressor_pre_t0"] = control.stay_id.isin(
-        set(ie_early[ie_early.itemid.isin(VASO_ITEMS_MIMIC)].stay_id)
-    ).astype(int)
-    control["transfusion_pre_t0"] = control.stay_id.isin(
-        set(ie_early[ie_early.itemid.isin(BLOOD_ITEMS_MIMIC)].stay_id)
-    ).astype(int)
-
     control["hosp_mortality"] = control.hospital_expire_flag.fillna(0).astype(int)
     consort["control_final"] = len(control)
 
@@ -1621,24 +1533,16 @@ def run_mimic():
 
     # All Cr for temporal matching
     all_s = set(treated.stay_id) | set(control.stay_id)
-    cr_exp = cr_labs[cr_labs.stay_id.isin(all_s) & (cr_labs.offset_h >= 0)][
-        ["stay_id", "valuenum", "offset_min", "offset_h"]
-    ].copy()
+    cr_exp = cr_labs[
+        cr_labs.stay_id.isin(all_s)
+        & (cr_labs.offset_h >= 0)
+        & (cr_labs.valuenum <= CR_POST_PLAUSIBLE_MAX)
+    ][["stay_id", "valuenum", "offset_min", "offset_h"]].copy()
     cr_exp = cr_exp.rename(
         columns={"valuenum": "labresult", "offset_min": "labresultoffset"}
     )
     cr_exp.to_csv(os.path.join(RESULTS, "20_did_cr_all_mimic.csv"), index=False)
     print(f"\n  Exported {len(cr_exp):,} Cr for {cr_exp.stay_id.nunique()} pts")
-
-    # SMD check
-    print(f"\n{'─'*50}\nCOVARIATE TIMING ASSESSMENT")
-    for v in ["vasopressor_pre_t0", "transfusion_pre_t0"]:
-        if v in treated.columns and v in control.columns:
-            tr = treated[v].mean()
-            cr_ = control[v].mean()
-            smd = abs(tr - cr_) / np.sqrt((tr * (1 - tr) + cr_ * (1 - cr_)) / 2 + 1e-10)
-            warn = " ⚠ consider dropping" if smd > 0.25 else ""
-            print(f"  {v}: trt={100*tr:.1f}% ctrl={100*cr_:.1f}% SMD={smd:.3f}{warn}")
 
     build_cohort_common(treated, control, "mimic")
     print_consort(consort, treated, "MIMIC-IV")
