@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 # ============================================================================
-# 25_iptw_variants.R — IPTW variant comparison (all ATE, ICU-time anchor)
+# did_iptw.R — IPTW variant comparison (all ATE, ICU-time anchor)
 #
 # Variants:
 #   sIPTW:        stabilized IPTW, no trimming
@@ -12,8 +12,8 @@
 # All use: same PS model, same ICU-time ΔCr definition, HC robust SEs
 # Sweep: 6-36h every 3h from ICU admission
 #
-# Run:  Rscript 25_iptw_variants.R eicu
-#       Rscript 25_iptw_variants.R mimic
+# Run:  Rscript did_iptw.R eicu
+#       Rscript did_iptw.R mimic
 # ============================================================================
 
 suppressPackageStartupMessages({
@@ -50,9 +50,9 @@ run_iptw <- function(db) {
   cat(sprintf("\n%s\n%s: IPTW Variants (ATE, ICU-time anchor)\n%s\n", SEP, db, SEP))
 
   # ── Load ─────────────────────────────────────────────────────────────────
-  trt <- read.csv(file.path(RESULTS, sprintf("20_did_treated_%s.csv", tag)), stringsAsFactors = F)
-  ctl <- read.csv(file.path(RESULTS, sprintf("20_did_control_%s.csv", tag)), stringsAsFactors = F)
-  cr_all <- read.csv(file.path(RESULTS, sprintf("20_did_cr_all_%s.csv", tag)), stringsAsFactors = F)
+  trt <- read.csv(file.path(RESULTS, sprintf("did_treated_%s.csv", tag)), stringsAsFactors = F)
+  ctl <- read.csv(file.path(RESULTS, sprintf("did_control_%s.csv", tag)), stringsAsFactors = F)
+  cr_all <- read.csv(file.path(RESULTS, sprintf("did_cr_all_%s.csv", tag)), stringsAsFactors = F)
 
   id_col <- if ("patientunitstayid" %in% names(trt)) "patientunitstayid" else "stay_id"
   trt$pid <- trt[[id_col]]; ctl$pid <- ctl[[id_col]]
@@ -287,7 +287,7 @@ run_iptw <- function(db) {
 
   # ── Results ──────────────────────────────────────────────────────────────
   res <- do.call(rbind, all_results)
-  write.csv(res, file.path(RESULTS, sprintf("25_iptw_variants_%s.csv", tag)), row.names = F)
+  write.csv(res, file.path(RESULTS, sprintf("did_iptw_%s.csv", tag)), row.names = F)
 
   # Print formatted tables by method
   cat(sprintf("\n%s\n%s: IPTW VARIANT RESULTS\n%s\n", SEP, db, SEP))
@@ -328,20 +328,20 @@ run_iptw <- function(db) {
   cat(sprintf("  All methods estimate ATE using ICU-time anchor\n"))
   cat(sprintf("  sIPTW_DR = stabilized trimmed IPTW + covariate adjustment (doubly robust)\n"))
   cat(sprintf("  AIPW = augmented IPW with outcome model (theoretical gold standard)\n"))
-  cat(sprintf("\n  Saved: 25_iptw_variants_%s.csv\n", tag))
+  cat(sprintf("\n  Saved: did_iptw_%s.csv\n", tag))
 
   return(res)
 }
 
 # ============================================================================
 cat("======================================================================\n")
-cat("25_iptw_variants.R — IPTW variant comparison (all ATE)\n")
+cat("did_iptw.R — IPTW variant comparison (all ATE)\n")
 cat("  Variants: sIPTW, sIPTW_t99, sIPTW_t95, sIPTW_DR, AIPW\n")
 cat(sprintf("  Targets: %s h from ICU\n", paste(TARGETS, collapse = ",")))
 cat("======================================================================\n")
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) == 0) { cat("Usage: Rscript 25_iptw_variants.R eicu|mimic\n"); quit(status = 1) }
+if (length(args) == 0) { cat("Usage: Rscript did_iptw.R eicu|mimic\n"); quit(status = 1) }
 for (a in args) run_iptw(toupper(a))
 
 cat("\n======================================================================\n")

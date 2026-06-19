@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 # ============================================================================
-# 22_did_subgroups.R — Mg-stratified & surgery subgroups across all configs
+# did_subgroups.R — Mg-stratified & surgery subgroups across all configs
 #
 # For each matched dataset (excluding peak):
 #   - Mg strata: <1.8, 1.8-2.0, 2.0-2.3, >2.3
@@ -10,8 +10,8 @@
 # Stratification is by the TREATED patient's value; matched controls
 # follow their partner regardless of their own stratum.
 #
-# Run:  Rscript 22_did_subgroups.R eicu
-#       Rscript 22_did_subgroups.R mimic
+# Run:  Rscript did_subgroups.R eicu
+#       Rscript did_subgroups.R mimic
 # ============================================================================
 
 suppressPackageStartupMessages({
@@ -151,7 +151,7 @@ run_subgroups <- function(db) {
   idx <- 0
 
   for (cfg in CONFIGS) {
-    path <- file.path(RESULTS, sprintf("21_matched_%s_%s.csv", tag, cfg))
+    path <- file.path(RESULTS, sprintf("did_matched_%s_%s.csv", tag, cfg))
     if (!file.exists(path)) {
       cat(sprintf("  %s: file not found, skipping\n", cfg))
       next
@@ -283,7 +283,7 @@ run_subgroups <- function(db) {
 
   # ── Save & Summary ────────────────────────────────────────────────────
   results <- do.call(rbind, all_rows)
-  out_path <- file.path(RESULTS, sprintf("22_did_subgroups_%s.csv", tag))
+  out_path <- file.path(RESULTS, sprintf("did_subgroups_%s.csv", tag))
   write.csv(results, out_path, row.names=FALSE)
   cat(sprintf("\n  Saved: %s (%d rows)\n", basename(out_path), nrow(results)))
 
@@ -342,13 +342,13 @@ run_subgroups <- function(db) {
 
 # ============================================================================
 cat("======================================================================\n")
-cat("22_did_subgroups.R — Mg-stratified & surgery subgroups\n")
+cat("did_subgroups.R — Mg-stratified & surgery subgroups\n")
 cat(sprintf("  Configs: %s\n", paste(CONFIGS, collapse=", ")))
 cat(sprintf("  Mg strata: %s\n", paste(names(MG_BINS), collapse=", ")))
 cat("======================================================================\n")
 
 args <- commandArgs(trailingOnly=TRUE)
-if (length(args)==0) { cat("Usage: Rscript 22_did_subgroups.R eicu|mimic\n"); quit(status=1) }
+if (length(args)==0) { cat("Usage: Rscript did_subgroups.R eicu|mimic\n"); quit(status=1) }
 for (a in args) run_subgroups(toupper(a))
 
 cat("\n======================================================================\n")

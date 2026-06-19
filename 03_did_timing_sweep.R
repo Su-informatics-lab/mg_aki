@@ -1,14 +1,14 @@
 #!/usr/bin/env Rscript
 # ============================================================================
-# 24_did_fine_sweep.R — Fine timing grid + OW parallel analysis
+# 03_did_timing_sweep.R — Fine timing grid + OW parallel analysis
 #
 # Part A: Matching-based DiD — sweep target 6-36h (every 3h) × tol ±2/4/6h
 # Part B: OW-DiD — no matching, common ICU-time anchor, OW weights
 #   For each target hour X: ΔCr = Cr(closest to Xh from ICU) - Cr_pre
 #   OW-weighted regression: ΔCr ~ treated + [covariates]
 #
-# Run:  Rscript 24_did_fine_sweep.R eicu
-#       Rscript 24_did_fine_sweep.R mimic
+# Run:  Rscript 03_did_timing_sweep.R eicu
+#       Rscript 03_did_timing_sweep.R mimic
 # ============================================================================
 
 suppressPackageStartupMessages({
@@ -144,9 +144,9 @@ run_fine <- function(db) {
   SEP <- paste(rep("=",70),collapse="")
   cat(sprintf("\n%s\n%s: Fine Timing Sweep + OW\n%s\n", SEP, db, SEP))
 
-  trt <- read.csv(file.path(RESULTS,sprintf("20_did_treated_%s.csv",tag)),stringsAsFactors=F)
-  ctl <- read.csv(file.path(RESULTS,sprintf("20_did_control_%s.csv",tag)),stringsAsFactors=F)
-  cr_all <- read.csv(file.path(RESULTS,sprintf("20_did_cr_all_%s.csv",tag)),stringsAsFactors=F)
+  trt <- read.csv(file.path(RESULTS,sprintf("did_treated_%s.csv",tag)),stringsAsFactors=F)
+  ctl <- read.csv(file.path(RESULTS,sprintf("did_control_%s.csv",tag)),stringsAsFactors=F)
+  cr_all <- read.csv(file.path(RESULTS,sprintf("did_cr_all_%s.csv",tag)),stringsAsFactors=F)
 
   id_col <- if("patientunitstayid" %in% names(trt)) "patientunitstayid" else "stay_id"
   trt$pid <- trt[[id_col]]; ctl$pid <- ctl[[id_col]]
@@ -402,20 +402,20 @@ run_fine <- function(db) {
     common <- intersect(names(mr), names(owr_aligned))
     all_res <- rbind(mr[,common], owr_aligned[,common])
   }
-  write.csv(all_res, file.path(RESULTS,sprintf("24_fine_sweep_%s.csv",tag)), row.names=F)
-  cat(sprintf("\n  Saved: 24_fine_sweep_%s.csv\n", tag))
+  write.csv(all_res, file.path(RESULTS,sprintf("did_timing_sweep_%s.csv",tag)), row.names=F)
+  cat(sprintf("\n  Saved: did_timing_sweep_%s.csv\n", tag))
 }
 
 # ============================================================================
 cat("======================================================================\n")
-cat("24_did_fine_sweep.R — Fine timing + OW parallel\n")
+cat("03_did_timing_sweep.R — Fine timing + OW parallel\n")
 cat(sprintf("  Targets: %s h (post-IV-Mg for matching, post-ICU for OW)\n",
             paste(TARGETS,collapse=",")))
 cat(sprintf("  Tolerances: ±%s h\n", paste(TOLERANCES,collapse=",")))
 cat("======================================================================\n")
 
 args <- commandArgs(trailingOnly=TRUE)
-if(length(args)==0){cat("Usage: Rscript 24_did_fine_sweep.R eicu|mimic\n");quit(status=1)}
+if(length(args)==0){cat("Usage: Rscript 03_did_timing_sweep.R eicu|mimic\n");quit(status=1)}
 for(a in args) run_fine(toupper(a))
 
 cat("\n======================================================================\n")

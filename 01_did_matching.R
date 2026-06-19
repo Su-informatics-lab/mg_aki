@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 # ============================================================================
-# 21_did_final.R — Production DiD: matching + doubly robust analysis
+# 01_did_matching.R — Production DiD: matching + doubly robust analysis
 #
 # Design:
 #   PS matching (caliper=0.2, replace=TRUE) → temporal Cr alignment →
@@ -17,8 +17,8 @@
 #   peak:   max Cr 6-48h after IV Mg
 #   at_24h: Cr closest to 24h after IV Mg
 #
-# Run:  Rscript 21_did_final.R eicu
-#       Rscript 21_did_final.R mimic
+# Run:  Rscript 01_did_matching.R eicu
+#       Rscript 01_did_matching.R mimic
 # ============================================================================
 
 suppressPackageStartupMessages({
@@ -110,9 +110,9 @@ run_did <- function(db) {
   cat(sprintf("\n%s\n%s: DiD Matching + Doubly Robust Analysis\n%s\n", SEP, db, SEP))
 
   # ── Load ─────────────────────────────────────────────────────────────────
-  trt <- read.csv(file.path(RESULTS, sprintf("20_did_treated_%s.csv", tag)), stringsAsFactors=F)
-  ctl <- read.csv(file.path(RESULTS, sprintf("20_did_control_%s.csv", tag)), stringsAsFactors=F)
-  cr_all <- read.csv(file.path(RESULTS, sprintf("20_did_cr_all_%s.csv", tag)), stringsAsFactors=F)
+  trt <- read.csv(file.path(RESULTS, sprintf("did_treated_%s.csv", tag)), stringsAsFactors=F)
+  ctl <- read.csv(file.path(RESULTS, sprintf("did_control_%s.csv", tag)), stringsAsFactors=F)
+  cr_all <- read.csv(file.path(RESULTS, sprintf("did_cr_all_%s.csv", tag)), stringsAsFactors=F)
 
   id_col <- if ("patientunitstayid" %in% names(trt)) "patientunitstayid" else "stay_id"
   trt$pid <- trt[[id_col]]; ctl$pid <- ctl[[id_col]]
@@ -343,7 +343,7 @@ run_did <- function(db) {
     }
 
     # Save matched dataset
-    out_path <- file.path(RESULTS, sprintf("21_matched_%s_%s.csv", tag, cfg$label))
+    out_path <- file.path(RESULTS, sprintf("did_matched_%s_%s.csv", tag, cfg$label))
     write.csv(matched_df, out_path, row.names=FALSE)
     cat(sprintf("  Saved: %s (%d rows)\n", basename(out_path), nrow(matched_df)))
 
@@ -370,7 +370,7 @@ run_did <- function(db) {
   # ── Summary table ──────────────────────────────────────────────────────
   cat(sprintf("\n%s\n%s: RESULTS SUMMARY\n%s\n", SEP, db, SEP))
   res_df <- do.call(rbind, all_results)
-  write.csv(res_df, file.path(RESULTS, sprintf("21_did_results_%s.csv", tag)), row.names=F)
+  write.csv(res_df, file.path(RESULTS, sprintf("did_results_%s.csv", tag)), row.names=F)
 
   cat("\n  config         r  tol  cr_strategy    n_trt  n_ctl  DiD_unadj  DiD_adj    P_adj    95% CI\n")
   cat("  ───────────── ── ──── ───────────── ────── ────── ───────── ──────── ──────── ──────────────\n")
@@ -386,20 +386,20 @@ run_did <- function(db) {
   cat(sprintf("\n  Key: DiD < 0 = IV Mg protective (less Cr rise)\n"))
   cat(sprintf("  Doubly robust adjusts for covariates with SMD > 0.05 after matching\n"))
   cat(sprintf("  Cluster-robust SEs by match pair\n"))
-  cat(sprintf("\n  Saved: 21_did_results_%s.csv\n", tag))
+  cat(sprintf("\n  Saved: did_results_%s.csv\n", tag))
 
   return(res_df)
 }
 
 # ============================================================================
 cat("======================================================================\n")
-cat("21_did_final.R — DiD: PSM + temporal alignment + doubly robust\n")
+cat("01_did_matching.R — DiD: PSM + temporal alignment + doubly robust\n")
 cat("  Primary: r=1, ±6h, first Cr 6-24h\n")
 cat("  Cr strategies: first_6_24h, peak_6_48h, closest_24h\n")
 cat("======================================================================\n")
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) == 0) { cat("Usage: Rscript 21_did_final.R eicu|mimic\n"); quit(status=1) }
+if (length(args) == 0) { cat("Usage: Rscript 01_did_matching.R eicu|mimic\n"); quit(status=1) }
 for (a in args) run_did(toupper(a))
 
 cat("\n======================================================================\n")
