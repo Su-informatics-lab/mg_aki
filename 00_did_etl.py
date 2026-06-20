@@ -533,6 +533,68 @@ def build_cohort_common(treated, control, db_tag):
     tag = db_tag.lower()
     treated.to_csv(os.path.join(RESULTS, f"did_treated_{tag}.csv"), index=False)
     control.to_csv(os.path.join(RESULTS, f"did_control_{tag}.csv"), index=False)
+
+    # ── v4: All-patients file for risk-set matching ──────────────
+    pid_col = (
+        "patientunitstayid" if "patientunitstayid" in treated.columns else "stay_id"
+    )
+
+    # Ensure control has mg columns (NA)
+    for c in ["mg_offset_h", "mg_offset_min"]:
+        if c not in control.columns:
+            control[c] = np.nan
+
+    # Select common columns for the all-patients file
+    core_cols = [
+        pid_col,
+        "treated",
+        "mg_offset_h",
+        "mg_offset_min",
+        "icu_discharge_h",
+        "icu_outcome",
+        "age",
+        "is_female",
+        "bmi",
+        "surgery_type",
+        "surg_cabg",
+        "surg_valve",
+        "surg_combined",
+        "heart_failure",
+        "hypertension",
+        "diabetes",
+        "ckd",
+        "copd",
+        "pvd",
+        "stroke",
+        "liver_disease",
+        "egfr",
+        "first_heartrate",
+        "first_potassium",
+        "first_calcium",
+        "first_lactate",
+        "lactate_missing",
+        "first_mg_value",
+        "hosp_mortality",
+        "poaf",
+        "encephalopathy",
+        "vent_arrhythmia",
+        "ppi_chronic",
+        "loop_diuretic_chronic",
+        "acei_arb_chronic",
+        "nsaid_chronic",
+    ]
+    # Only keep columns that exist in both
+    keep = [c for c in core_cols if c in treated.columns and c in control.columns]
+    all_pts = pd.concat([treated[keep], control[keep]], ignore_index=True)
+    all_pts.rename(columns={pid_col: "pid"}, inplace=True)
+
+    all_path = os.path.join(RESULTS, f"did_all_{tag}.csv")
+    all_pts.to_csv(all_path, index=False)
+    n_trt = all_pts.treated.sum()
+    n_ctl = len(all_pts) - n_trt
+    print(
+        f"\n  Saved: did_all_{tag}.csv ({len(all_pts)} pts: {n_trt} treated + {n_ctl} control)"
+    )
     print(
         f"\n  Saved: did_treated_{tag}.csv ({len(treated)} pts, {treated.shape[1]} cols)"
     )
@@ -1346,6 +1408,19 @@ def run_eicu():
         f"\n  Exported {len(cr_exp):,} Cr for {cr_exp.patientunitstayid.nunique()} pts"
     )
 
+    # ── v4: ICU discharge time for risk-set matching ────────────
+    disch_h = (
+        cardiac.set_index("patientunitstayid")["unitdischargeoffset"] / 60.0
+    ).to_dict()
+    disch_status = (
+        cardiac.set_index("patientunitstayid")["unitdischargestatus"]
+        .str.lower()
+        .to_dict()
+    )
+    for df in [treated, control]:
+        df["icu_discharge_h"] = df.patientunitstayid.map(disch_h)
+        df["icu_outcome"] = df.patientunitstayid.map(disch_status).fillna("unknown")
+
     build_cohort_common(treated, control, "eicu")
     print_consort(consort, treated, "eICU")
     return consort
@@ -1918,6 +1993,21 @@ def run_mimic():
     )
     cr_exp.to_csv(os.path.join(RESULTS, "did_cr_all_mimic.csv"), index=False)
     print(f"\n  Exported {len(cr_exp):,} Cr for {cr_exp.stay_id.nunique()} pts")
+
+    # ── v4: ICU discharge time for risk-set matching ────────────
+    disch_h = (
+        (
+            cardiac.set_index("stay_id")["outtime"]
+            - cardiac.set_index("stay_id")["intime"]
+        ).dt.total_seconds()
+        / 3600
+    ).to_dict()
+    expire_map = cardiac.set_index("stay_id")["hospital_expire_flag"].to_dict()
+    for df in [treated, control]:
+        df["icu_discharge_h"] = df.stay_id.map(disch_h)
+        df["icu_outcome"] = (
+            df.stay_id.map(expire_map).map({1: "expired", 0: "alive"}).fillna("unknown")
+        )
 
     build_cohort_common(treated, control, "mimic")
     print_consort(consort, treated, "MIMIC-IV")
