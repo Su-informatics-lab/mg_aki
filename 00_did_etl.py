@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """
-00_did_etl.py — DiD cohort construction for Mg → AKI study (v3)
+00_did_etl.py — DiD cohort construction for Mg → AKI study (v4)
+
+  v4 changes (temporal alignment + symmetric covariate window):
+    - Covariate window capped at COVAR_WINDOW_H (6h) for BOTH groups,
+      ensuring symmetric baseline measurement and pre-treatment timing
+    - Treated labs/vitals: first value in [0, min(t_mg, 6h))
+    - Control labs/vitals: first value in [0, 6h]
+    - mg_offset_h exported for R-side onset filtering + temporal alignment
+    - R script handles: onset cap, PSM, control inherits matched t_mg,
+      ΔCr computed relative to t_mg (treatment-time anchor)
+    - Onset distribution reported at 6h/12h/24h/48h thresholds
 
   v3 changes (chronic drug revision, per Dr. Yan 2026-06-19):
     - Added CHRONIC_DRUG_CLASSES: ppi_chronic, loop_diuretic_chronic,
@@ -10,14 +20,14 @@
     - All existing pre-t0 combined flags retained for sensitivity analyses
 
   Design:
-    - Time zero = first postop IV Mg administration (patient-specific)
-    - Cr_pre  = latest Cr between ICU admission and IV Mg (hosp fallback)
-    - Cr_post = first Cr after IV Mg at three windows
-    - Outcome = ΔCr (continuous)
+    - Treatment = first postop IV Mg (mg_offset_h exported for R filtering)
+    - Covariates measured in [0, min(t_mg, 6h)) for treated, [0, 6h] for controls
+    - Cr_pre = latest Cr before IV Mg (treated) / first postop Cr (controls)
     - Controls = patients who never received postop IV Mg
+    - R script applies: onset filter, PSM, temporal alignment, ΔCr
 
   Outputs per database:
-    did_treated_{db}.csv   — treated arm
+    did_treated_{db}.csv   — treated arm (with mg_offset_h)
     did_control_{db}.csv   — control arm
     did_cr_all_{db}.csv    — all Cr for temporal matching
     did_consort.csv        — CONSORT numbers
@@ -63,6 +73,13 @@ CR_POST_WINDOWS = {
     "6_48h": (6, 48),
     "0_24h": (0, 24),
 }
+
+# ── v4: Symmetric covariate window ────────────────────────────────────
+# Both treated and control labs/vitals measured within this window from ICU admission.
+# For treated: [0, min(t_mg, COVAR_WINDOW)). For controls: [0, COVAR_WINDOW].
+COVAR_WINDOW_MIN = 360  # 6 hours in minutes
+COVAR_WINDOW_H = 6  # 6 hours
+ONSET_THRESHOLDS = [6, 12, 24, 48]  # for reporting
 
 # ── Secondary outcome patterns ──────────────────────────────────────
 AF_PATTERNS_EICU = [
@@ -1058,8 +1075,8 @@ def run_eicu():
             )
         treated[como] = treated.patientunitstayid.isin(cp).astype(int)
 
-    # Combined drug flags (pre-t0, for sensitivity)
-    print("  Covariates (pre-t0 combined drugs)...")
+    # Combined drug flags (pre-min(t0, COVAR_WINDOW), for sensitivity) — v4
+    print("  Covariates (pre-t0 combined drugs, capped at COVAR_WINDOW)...")
     mg_off_d = dict(zip(treated.patientunitstayid, treated.mg_offset_min))
     tpids = set(treated.patientunitstayid)
     for dc, pats in DRUG_CLASSES.items():
@@ -1067,8 +1084,10 @@ def run_eicu():
         if len(med_ok) > 0:
             for pid in tpids:
                 mo = mg_off_d.get(pid, 0)
+                window_end = min(mo, COVAR_WINDOW_MIN)  # v4: cap at 6h
                 pt = med_ok[
-                    (med_ok.patientunitstayid == pid) & (med_ok.drugstartoffset <= mo)
+                    (med_ok.patientunitstayid == pid)
+                    & (med_ok.drugstartoffset <= window_end)
                 ]
                 if len(pt) > 0 and matches_any(pt.drugname, pats).any():
                     flagged.add(pid)
@@ -1078,7 +1097,7 @@ def run_eicu():
     print("  Chronic drug flags (admissionDrug)...")
     treated = extract_chronic_eicu(treated, admDrug, tpids, label="treated")
 
-    # Labs before t0
+    # Labs before min(t0, COVAR_WINDOW) — v4: symmetric with controls
     for col, lab_pats in [
         ("first_mg_value", ["magnesium"]),
         ("first_potassium", ["potassium"]),
@@ -1091,10 +1110,11 @@ def run_eicu():
         vals = {}
         for pid in tpids:
             mo = mg_off_d.get(pid, 0)
+            window_end = min(mo, COVAR_WINDOW_MIN)  # v4: cap at 6h
             pt = lsub[
                 (lsub.patientunitstayid == pid)
                 & (lsub.labresultoffset >= 0)
-                & (lsub.labresultoffset < mo)
+                & (lsub.labresultoffset < window_end)
             ]
             if len(pt) > 0:
                 vals[pid] = pt.sort_values("labresultoffset").iloc[0].labresult
@@ -1110,10 +1130,11 @@ def run_eicu():
         hr_vals = {}
         for pid in tpids:
             mo = mg_off_d.get(pid, 0)
+            window_end = min(mo, COVAR_WINDOW_MIN)  # v4: cap at 6h
             pt = vt[
                 (vt.patientunitstayid == pid)
                 & (vt.observationoffset >= 0)
-                & (vt.observationoffset < mo)
+                & (vt.observationoffset < window_end)
             ]
             if len(pt) > 0:
                 hr_vals[pid] = pt.sort_values("observationoffset").iloc[0].heartrate
@@ -1207,7 +1228,7 @@ def run_eicu():
             early = med_ok[
                 (med_ok.patientunitstayid.isin(cpids))
                 & (med_ok.drugstartoffset >= 0)
-                & (med_ok.drugstartoffset <= 360)
+                & (med_ok.drugstartoffset <= COVAR_WINDOW_MIN)
             ]
             if len(early) > 0:
                 f = set(early[matches_any(early.drugname, pats)].patientunitstayid)
@@ -1226,7 +1247,7 @@ def run_eicu():
             lab.patientunitstayid.isin(cpids)
             & matches_any(lab.labname, lab_pats)
             & (lab.labresultoffset >= 0)
-            & (lab.labresultoffset <= 360)
+            & (lab.labresultoffset <= COVAR_WINDOW_MIN)
         ]
         fv = (
             lsub.sort_values("labresultoffset")
@@ -1243,7 +1264,7 @@ def run_eicu():
             & vital.heartrate.notna()
             & vital.heartrate.between(20, 250)
             & (vital.observationoffset >= 0)
-            & (vital.observationoffset <= 360)
+            & (vital.observationoffset <= COVAR_WINDOW_MIN)
         ]
         hr_c = (
             vt_c.sort_values("observationoffset")
@@ -1638,14 +1659,20 @@ def run_mimic():
             matches_icd(dx, set(treated.hadm_id.dropna().astype(int)), code_map)
         ).astype(int)
 
-    # Combined drug flags (pre-t0, for sensitivity)
-    print("  Covariates (pre-t0 combined drugs)...")
+    # Combined drug flags (pre-min(t0, COVAR_WINDOW), for sensitivity) — v4
+    print("  Covariates (pre-t0 combined drugs, capped at COVAR_WINDOW)...")
     presc["starttime"] = pd.to_datetime(presc["starttime"], errors="coerce")
     presc_t = presc[
         presc.hadm_id.isin(set(treated.hadm_id.dropna().astype(int)))
     ].merge(treated[["hadm_id", "stay_id", "intime", "mg_starttime"]], on="hadm_id")
     presc_t["ptime"] = pd.to_datetime(presc_t["starttime"])
-    presc_pre = presc_t[presc_t.ptime <= presc_t.mg_starttime]
+    presc_t["off_h"] = (presc_t.ptime - presc_t.intime).dt.total_seconds() / 3600
+    # v4: pre-treatment AND within COVAR_WINDOW
+    presc_pre = presc_t[
+        (presc_t.ptime <= presc_t.mg_starttime)
+        & (presc_t.off_h >= 0)
+        & (presc_t.off_h <= COVAR_WINDOW_H)
+    ]
     for dc, pats in DRUG_CLASSES.items():
         f = set(
             presc_pre[
@@ -1672,7 +1699,10 @@ def run_mimic():
             treated[["stay_id", "hadm_id", "intime", "mg_offset_min"]], on="hadm_id"
         )
         ll["offset_min"] = (ll.charttime - ll.intime).dt.total_seconds() / 60
-        ll = ll[(ll.offset_min >= 0) & (ll.offset_min < ll.mg_offset_min)]
+        ll = ll[
+            (ll.offset_min >= 0)
+            & (ll.offset_min < ll.mg_offset_min.clip(upper=COVAR_WINDOW_MIN))
+        ]
         fv = (
             ll.sort_values("offset_min")
             .groupby("stay_id")
@@ -1690,7 +1720,7 @@ def run_mimic():
         ce["offset_min"] = (ce.charttime - ce.intime).dt.total_seconds() / 60
         ce = ce[
             (ce.offset_min >= 0)
-            & (ce.offset_min < ce.mg_offset_min)
+            & (ce.offset_min < ce.mg_offset_min.clip(upper=COVAR_WINDOW_MIN))
             & ce.valuenum.between(20, 250)
         ]
         hr = (
@@ -1711,7 +1741,6 @@ def run_mimic():
 
     # ── CONTROL ──────────────────────────────────────────────────
     print(f"\n{'~'*50}\nBuilding control cohort...")
-    LANDMARK_H = 6
     cr_ctrl = cr_labs[cr_labs.stay_id.isin(control_stays) & (cr_labs.offset_h >= 0)]
     c2 = set(cr_ctrl.groupby("stay_id").size().pipe(lambda s: s[s >= 2]).index)
     control = cardiac[cardiac.stay_id.isin(c2)].copy()
@@ -1752,7 +1781,7 @@ def run_mimic():
     )
     presc_c["ptime"] = pd.to_datetime(presc_c["starttime"], errors="coerce")
     presc_c["off_h"] = (presc_c.ptime - presc_c.intime).dt.total_seconds() / 3600
-    presc_early = presc_c[(presc_c.off_h >= 0) & (presc_c.off_h <= LANDMARK_H)]
+    presc_early = presc_c[(presc_c.off_h >= 0) & (presc_c.off_h <= COVAR_WINDOW_H)]
     for dc, pats in DRUG_CLASSES.items():
         f = set(
             presc_early[
@@ -1776,7 +1805,7 @@ def run_mimic():
         ll["charttime"] = pd.to_datetime(ll["charttime"])
         ll = ll.merge(control[["stay_id", "hadm_id", "intime"]], on="hadm_id")
         ll["offset_h"] = (ll.charttime - ll.intime).dt.total_seconds() / 3600
-        ll = ll[(ll.offset_h >= 0) & (ll.offset_h <= LANDMARK_H)]
+        ll = ll[(ll.offset_h >= 0) & (ll.offset_h <= COVAR_WINDOW_H)]
         fv = (
             ll.sort_values("offset_h")
             .groupby("stay_id")
@@ -1793,7 +1822,7 @@ def run_mimic():
         ce_c["off_h"] = (ce_c.charttime - ce_c.intime).dt.total_seconds() / 3600
         ce_c = ce_c[
             (ce_c.off_h >= 0)
-            & (ce_c.off_h <= LANDMARK_H)
+            & (ce_c.off_h <= COVAR_WINDOW_H)
             & ce_c.valuenum.between(20, 250)
         ]
         hr_c = (
@@ -1877,9 +1906,10 @@ def run_mimic():
 # ═══════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("=" * 70)
-    print("00_did_etl.py — DiD Cohort Construction (v3: chronic drug revision)")
-    print("  Windows: 6-24h (primary), 6-48h, 0-24h")
-    print("  Chronic drugs: ppi, loop, acei/arb, nsaid (from home med records)")
+    print("00_did_etl.py — DiD Cohort Construction (v4: symmetric covar window)")
+    print(f"  Covariate window: {COVAR_WINDOW_H}h (symmetric for treated/control)")
+    print(f"  Onset thresholds reported: {ONSET_THRESHOLDS}")
+    print("  R script applies onset filter + temporal alignment post-match")
     print("=" * 70)
 
     args = [a.lower() for a in sys.argv[1:]]
