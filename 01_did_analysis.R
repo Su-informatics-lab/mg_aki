@@ -190,11 +190,8 @@ run_analysis <- function(db, mode="primary") {
   # Build imputation dataset: PS covars + treatment + outcome proxy
   # Include delta_cr at 24h as auxiliary (improves imputation under MAR)
   dcr_aux <- build_dcr(combined, cr_all, PRIMARY_T)
-  combined$delta_cr_aux <- NA
-  combined$delta_cr_aux[match(dcr_aux$pid, combined$pid)] <- dcr_aux$delta_cr
 
   # Variables for imputation model
-  imp_vars <- unique(c(ps_vars, "treated", "delta_cr_aux"))
   imp_vars <- intersect(imp_vars, names(combined))
   imp_data <- combined[, imp_vars]
 
@@ -207,8 +204,6 @@ run_analysis <- function(db, mode="primary") {
     if (all(imp_data[[v]] %in% c(0,1,NA))) meth[v] <- "logreg"
     else meth[v] <- "pmm"
   }
-  # Don't impute delta_cr_aux — it's auxiliary
-  meth["delta_cr_aux"] <- ""
 
   cat(sprintf("  Imputation methods: %s\n",
               paste(sprintf("%s=%s", names(meth[meth!=""]), meth[meth!=""]), collapse=", ")))
