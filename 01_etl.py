@@ -155,17 +155,13 @@ def save_all_patients(treated, control, db_tag):
         if c not in control.columns:
             control[c] = np.nan
 
+    # Rename pid BEFORE selecting columns
+    treated = treated.rename(columns={pid_col: "pid"})
+    control = control.rename(columns={pid_col: "pid"})
     keep = [
         c for c in ALL_PATIENTS_COLS if c in treated.columns and c in control.columns
     ]
-    # Remap pid
-    t = treated.rename(columns={pid_col: "pid"})[
-        [c if c != pid_col else "pid" for c in keep]
-    ]
-    c = control.rename(columns={pid_col: "pid"})[
-        [c if c != pid_col else "pid" for c in keep]
-    ]
-    all_pts = pd.concat([t, c], ignore_index=True)
+    all_pts = pd.concat([treated[keep], control[keep]], ignore_index=True)
 
     tag = db_tag.lower()
     path = os.path.join(RESULTS, f"did_all_{tag}.csv")
