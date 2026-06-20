@@ -21,6 +21,27 @@ WINDOW  <- 6
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
+safe_coeftest <- function(fit, varname = "treated") {
+  # Try HC1 robust SEs, suppress warnings (singular hat matrix)
+  ct <- tryCatch(suppressWarnings(coeftest(fit, vcov. = vcovHC(fit, type = "HC1"))),
+                 error = function(e) NULL)
+  # Validate: must be a matrix with varname row, no NaN in that row
+  ok <- !is.null(ct) && is.matrix(ct) && varname %in% rownames(ct) &&
+        ncol(ct) >= 4 && !any(is.nan(ct[varname, ]))
+  if (ok) return(ct)
+  # Fallback: plain OLS SEs
+  ct <- tryCatch(coeftest(fit), error = function(e) NULL)
+  if (!is.null(ct) && is.matrix(ct) && varname %in% rownames(ct) && ncol(ct) >= 4)
+    return(ct)
+  NULL
+}
+
+extract_coef <- function(ct, varname = "treated") {
+  if (is.null(ct)) return(NULL)
+  # Access by index (1=Estimate, 2=SE, 4=P) for robustness against column name variation
+  list(est = ct[varname, 1], se = ct[varname, 2], p = ct[varname, ncol(ct)])
+}
+
 did_dr <- function(df, covars = NULL, outcome = "delta_cr") {
   if (!outcome %in% names(df)) return(NULL)
   d <- df[!is.na(df[[outcome]]),]
@@ -47,13 +68,11 @@ did_dr <- function(df, covars = NULL, outcome = "delta_cr") {
 
   fit <- tryCatch(lm(fml, data = d), error = function(e) NULL)
   if (is.null(fit)) return(NULL)
-  ct <- tryCatch(coeftest(fit, vcov. = vcovHC(fit, type = "HC1")),
-                 error = function(e) tryCatch(coeftest(fit), error = function(e2) NULL))
-  if (is.null(ct) || !"treated" %in% rownames(ct)) return(NULL)
+  cc <- extract_coef(safe_coeftest(fit))
+  if (is.null(cc)) return(NULL)
 
-  est <- ct["treated", "Estimate"]; se <- ct["treated", "Std. Error"]
-  list(did = est, se = se, p = ct["treated", "Pr(>|t|)"],
-       ci_lo = est - 1.96 * se, ci_hi = est + 1.96 * se,
+  list(did = cc$est, se = cc$se, p = cc$p,
+       ci_lo = cc$est - 1.96 * cc$se, ci_hi = cc$est + 1.96 * cc$se,
        n_trt = nt, n_ctl = nc)
 }
 
@@ -70,15 +89,13 @@ aki_rd <- function(df, outcome = "aki1") {
   fit <- tryCatch(lm(as.formula(paste(outcome, "~ treated")), data = d),
                   error = function(e) NULL)
   if (is.null(fit)) return(NULL)
-  ct <- tryCatch(coeftest(fit, vcov. = vcovHC(fit, type = "HC1")),
-                 error = function(e) tryCatch(coeftest(fit), error = function(e2) NULL))
-  if (is.null(ct) || !"treated" %in% rownames(ct)) return(NULL)
+  cc <- extract_coef(safe_coeftest(fit))
+  if (is.null(cc)) return(NULL)
 
-  se <- ct["treated", "Std. Error"]; p <- ct["treated", "Pr(>|t|)"]
-  nnt <- if (rd < 0 && p < 0.05) round(1 / abs(rd)) else NA
-  nnh <- if (rd > 0 && p < 0.05) round(1 / abs(rd)) else NA
-  list(rate_trt = r1, rate_ctl = r0, rd = rd, se = se, p = p,
-       ci_lo = rd - 1.96 * se, ci_hi = rd + 1.96 * se,
+  nnt <- if (rd < 0 && cc$p < 0.05) round(1 / abs(rd)) else NA
+  nnh <- if (rd > 0 && cc$p < 0.05) round(1 / abs(rd)) else NA
+  list(rate_trt = r1, rate_ctl = r0, rd = rd, se = cc$se, p = cc$p,
+       ci_lo = rd - 1.96 * cc$se, ci_hi = rd + 1.96 * cc$se,
        nnt = nnt, nnh = nnh, n_trt = nt, n_ctl = nc)
 }
 
@@ -104,13 +121,15 @@ interaction_p <- function(dat, moderator, outcome = "delta_cr") {
   fml <- as.formula(paste(outcome, "~ treated *", moderator))
   fit <- tryCatch(lm(fml, data = d), error = function(e) NULL)
   if (is.null(fit)) return(NA)
-  ct <- tryCatch(coeftest(fit, vcov. = vcovHC(fit, type = "HC1")),
+  ct <- tryCatch(suppressWarnings(coeftest(fit, vcov. = vcovHC(fit, type = "HC1"))),
                  error = function(e) tryCatch(coeftest(fit), error = function(e2) NULL))
-  if (is.null(ct)) return(NA)
+  if (is.null(ct) || !is.matrix(ct)) return(NA)
   ir <- grep(paste0("treated:", moderator), rownames(ct))
   if (length(ir) == 0) ir <- grep(paste0(moderator, ":treated"), rownames(ct))
   if (length(ir) == 0) return(NA)
-  ct[ir[1], "Pr(>|t|)"]
+  p <- ct[ir[1], ncol(ct)]
+  if (is.nan(p)) return(NA)
+  p
 }
 
 fmt_sig  <- function(p) if (!is.na(p) && p < 0.05) " *" else "  "
