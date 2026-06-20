@@ -338,8 +338,51 @@ TRANSFUSION_PATTERNS = [
 # ═══════════════════════════════════════════════════════════════════
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════
+try:
+    import duckdb
+except ImportError:
+    raise ImportError("pip install duckdb --break-system-packages")
+
+
 def gz(p):
     return p if os.path.exists(p) else p.replace(".csv.gz", ".csv")
+
+
+def _resolve(root, name):
+    """Find CSV or CSV.GZ file path."""
+    for ext in [".csv.gz", ".csv"]:
+        p = os.path.join(root, name + ext)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def load_filtered(name, root, pids=None, pid_col="patientunitstayid", extra_where=None):
+    """Load CSV via DuckDB with predicate pushdown on patient IDs.
+
+    Reduces memory from GBs to MBs by filtering at scan time.
+    """
+    p = _resolve(root, name)
+    if p is None:
+        print(f"  WARNING: {name} not found in {root}")
+        return pd.DataFrame()
+    con = duckdb.connect()
+    try:
+        clauses = []
+        if pids is not None:
+            pid_df = pd.DataFrame({"_pid": pd.array(list(pids), dtype="int64")})
+            con.register("_pid_filter", pid_df)
+            clauses.append(f'"{pid_col}" IN (SELECT _pid FROM _pid_filter)')
+        if extra_where:
+            clauses.append(f"({extra_where})")
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        sql = f"SELECT * FROM read_csv_auto('{p}', header=true, ignore_errors=true){where}"
+        df = con.execute(sql).df()
+        df.columns = df.columns.str.lower()
+        print(f"  Loaded {name} (DuckDB): {len(df):,}")
+        return df
+    finally:
+        con.close()
 
 
 def matches_any(series, patterns):
@@ -737,7 +780,7 @@ def extract_secondary_mimic(treated, control, dx):
 def run_eicu():
     SEP = "=" * 70
     print(
-        f"\n{SEP}\neICU-CRD: DiD Cohort Construction (v3)\n  Data: {EICU_ROOT}\n{SEP}"
+        f"\n{SEP}\neICU-CRD: DiD Cohort Construction (v4)\n  Data: {EICU_ROOT}\n{SEP}"
     )
     consort = {}
 
@@ -752,33 +795,11 @@ def run_eicu():
         print(f"  WARNING: {name} not found")
         return pd.DataFrame()
 
+    # ── Phase 1: patient (small, pandas) → compute cardiac pids ──
     patient = ld("patient")
-    lab = ld("lab")
-    med = ld(
-        "medication",
-        usecols=[
-            "patientunitstayid",
-            "drugstartoffset",
-            "drugstopoffset",
-            "drugname",
-            "drugordercancelled",
-            "routeadmin",
-            "dosage",
-        ],
-    )
-    inf = ld("infusionDrug")
-    diag = ld("diagnosis")
-    pasthx = ld("pastHistory")
-    tx_tbl = ld("treatment")
-    vital = ld(
-        "vitalPeriodic", usecols=["patientunitstayid", "observationoffset", "heartrate"]
-    )
-    admDrug = ld("admissionDrug")  # ◆ v3: home medication reconciliation
-
     consort["total_icu"] = len(patient)
     print(f"\n  Total ICU admissions: {len(patient):,}")
 
-    # ── cardiac surgery, adult, first stay ───────────────────────
     mask = matches_any(
         patient.apacheadmissiondx, CARDIAC_DX_PATTERNS
     ) | patient.unittype.isin(CARDIAC_UNIT_TYPES)
@@ -797,6 +818,22 @@ def run_eicu():
     pids = set(cardiac.patientunitstayid)
     consort["cardiac_adult_first"] = len(cardiac)
     print(f"  Cardiac surgery, adult, 1st stay: {len(cardiac):,}")
+
+    # ── Phase 2: big tables via DuckDB (pid-filtered) ────────────
+    print(
+        f"\n  Loading big tables via DuckDB (filtered to {len(pids):,} cardiac pids)..."
+    )
+    lab = load_filtered("lab", EICU_ROOT, pids)
+    med = load_filtered("medication", EICU_ROOT, pids)
+    inf = load_filtered("infusionDrug", EICU_ROOT, pids)
+    diag = load_filtered("diagnosis", EICU_ROOT, pids)
+    pasthx = load_filtered("pastHistory", EICU_ROOT, pids)
+    vital = load_filtered("vitalPeriodic", EICU_ROOT, pids)
+    tx_tbl = load_filtered("treatment", EICU_ROOT, pids)
+    admDrug = load_filtered("admissionDrug", EICU_ROOT, pids)
+
+    if "drugordercancelled" not in med.columns:
+        med["drugordercancelled"] = "No"
 
     # ── ESKD exclusion ───────────────────────────────────────────
     eskd = set()
@@ -1320,10 +1357,11 @@ def run_eicu():
 def run_mimic():
     SEP = "=" * 70
     print(
-        f"\n{SEP}\nMIMIC-IV: DiD Cohort Construction (v3)\n  Data: {MIMIC_ROOT}\n{SEP}"
+        f"\n{SEP}\nMIMIC-IV: DiD Cohort Construction (v4)\n  Data: {MIMIC_ROOT}\n{SEP}"
     )
     consort = {}
 
+    # ── Phase 1: small tables (pandas) → compute cardiac stays ───
     patients = pd.read_csv(gz(f"{MIMIC_HOSP}/patients.csv.gz"))
     admissions = pd.read_csv(gz(f"{MIMIC_HOSP}/admissions.csv.gz"))
     icustays = pd.read_csv(gz(f"{MIMIC_ICU}/icustays.csv.gz"))
@@ -1333,50 +1371,6 @@ def run_mimic():
         gz(f"{MIMIC_HOSP}/prescriptions.csv.gz"),
         usecols=["subject_id", "hadm_id", "drug", "starttime", "stoptime", "route"],
     )
-
-    print("  Loading labevents (chunked)...")
-    needed = set(
-        LAB_CR_MIMIC + LAB_MG_MIMIC + LAB_K_MIMIC + LAB_CA_MIMIC + LAB_LAC_MIMIC
-    )
-    lc = []
-    for ch in pd.read_csv(
-        gz(f"{MIMIC_HOSP}/labevents.csv.gz"),
-        usecols=["subject_id", "hadm_id", "itemid", "charttime", "valuenum"],
-        dtype={"subject_id": int, "hadm_id": "Int64", "itemid": int},
-        chunksize=5_000_000,
-    ):
-        lc.append(ch[ch.itemid.isin(needed)])
-    labs = pd.concat(lc, ignore_index=True)
-    print(f"  labevents (filtered): {len(labs):,}")
-
-    print("  Loading inputevents...")
-    _ie_want = {
-        "subject_id",
-        "stay_id",
-        "hadm_id",
-        "itemid",
-        "starttime",
-        "amount",
-        "amountuom",
-        "statusdescription",
-    }
-    ie = pd.read_csv(
-        gz(f"{MIMIC_ICU}/inputevents.csv.gz"),
-        usecols=lambda c: c in _ie_want,
-        low_memory=False,
-    )
-    print(f"  inputevents: {len(ie):,}")
-
-    print("  Loading chartevents (HR only)...")
-    ce_chunks = []
-    for ch in pd.read_csv(
-        gz(f"{MIMIC_ICU}/chartevents.csv.gz"),
-        usecols=["stay_id", "itemid", "charttime", "valuenum"],
-        chunksize=10_000_000,
-    ):
-        ce_chunks.append(ch[ch.itemid.isin(VITAL_HR_MIMIC)])
-    ce_hr = pd.concat(ce_chunks, ignore_index=True) if ce_chunks else pd.DataFrame()
-    print(f"  chartevents HR: {len(ce_hr):,}")
 
     consort["total_icu"] = len(icustays)
     print(f"\n  Total ICU stays: {len(icustays):,}")
@@ -1447,6 +1441,35 @@ def run_mimic():
     hadms = set(cardiac.hadm_id.dropna().astype(int))
     consort["post_eskd"] = len(cardiac)
     print(f"  ESKD excluded: {len(eskd_stays):,} -> remaining: {len(cardiac):,}")
+
+    # ── Phase 2: big tables via DuckDB (filtered) ────────────────
+    needed_items = set(
+        LAB_CR_MIMIC + LAB_MG_MIMIC + LAB_K_MIMIC + LAB_CA_MIMIC + LAB_LAC_MIMIC
+    )
+    item_list = ",".join(str(i) for i in needed_items)
+    print(f"\n  Loading big tables via DuckDB (filtered to {len(hadms):,} hadm_ids)...")
+
+    labs = load_filtered(
+        "labevents",
+        MIMIC_HOSP,
+        hadms,
+        pid_col="hadm_id",
+        extra_where=f"itemid IN ({item_list})",
+    )
+    print(f"  labevents (filtered): {len(labs):,}")
+
+    ie = load_filtered("inputevents", MIMIC_ICU, stays, pid_col="stay_id")
+    print(f"  inputevents (filtered): {len(ie):,}")
+
+    hr_items = ",".join(str(i) for i in VITAL_HR_MIMIC)
+    ce_hr = load_filtered(
+        "chartevents",
+        MIMIC_ICU,
+        stays,
+        pid_col="stay_id",
+        extra_where=f"itemid IN ({hr_items})",
+    )
+    print(f"  chartevents HR (filtered): {len(ce_hr):,}")
 
     print("\n-- IV Magnesium identification --")
     ie_mg = ie[(ie.stay_id.isin(stays)) & (ie.itemid.isin(MG_SUPP_ITEMS_MIMIC))].copy()
