@@ -348,11 +348,14 @@ def run_eicu():
         (cr_t.labresultoffset >= cr_t.hosp_off - 360)
         & (cr_t.labresultoffset <= cr_t.hosp_off + 360)
         & (cr_t.labresultoffset < 0)
-    ]
-    cr_hosp = cr_h.sort_values(
-        ["patientunitstayid", cr_h.labresultoffset.sub(cr_h.hosp_off).abs()]
+    ].copy()
+    cr_h["_dist"] = (cr_h.labresultoffset - cr_h.hosp_off).abs()
+    cr_hosp = (
+        cr_h.sort_values(["patientunitstayid", "_dist"])
+        .groupby("patientunitstayid")
+        .first()
+        .reset_index()
     )
-    cr_hosp = cr_hosp.groupby("patientunitstayid").first().reset_index()
     rescue_pids = set(cr_hosp.patientunitstayid) - has_cr_pre
     n_rescue = len(rescue_pids & treated_pids)
     consort["treated_hosp_fallback"] = n_rescue
