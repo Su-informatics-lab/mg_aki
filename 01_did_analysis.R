@@ -270,7 +270,7 @@ run_analysis <- function(db, mode="primary") {
     for (mg_nm in c("<1.8","1.8-2.0","2.0-2.3",">2.3")) {
       bins <- list("<1.8"=c(0,1.8),"1.8-2.0"=c(1.8,2.0),"2.0-2.3"=c(2.0,2.3),">2.3"=c(2.3,99))
       lo <- bins[[mg_nm]][1]; hi <- bins[[mg_nm]][2]
-      sub <- d24[d24$first_mg_value>=lo & d24$first_mg_value<hi,]
+      sub <- d24[!is.na(d24$first_mg_value) & d24$first_mg_value>=lo & d24$first_mg_value<hi,]
       r <- if(sum(sub$treated==1)>=10 && sum(sub$treated==0)>=10) did_dr(sub,ps_avail) else NULL
       if(!is.null(r)) cat(sprintf("    %s: n=%d/%d, DiD=%+.4f, P=%.4f%s\n",
                                    mg_nm,r$n_trt,r$n_ctl,r$did,r$p,if(r$p<0.05)" *"else""))
