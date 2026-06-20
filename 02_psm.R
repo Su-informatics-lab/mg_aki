@@ -1,0 +1,397 @@
+#!/usr/bin/env Rscript
+# ============================================================================
+# 02_psm.R — Risk-Set PSM with Temporal Alignment (v5 Design)
+#
+# Runs BOTH lab timing versions (last = primary, first = sensitivity)
+# and compares results side-by-side.
+#
+# Design:
+#   1. Pre-compute first+last lab values from did_labs_all
+#   2. Pre-compute risk sets (shared, timing-independent)
+#   3. For each timing {last, first}:
+#      a. MICE m=20 on PS covariates
+#      b. Per imputation: fit PS → risk-set match → compute ΔCr
+#      c. Pool with Rubin's rules
+#   4. Compare last vs first results
+#
+# Usage: Rscript 02_psm.R eicu
+#        Rscript 02_psm.R mimic
+# ============================================================================
+
+suppressPackageStartupMessages({ library(sandwich); library(lmtest); library(mice) })
+
+RESULTS    <- path.expand("~/mg_aki/results")
+PRIMARY_H  <- 48       # primary: ΔCr at T₀ + 48h
+CR_WINDOW  <- 12       # ±12h tolerance for Cr lookup
+CALIPER_SD <- 0.2
+M_IMP      <- 20
+TARGETS    <- c(6, 12, 18, 24, 30, 36, 42, 48)
+
+# PS: time-invariant covariates (always in model)
+PS_FIXED <- c("age","is_female","bmi",
+              "surg_cabg","surg_valve","surg_combined",
+              "heart_failure","hypertension","diabetes","ckd",
+              "copd","pvd","stroke","liver_disease","egfr",
+              "ppi_chronic","loop_diuretic_chronic","acei_arb_chronic","nsaid_chronic")
+
+# PS: time-varying labs (prefix with first_ or last_ depending on timing)
+PS_LAB_BASES <- c("magnesium","potassium","calcium","lactate","heartrate")
+
+# ═══════════════════════════════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════════════════════════════
+
+find_cr <- function(cr_pt, target_h, window = CR_WINDOW) {
+  if (is.null(cr_pt) || nrow(cr_pt) == 0) return(c(NA, NA))
+  cand <- cr_pt[cr_pt$offset_h >= (target_h - window) &
+                cr_pt$offset_h <= (target_h + window), ]
+  if (nrow(cand) == 0) return(c(NA, NA))
+  best <- cand[which.min(abs(cand$offset_h - target_h)), ]
+  c(best$labresult, best$offset_h)
+}
+
+find_cr_pre <- function(cr_pt, t_h) {
+  if (is.null(cr_pt) || nrow(cr_pt) == 0) return(c(NA, NA))
+  cand <- cr_pt[cr_pt$offset_h >= 0 & cr_pt$offset_h < t_h, ]
+  if (nrow(cand) == 0) return(c(NA, NA))
+  best <- cand[which.max(cand$offset_h), ]
+  c(best$labresult, best$offset_h)
+}
+
+safe_coeftest <- function(fit) {
+  ct <- tryCatch(suppressWarnings(coeftest(fit, vcov. = vcovHC(fit, type = "HC1"))),
+                 error = function(e) NULL)
+  if (!is.null(ct) && is.matrix(ct) && "treated" %in% rownames(ct) &&
+      ncol(ct) >= 4 && !any(is.nan(ct["treated", ]))) return(ct)
+  tryCatch(coeftest(fit), error = function(e) NULL)
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════════
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) < 1) { cat("Usage: Rscript 02_psm.R <db>\n"); quit(status = 1) }
+db <- toupper(args[1]); tag <- tolower(db)
+
+SEP <- paste(rep("=", 70), collapse = "")
+cat(sprintf("\n%s\n02_psm.R — Risk-Set PSM: %s\n%s\n", SEP, db, SEP))
+
+# ── Load data ─────────────────────────────────────────────────────────────
+all_pts <- read.csv(file.path(RESULTS, sprintf("did_all_%s.csv", tag)), stringsAsFactors = FALSE)
+cr_all  <- read.csv(file.path(RESULTS, sprintf("did_cr_all_%s.csv", tag)), stringsAsFactors = FALSE)
+
+# Normalize cr_all
+cr_id <- if ("patientunitstayid" %in% names(cr_all)) "patientunitstayid" else "stay_id"
+cr_all$pid <- cr_all[[cr_id]]
+if (!"labresultoffset" %in% names(cr_all)) cr_all$labresultoffset <- cr_all$offset_min
+if (!"offset_h" %in% names(cr_all)) cr_all$offset_h <- cr_all$labresultoffset / 60
+cr_all <- cr_all[order(cr_all$pid, cr_all$offset_h), ]
+
+# Load labs (skip HR for now — 15M rows too large; load electrolytes only)
+cat("  Loading labs (electrolytes only, skipping HR)...\n")
+labs_raw <- read.csv(file.path(RESULTS, sprintf("did_labs_all_%s.csv", tag)), stringsAsFactors = FALSE)
+pid_col_lab <- if ("patientunitstayid" %in% names(labs_raw)) "patientunitstayid" else "stay_id"
+if (pid_col_lab %in% names(labs_raw)) labs_raw$pid <- labs_raw[[pid_col_lab]]
+# Filter: electrolytes + HR (subsample HR to first per hour to reduce size)
+labs_elec <- labs_raw[labs_raw$lab_name %in% c("magnesium","potassium","calcium","lactate"), ]
+labs_hr   <- labs_raw[labs_raw$lab_name == "heartrate", ]
+if (nrow(labs_hr) > 500000) {
+  labs_hr$hour_bin <- floor(labs_hr$offset_h)
+  labs_hr <- labs_hr[order(labs_hr$pid, labs_hr$offset_h), ]
+  labs_hr <- labs_hr[!duplicated(paste(labs_hr$pid, labs_hr$hour_bin)), ]
+  labs_hr$hour_bin <- NULL
+  cat(sprintf("    HR downsampled: %d → %d\n", sum(labs_raw$lab_name=="heartrate"), nrow(labs_hr)))
+}
+labs <- rbind(labs_elec, labs_hr)
+rm(labs_raw, labs_elec, labs_hr); gc()
+
+N <- nrow(all_pts)
+trt_idx <- which(all_pts$treated == 1 & !is.na(all_pts$mg_offset_h))
+n_trt <- length(trt_idx)
+cat(sprintf("  Patients: %d (%d treated, %d control)\n", N, n_trt, N - n_trt))
+
+# ── Pre-compute per-patient lab values (BOTH first and last) ──────────────
+cat("  Computing first/last lab values...\n")
+for (ln in c("magnesium","potassium","calcium","lactate","heartrate")) {
+  sub <- labs[labs$lab_name == ln, ]
+  if (nrow(sub) == 0) next
+  sub <- merge(sub, all_pts[, c("pid","mg_offset_h")], by = "pid")
+  # For treated: [0, t_mg); for controls: [0, ∞)
+  sub <- sub[sub$offset_h >= 0 & (is.na(sub$mg_offset_h) | sub$offset_h < sub$mg_offset_h), ]
+  if (nrow(sub) == 0) next
+
+  # First
+  s1 <- sub[order(sub$offset_h), ]
+  s1 <- s1[!duplicated(s1$pid), c("pid","value","offset_h")]
+  names(s1) <- c("pid", paste0("first_",ln), paste0("first_",ln,"_time_h"))
+  all_pts <- merge(all_pts, s1, by = "pid", all.x = TRUE)
+
+  # Last
+  s2 <- sub[order(-sub$offset_h), ]
+  s2 <- s2[!duplicated(s2$pid), c("pid","value","offset_h")]
+  names(s2) <- c("pid", paste0("last_",ln), paste0("last_",ln,"_time_h"))
+  all_pts <- merge(all_pts, s2, by = "pid", all.x = TRUE)
+
+  nf <- sum(!is.na(all_pts[[paste0("first_",ln)]]))
+  nl <- sum(!is.na(all_pts[[paste0("last_",ln)]]))
+  cat(sprintf("    %s: first=%d (%.0f%%), last=%d (%.0f%%)\n",
+              ln, nf, 100*nf/N, nl, 100*nl/N))
+}
+
+# Lactate missing indicator
+all_pts$first_lactate_missing <- as.integer(is.na(all_pts$first_lactate))
+all_pts$last_lactate_missing  <- as.integer(is.na(all_pts$last_lactate))
+
+# ── Pre-compute risk sets (timing-independent) ────────────────────────────
+cat("  Pre-computing risk sets...\n")
+
+# Per-patient Cr list (for AKI check + outcome computation)
+cr_list <- split(cr_all[, c("labresult","offset_h")], cr_all$pid)
+
+# Earliest Cr time
+earliest_cr <- sapply(cr_list, function(x) min(x$offset_h, na.rm = TRUE))
+all_pts$earliest_cr_h <- earliest_cr[as.character(all_pts$pid)]
+all_pts$earliest_cr_h[is.na(all_pts$earliest_cr_h)] <- Inf
+
+# First AKI time
+cat("    Computing first AKI time...\n")
+first_aki <- sapply(cr_list, function(cr_pt) {
+  if (nrow(cr_pt) < 2) return(NA_real_)
+  cr_pt <- cr_pt[order(cr_pt$offset_h), ]
+  bl <- cr_pt$labresult[1]
+  if (is.na(bl) || bl <= 0) return(NA_real_)
+  for (k in 2:nrow(cr_pt)) {
+    d <- cr_pt$labresult[k] - bl
+    r <- cr_pt$labresult[k] / bl
+    if (!is.na(d) && (d >= 0.3 || (!is.na(r) && r >= 1.5)))
+      return(cr_pt$offset_h[k])
+  }
+  NA_real_
+})
+all_pts$first_aki_h <- first_aki[as.character(all_pts$pid)]
+
+# Exit time: when patient becomes ineligible as control
+all_pts$exit_time <- pmin(
+  all_pts$icu_discharge_h,
+  ifelse(is.na(all_pts$mg_offset_h), Inf, all_pts$mg_offset_h),
+  ifelse(is.na(all_pts$first_aki_h), Inf, all_pts$first_aki_h),
+  na.rm = TRUE)
+
+cat(sprintf("    Median exit_time (controls): %.1fh\n",
+            median(all_pts$exit_time[all_pts$treated == 0], na.rm = TRUE)))
+
+# Pre-compute risk set INDICES for each treated patient
+# (These don't depend on imputation or lab timing)
+cat("    Building risk set indices...\n")
+trt_pids <- all_pts$pid[trt_idx]
+trt_tmg  <- all_pts$mg_offset_h[trt_idx]
+risk_sets <- vector("list", n_trt)
+
+for (k in seq_len(n_trt)) {
+  t_mg <- trt_tmg[k]
+  eligible <- which(
+    all_pts$exit_time > t_mg &
+    all_pts$earliest_cr_h <= t_mg &
+    all_pts$pid != trt_pids[k])
+  risk_sets[[k]] <- eligible
+}
+
+rs_sizes <- vapply(risk_sets, length, integer(1))
+cat(sprintf("    Risk set sizes: median=%d, IQR=[%d,%d], min=%d, empty=%d\n",
+            median(rs_sizes), quantile(rs_sizes, 0.25), quantile(rs_sizes, 0.75),
+            min(rs_sizes), sum(rs_sizes == 0)))
+
+# ═══════════════════════════════════════════════════════════════════
+# RUN ONE LAB TIMING VERSION
+# ═══════════════════════════════════════════════════════════════════
+run_timing <- function(timing) {
+  cat(sprintf("\n%s\n  LAB TIMING: %s\n%s\n", SEP, toupper(timing), SEP))
+
+  # Select PS covariates
+  lab_cols <- paste0(timing, "_", PS_LAB_BASES)
+  lac_miss <- paste0(timing, "_lactate_missing")
+  ps_vars <- c(intersect(PS_FIXED, names(all_pts)),
+               intersect(c(lab_cols, lac_miss), names(all_pts)))
+  ps_vars <- ps_vars[vapply(ps_vars, function(v) {
+    x <- all_pts[[v]]; !all(is.na(x)) && var(x, na.rm = TRUE) > 1e-10
+  }, logical(1))]
+  cat(sprintf("  PS covariates (%d): %s\n", length(ps_vars), paste(ps_vars, collapse=", ")))
+
+  # ── MICE ──────────────────────────────────────────────────────
+  to_impute <- ps_vars[vapply(ps_vars, function(v) any(is.na(all_pts[[v]])), logical(1))]
+  cat(sprintf("  MICE m=%d on %d vars: %s\n", M_IMP, length(to_impute), paste(to_impute, collapse=", ")))
+
+  if (length(to_impute) > 0) {
+    mice_df <- all_pts[, c("treated", ps_vars)]
+    meth <- rep("", ncol(mice_df)); names(meth) <- names(mice_df)
+    for (v in to_impute) meth[v] <- "pmm"
+    imp <- mice(mice_df, m = M_IMP, method = meth, printFlag = FALSE, maxit = 10)
+    cat(sprintf("  MICE done. Logged events: %d\n", nrow(imp$loggedEvents)))
+  } else {
+    imp <- NULL
+  }
+
+  # ── Per-imputation matching + outcome ─────────────────────────
+  all_dids <- list()
+
+  for (m_idx in 1:M_IMP) {
+    if (m_idx %% 5 == 1) cat(sprintf("  m=%d...", m_idx))
+
+    # Get imputed data
+    d <- all_pts  # copy
+    if (!is.null(imp)) {
+      imp_df <- complete(imp, m_idx)
+      for (v in to_impute) d[[v]] <- imp_df[[v]]
+    }
+
+    # Fit global PS
+    ps_fml <- as.formula(paste("treated ~", paste(ps_vars, collapse = "+")))
+    ps_fit <- tryCatch(glm(ps_fml, data = d, family = binomial()),
+                       error = function(e) { cat("PS failed\n"); return(NULL) })
+    if (is.null(ps_fit)) next
+    d$ps <- predict(ps_fit, type = "response")
+    caliper <- CALIPER_SD * sd(d$ps, na.rm = TRUE)
+
+    # Risk-set matching (with replacement)
+    match_trt <- integer(n_trt); match_ctl <- integer(n_trt)
+    match_ps  <- numeric(n_trt); matched <- logical(n_trt)
+
+    for (k in seq_len(n_trt)) {
+      rs <- risk_sets[[k]]
+      if (length(rs) == 0) next
+      ps_i <- d$ps[trt_idx[k]]
+      ps_dist <- abs(d$ps[rs] - ps_i)
+      within_cal <- which(ps_dist <= caliper)
+      if (length(within_cal) == 0) next
+      best <- within_cal[which.min(ps_dist[within_cal])]
+      match_trt[k] <- trt_idx[k]
+      match_ctl[k] <- rs[best]
+      match_ps[k]  <- ps_dist[best]
+      matched[k]   <- TRUE
+    }
+
+    n_matched <- sum(matched)
+    if (n_matched < 50) next
+
+    # Compute outcomes
+    for (target_h in TARGETS) {
+      dcr_trt <- dcr_ctl <- numeric(n_matched)
+      valid <- logical(n_matched); idx <- 0
+      matched_k <- which(matched)
+
+      for (kk in matched_k) {
+        idx <- idx + 1
+        tpid <- as.character(all_pts$pid[match_trt[kk]])
+        cpid <- as.character(all_pts$pid[match_ctl[kk]])
+        t_mg <- trt_tmg[kk]
+
+        pre_t <- find_cr_pre(cr_list[[tpid]], t_mg)
+        pre_c <- find_cr_pre(cr_list[[cpid]], t_mg)
+        post_t <- find_cr(cr_list[[tpid]], t_mg + target_h)
+        post_c <- find_cr(cr_list[[cpid]], t_mg + target_h)
+
+        if (any(is.na(c(pre_t[1], pre_c[1], post_t[1], post_c[1])))) {
+          valid[idx] <- FALSE; next
+        }
+        dcr_trt[idx] <- post_t[1] - pre_t[1]
+        dcr_ctl[idx] <- post_c[1] - pre_c[1]
+        valid[idx] <- TRUE
+      }
+
+      n_valid <- sum(valid)
+      if (n_valid < 30) {
+        all_dids[[length(all_dids)+1]] <- data.frame(
+          timing=timing, m=m_idx, target_h=target_h, n=n_valid,
+          did=NA, se=NA, stringsAsFactors=FALSE)
+        next
+      }
+
+      pair_df <- data.frame(
+        delta_cr = c(dcr_trt[valid], dcr_ctl[valid]),
+        treated = rep(c(1,0), each = n_valid),
+        stringsAsFactors = FALSE)
+      fit <- lm(delta_cr ~ treated, data = pair_df)
+      ct <- safe_coeftest(fit)
+      est <- if (!is.null(ct) && "treated" %in% rownames(ct)) ct["treated",1] else coef(fit)["treated"]
+      se  <- if (!is.null(ct) && "treated" %in% rownames(ct)) ct["treated",2] else NA
+
+      all_dids[[length(all_dids)+1]] <- data.frame(
+        timing=timing, m=m_idx, target_h=target_h, n=n_valid,
+        did=est, se=se, n_matched=n_matched, stringsAsFactors=FALSE)
+    }
+  }
+  cat("\n")
+
+  res <- do.call(rbind, all_dids)
+
+  # ── Rubin's rules pooling ─────────────────────────────────────
+  cat(sprintf("\n  ── POOLED (%s) ──\n", toupper(timing)))
+  cat("  target   DiD        SE       P        95%% CI                n    FMI\n")
+  cat("  ──────   ────────   ──────   ──────   ────────────────────   ───  ─────\n")
+
+  pooled <- list()
+  for (th in TARGETS) {
+    sub <- res[res$target_h == th & !is.na(res$did) & !is.na(res$se), ]
+    if (nrow(sub) < 2) {
+      cat(sprintf("  %4dh    (insufficient data)\n", th)); next
+    }
+    Q <- mean(sub$did); U <- mean(sub$se^2); B <- var(sub$did)
+    m_v <- nrow(sub)
+    T_var <- U + (1 + 1/m_v) * B; T_se <- sqrt(T_var)
+    lam <- ((1 + 1/m_v) * B) / T_var
+    df <- max(3, (m_v - 1) / lam^2)
+    p <- 2 * pt(abs(Q/T_se), df = df, lower.tail = FALSE)
+    ci_lo <- Q - qt(0.975, df) * T_se
+    ci_hi <- Q + qt(0.975, df) * T_se
+    sig <- if (!is.na(p) && p < 0.05) " *" else "  "
+    pri <- if (th == PRIMARY_H) " << PRIMARY" else ""
+    n_avg <- mean(sub$n)
+
+    cat(sprintf("  %4dh    %+.4f   %.4f   %.4f%s [%+.4f,%+.4f]   %3.0f  %.3f%s\n",
+                th, Q, T_se, p, sig, ci_lo, ci_hi, n_avg, lam, pri))
+    pooled[[length(pooled)+1]] <- data.frame(
+      timing=timing, target_h=th, did=Q, se=T_se, p=p,
+      ci_lo=ci_lo, ci_hi=ci_hi, fmi=lam, n_avg=n_avg, stringsAsFactors=FALSE)
+  }
+
+  # Quality metrics (from m=1)
+  m1 <- res[res$m == 1, ]
+  if (nrow(m1) > 0) {
+    cat(sprintf("\n  Matched (m=1): %d/%d (%.1f%%)\n",
+                m1$n_matched[1], n_trt, 100*m1$n_matched[1]/n_trt))
+  }
+
+  do.call(rbind, pooled)
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# RUN BOTH TIMINGS
+# ═══════════════════════════════════════════════════════════════════
+
+cat(sprintf("\n%s\n  RUNNING BOTH LAB TIMINGS\n%s\n", SEP, SEP))
+
+res_last  <- run_timing("last")
+res_first <- run_timing("first")
+
+# Save all results
+all_res <- rbind(res_last, res_first)
+write.csv(all_res, file.path(RESULTS, sprintf("did_riskset_%s.csv", tag)), row.names = FALSE)
+
+# ── Side-by-side comparison ───────────────────────────────────────────────
+cat(sprintf("\n%s\n  COMPARISON: LAST vs FIRST labs\n%s\n", SEP, SEP))
+cat("  target   LAST_DiD    P        FIRST_DiD   P        |diff|\n")
+cat("  ──────   ─────────   ──────   ─────────   ──────   ──────\n")
+
+for (th in TARGETS) {
+  rl <- res_last[res_last$target_h == th, ]
+  rf <- res_first[res_first$target_h == th, ]
+  if (nrow(rl) > 0 && nrow(rf) > 0) {
+    d <- abs(rl$did - rf$did)
+    pri <- if (th == PRIMARY_H) " << PRIMARY" else ""
+    cat(sprintf("  %4dh    %+.4f   %.4f   %+.4f   %.4f   %.4f%s\n",
+                th, rl$did, rl$p, rf$did, rf$p, d, pri))
+  }
+}
+
+cat(sprintf("\n%s\n02_psm.R — %s COMPLETE\n%s\n", SEP, db, SEP))
+cat(sprintf("  Output: did_riskset_%s.csv\n", tag))
