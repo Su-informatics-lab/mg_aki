@@ -1,14 +1,19 @@
 #!/usr/bin/env Rscript
 # ============================================================================
-# 03_hte.R — HTE with post-T₀ secondary outcomes (v5)
+# 03_hte.R — HTE with post-T₀ secondary outcomes (v5.1)
+#
+# AKI definition: Consolidated KDIGO (2012)
+#   ≤48h: ΔCr ≥ 0.3 OR ratio ≥ 1.5 (both criteria active)
+#   >48h: ratio ≥ 1.5 only (absolute criterion expired)
+#   UO criterion not used (unreliable in cardiac surgery ICU)
 #
 # Outcomes (all T₀-anchored):
 #   ΔCr 48h:        Cr at T₀+48h − Cr_pre
-#   48h AKI:        max Cr in [T₀, T₀+48h] − Cr_pre ≥ 0.3
-#   7d AKI:         max Cr in [T₀, T₀+7d] / Cr_pre ≥ 1.5
-#   Mortality:      per-stay (valid: patient alive at T₀ by construction)
-#   POAF/Enceph/VA: eICU: re-extracted post-T₀ within 7d from raw dx table
-#                   MIMIC: hospitalization-level ICD (no timing, caveat noted)
+#   48h AKI:        consolidated KDIGO within 48h of T₀
+#   7d AKI:         consolidated KDIGO within 7d of T₀
+#   Mortality:      per-stay (patient alive at T₀ by construction)
+#   POAF/Enceph/VA: eICU: post-T₀ from raw dx table (7d window)
+#                   MIMIC: hospitalization-level ICD (no T₀ filter)
 #
 # Usage: Rscript 03_hte.R mimic
 #        Rscript 03_hte.R eicu
@@ -240,11 +245,18 @@ for(i in seq_len(nrow(pairs))){
   dcr48_t<-{v<-find_cr(cr_list[[tp]],tmg+48);if(!is.na(v)&&!is.na(cr_pre_t))v-cr_pre_t else NA}
   dcr48_c<-{v<-find_cr(cr_list[[cp]],tmg+48);if(!is.na(v)&&!is.na(cr_pre_c))v-cr_pre_c else NA}
   m48t<-max_cr_win(cr_list[[tp]],tmg,48);m48c<-max_cr_win(cr_list[[cp]],tmg,48)
-  aki48_t<-as.integer(!is.na(m48t)&&!is.na(cr_pre_t)&&(m48t-cr_pre_t)>=0.3)
-  aki48_c<-as.integer(!is.na(m48c)&&!is.na(cr_pre_c)&&(m48c-cr_pre_c)>=0.3)
   m7t<-max_cr_win(cr_list[[tp]],tmg,168);m7c<-max_cr_win(cr_list[[cp]],tmg,168)
-  aki7_t<-as.integer(!is.na(m7t)&&!is.na(cr_pre_t)&&cr_pre_t>0&&(m7t/cr_pre_t)>=1.5)
-  aki7_c<-as.integer(!is.na(m7c)&&!is.na(cr_pre_c)&&cr_pre_c>0&&(m7c/cr_pre_c)>=1.5)
+  # Consolidated KDIGO: absolute (≥0.3) within 48h, ratio (≥1.5) within 7d
+  # 48h AKI: both criteria active (using max Cr within 48h)
+  aki48_t<-as.integer(!is.na(m48t)&&!is.na(cr_pre_t)&&
+    ((m48t-cr_pre_t)>=0.3||(cr_pre_t>0&&m48t/cr_pre_t>=1.5)))
+  aki48_c<-as.integer(!is.na(m48c)&&!is.na(cr_pre_c)&&
+    ((m48c-cr_pre_c)>=0.3||(cr_pre_c>0&&m48c/cr_pre_c>=1.5)))
+  # 7d AKI: absolute uses 48h max, ratio uses 7d max
+  aki7_t<-as.integer(!is.na(cr_pre_t)&&cr_pre_t>0&&(
+    (!is.na(m48t)&&(m48t-cr_pre_t)>=0.3)||(!is.na(m7t)&&m7t/cr_pre_t>=1.5)))
+  aki7_c<-as.integer(!is.na(cr_pre_c)&&cr_pre_c>0&&(
+    (!is.na(m48c)&&(m48c-cr_pre_c)>=0.3)||(!is.na(m7c)&&m7c/cr_pre_c>=1.5)))
   ti<-which(all_pts$pid==pairs$trt_pid[i])[1];ci<-which(all_pts$pid==pairs$ctl_pid[i])[1]
   if(is.na(ti)||is.na(ci))next
 
@@ -261,15 +273,15 @@ for(i in seq_len(nrow(pairs))){
 
   covs<-c("age","is_female","bmi","egfr","surg_cabg","surg_valve","diabetes","ckd",
           "heart_failure","last_magnesium")
-  mk<-function(idx,trt,dcr,a48,a7,pf,enc,va){
+  mk<-function(idx,trt,dcr,a48,a7,crp,pf,enc,va){
     r<-data.frame(pair_id=i,treated=trt,pid=all_pts$pid[idx],t_mg=tmg,
-      dcr_48h=dcr,aki_48h=a48,aki_7d=a7,
+      dcr_48h=dcr,aki_48h=a48,aki_7d=a7,cr_pre=crp,
       hosp_mortality=all_pts$hosp_mortality[idx],
       poaf=pf,encephalopathy=enc,vent_arrhythmia=va,stringsAsFactors=FALSE)
     for(cv in covs) r[[cv]]<-if(cv%in%names(all_pts)) all_pts[[cv]][idx] else NA
     r}
-  ri<-ri+1;rows[[ri]]<-mk(ti,1,dcr48_t,aki48_t,aki7_t,poaf_t,enc_t,va_t)
-  ri<-ri+1;rows[[ri]]<-mk(ci,0,dcr48_c,aki48_c,aki7_c,poaf_c,enc_c,va_c)
+  ri<-ri+1;rows[[ri]]<-mk(ti,1,dcr48_t,aki48_t,aki7_t,cr_pre_t,poaf_t,enc_t,va_t)
+  ri<-ri+1;rows[[ri]]<-mk(ci,0,dcr48_c,aki48_c,aki7_c,cr_pre_c,poaf_c,enc_c,va_c)
 }
 df<-do.call(rbind,rows[1:ri])
 cat(sprintf("  Dataset: %d rows (%d pairs)\n",nrow(df),nrow(df)/2))
@@ -292,7 +304,8 @@ for(oc in c("dcr_48h","aki_48h","aki_7d","hosp_mortality","poaf","encephalopathy
 # SWEEP
 # ═══════════════════════════════════════════════════════════════════
 OC<-list(list(c="dcr_48h",t="continuous",l="dCr 48h"),
-  list(c="aki_48h",t="binary",l="48h AKI"),list(c="aki_7d",t="binary",l="7d AKI"),
+  list(c="aki_48h",t="binary",l="48h AKI (KDIGO, both criteria)"),
+  list(c="aki_7d",t="binary",l="7d AKI (KDIGO consolidated)"),
   list(c="hosp_mortality",t="binary",l="Mortality"),list(c="poaf",t="binary",l="POAF"),
   list(c="encephalopathy",t="binary",l="Encephalopathy"),
   list(c="vent_arrhythmia",t="binary",l="Vent arrhythmia"))
