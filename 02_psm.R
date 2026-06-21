@@ -221,15 +221,17 @@ cat(sprintf("    t_mg (unmatchable): median=%.1fh, IQR=[%.1f,%.1f]\n",
 
 # Why unmatchable? Check each condition
 cat("\n    Unmatchable breakdown (checking at t_mg):\n")
-n_no_ctl_alive <- 0; n_no_ctl_cr <- 0
+n_no_ctl_alive <- 0; n_no_ctl_cr <- 0; n_na_tmg <- 0
 for (k in which(no_rs)) {
   t_mg <- trt_tmg[k]
-  alive_icu <- sum(all_pts$exit_time > t_mg & all_pts$pid != trt_pids[k])
+  if (is.na(t_mg)) { n_na_tmg <- n_na_tmg + 1; next }
+  alive_icu <- sum(all_pts$exit_time > t_mg & all_pts$pid != trt_pids[k], na.rm = TRUE)
   has_cr    <- sum(all_pts$exit_time > t_mg & all_pts$earliest_cr_h <= t_mg &
-                   all_pts$pid != trt_pids[k])
+                   all_pts$pid != trt_pids[k], na.rm = TRUE)
   if (alive_icu == 0) n_no_ctl_alive <- n_no_ctl_alive + 1
   else if (has_cr == 0) n_no_ctl_cr <- n_no_ctl_cr + 1
 }
+cat(sprintf("    t_mg is NA: %d\n", n_na_tmg))
 cat(sprintf("    No one alive/in-ICU at t_mg: %d\n", n_no_ctl_alive))
 cat(sprintf("    Alive but no Cr before t_mg: %d\n", n_no_ctl_cr))
 cat(sprintf("    (total unmatchable: %d)\n", sum(no_rs)))
