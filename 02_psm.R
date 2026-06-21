@@ -219,51 +219,17 @@ cat(sprintf("    Risk set sizes: median=%.0f, IQR=[%.0f,%.0f], min=%.0f, empty=%
             median(rs_sizes), quantile(rs_sizes, 0.25), quantile(rs_sizes, 0.75),
             min(rs_sizes), sum(rs_sizes == 0)))
 
-# ── DIAGNOSTIC PROBE ──────────────────────────────────────────────
-cat(sprintf("\n  ── DIAGNOSTIC: Why are risk sets empty? ──\n"))
-
-has_rs  <- rs_sizes > 0
-no_rs   <- rs_sizes == 0
-cat(sprintf("    Matchable: %d (%.1f%%), Unmatchable: %d (%.1f%%)\n",
-            sum(has_rs), 100*mean(has_rs), sum(no_rs), 100*mean(no_rs)))
-
-# t_mg distribution
-tmg_match   <- trt_tmg[has_rs]
-tmg_nomatch <- trt_tmg[no_rs]
-cat(sprintf("    t_mg (matchable):   median=%.1fh, IQR=[%.1f,%.1f]\n",
-            median(tmg_match, na.rm=TRUE), quantile(tmg_match,0.25,na.rm=TRUE),
-            quantile(tmg_match,0.75,na.rm=TRUE)))
-cat(sprintf("    t_mg (unmatchable): median=%.1fh, IQR=[%.1f,%.1f]\n",
-            median(tmg_nomatch, na.rm=TRUE), quantile(tmg_nomatch,0.25,na.rm=TRUE),
-            quantile(tmg_nomatch,0.75,na.rm=TRUE)))
-
-# Why unmatchable? Check each condition
-cat("\n    Unmatchable breakdown (checking at t_mg):\n")
-n_no_ctl_alive <- 0; n_no_ctl_cr <- 0; n_na_tmg <- 0
-for (k in which(no_rs)) {
-  t_mg <- trt_tmg[k]
-  if (is.na(t_mg)) { n_na_tmg <- n_na_tmg + 1; next }
-  alive_icu <- sum(all_pts$exit_time > t_mg & all_pts$pid != trt_pids[k], na.rm = TRUE)
-  has_cr    <- sum(all_pts$exit_time > t_mg & all_pts$earliest_cr_h <= t_mg &
-                   all_pts$pid != trt_pids[k], na.rm = TRUE)
-  if (alive_icu == 0) n_no_ctl_alive <- n_no_ctl_alive + 1
-  else if (has_cr == 0) n_no_ctl_cr <- n_no_ctl_cr + 1
-}
-cat(sprintf("    t_mg is NA: %d\n", n_na_tmg))
-cat(sprintf("    No one alive/in-ICU at t_mg: %d\n", n_no_ctl_alive))
-cat(sprintf("    Alive but no Cr before t_mg: %d\n", n_no_ctl_cr))
-cat(sprintf("    (total unmatchable: %d)\n", sum(no_rs)))
-
-# Covariate comparison: matchable vs unmatchable treated
-cat("\n    Covariate means (matchable vs unmatchable treated):\n")
-cat("    Variable              matchable  unmatch  diff\n")
-probe_vars <- c("age","is_female","hypertension","diabetes","ckd",
-                "heart_failure","surg_cabg","egfr","bmi")
-probe_vars <- intersect(probe_vars, names(all_pts))
-for (v in probe_vars) {
-  m1 <- mean(all_pts[[v]][trt_idx[has_rs]], na.rm=TRUE)
-  m2 <- mean(all_pts[[v]][trt_idx[no_rs]], na.rm=TRUE)
-  cat(sprintf("    %-20s  %7.3f    %7.3f  %+.3f\n", v, m1, m2, m1-m2))
+# ── DIAGNOSTIC ────────────────────────────────────────────────────
+has_rs  <- rs_sizes > 0; no_rs <- rs_sizes == 0
+n_matchable <- sum(has_rs); n_unmatchable <- sum(no_rs)
+cat(sprintf("\n  ── DIAGNOSTIC ──\n"))
+cat(sprintf("    Matchable: %d (%.1f%%), Unmatchable: %d\n",
+            n_matchable, 100*n_matchable/n_trt, n_unmatchable))
+cat(sprintf("    t_mg: median=%.1fh, IQR=[%.1f,%.1f]\n",
+            median(trt_tmg, na.rm=TRUE), quantile(trt_tmg,0.25,na.rm=TRUE),
+            quantile(trt_tmg,0.75,na.rm=TRUE)))
+if (n_unmatchable > 0) {
+  cat(sprintf("    WARNING: %d treated have empty risk sets — investigate\n", n_unmatchable))
 }
 
 # ═══════════════════════════════════════════════════════════════════
