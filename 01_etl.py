@@ -886,7 +886,7 @@ def run_mimic():
         treated[col] = treated.stay_id.isin(hits).astype(int)
 
     # BMI from chartevents
-    bmi_items = {226707, 226730}  # height, weight
+    bmi_items = {226730, 226512}  # 226730=Height(cm), 226512=AdmWeight(kg)
     ce_bmi = load_filtered(
         "chartevents",
         MIMIC_ICU,
@@ -898,7 +898,7 @@ def run_mimic():
         ce_bmi["charttime"] = pd.to_datetime(ce_bmi.charttime)
         ce_bmi = ce_bmi.merge(treated[["stay_id", "intime"]], on="stay_id")
         # Take first height and weight
-        for item, col in [(226707, "_ht"), (226730, "_wt")]:
+        for item, col in [(226730, "_ht"), (226512, "_wt")]:
             sub = (
                 ce_bmi[ce_bmi.itemid == item]
                 .sort_values("charttime")
