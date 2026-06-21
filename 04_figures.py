@@ -143,13 +143,18 @@ def compute_km_data(tag):
         post["hours_from_t0"] = post.offset_h - tmg
         post = post[post.hours_from_t0 <= 168]  # 7d max
 
-        # Find first AKI
+        # Find first AKI (KDIGO temporal criteria)
+        #   ΔCr ≥ 0.3: within 48h only
+        #   ratio ≥ 1.5: within 7 days
         time_aki = np.nan
         for _, cr in post.iterrows():
+            h = cr.hours_from_t0
             delta = cr.labresult - cr_pre
             ratio = cr.labresult / cr_pre if cr_pre > 0 else 0
-            if delta >= 0.3 or ratio >= 1.5:
-                time_aki = cr.hours_from_t0
+            aki_absolute = (h <= 48) and (delta >= 0.3)
+            aki_ratio = ratio >= 1.5
+            if aki_absolute or aki_ratio:
+                time_aki = h
                 break
 
         if not np.isnan(time_aki):
