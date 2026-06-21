@@ -106,31 +106,35 @@ labs <- rbind(labs_elec, labs_hr)
 rm(labs_raw, labs_elec, labs_hr); gc()
 
 N <- nrow(all_pts)
-trt_idx <- which(all_pts$treated == 1 & !is.na(all_pts$mg_offset_h))
-n_trt <- length(trt_idx)
-cat(sprintf("  Patients: %d (%d treated, %d control)\n", N, n_trt, N - n_trt))
+cat(sprintf("  Patients: %d (%d treated, %d control)\n", N,
+            sum(all_pts$treated == 1 & !is.na(all_pts$mg_offset_h)),
+            sum(all_pts$treated == 0)))
 
 # ── Pre-compute per-patient lab values (BOTH first and last) ──────────────
+# NOTE: use match() not merge() to preserve row order!
 cat("  Computing first/last lab values...\n")
 for (ln in c("magnesium","potassium","calcium","lactate","heartrate")) {
   sub <- labs[labs$lab_name == ln, ]
   if (nrow(sub) == 0) next
-  sub <- merge(sub, all_pts[, c("pid","mg_offset_h")], by = "pid")
+  # Add mg_offset_h via match (not merge)
+  sub$mg_offset_h <- all_pts$mg_offset_h[match(sub$pid, all_pts$pid)]
   # For treated: [0, t_mg); for controls: [0, ∞)
   sub <- sub[sub$offset_h >= 0 & (is.na(sub$mg_offset_h) | sub$offset_h < sub$mg_offset_h), ]
   if (nrow(sub) == 0) next
 
-  # First
+  # First (earliest)
   s1 <- sub[order(sub$offset_h), ]
-  s1 <- s1[!duplicated(s1$pid), c("pid","value","offset_h")]
-  names(s1) <- c("pid", paste0("first_",ln), paste0("first_",ln,"_time_h"))
-  all_pts <- merge(all_pts, s1, by = "pid", all.x = TRUE)
+  s1 <- s1[!duplicated(s1$pid), ]
+  idx1 <- match(all_pts$pid, s1$pid)
+  all_pts[[paste0("first_",ln)]] <- s1$value[idx1]
+  all_pts[[paste0("first_",ln,"_time_h")]] <- s1$offset_h[idx1]
 
-  # Last
+  # Last (latest)
   s2 <- sub[order(-sub$offset_h), ]
-  s2 <- s2[!duplicated(s2$pid), c("pid","value","offset_h")]
-  names(s2) <- c("pid", paste0("last_",ln), paste0("last_",ln,"_time_h"))
-  all_pts <- merge(all_pts, s2, by = "pid", all.x = TRUE)
+  s2 <- s2[!duplicated(s2$pid), ]
+  idx2 <- match(all_pts$pid, s2$pid)
+  all_pts[[paste0("last_",ln)]] <- s2$value[idx2]
+  all_pts[[paste0("last_",ln,"_time_h")]] <- s2$offset_h[idx2]
 
   nf <- sum(!is.na(all_pts[[paste0("first_",ln)]]))
   nl <- sum(!is.na(all_pts[[paste0("last_",ln)]]))
@@ -141,6 +145,11 @@ for (ln in c("magnesium","potassium","calcium","lactate","heartrate")) {
 # Lactate missing indicator
 all_pts$first_lactate_missing <- as.integer(is.na(all_pts$first_lactate))
 all_pts$last_lactate_missing  <- as.integer(is.na(all_pts$last_lactate))
+
+# ── Treatment indices (MUST be after all column additions) ────────────────
+trt_idx <- which(all_pts$treated == 1 & !is.na(all_pts$mg_offset_h))
+n_trt <- length(trt_idx)
+cat(sprintf("  Treated with valid t_mg: %d\n", n_trt))
 
 # ── Pre-compute risk sets (timing-independent) ────────────────────────────
 cat("  Pre-computing risk sets...\n")
