@@ -7,9 +7,13 @@ Numbers sourced from authoritative ETL output (01_etl.py).
 Output: efig1_consort.pdf / .png
 """
 
+import os
+
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyBboxPatch
+
+RESULTS = os.path.expanduser("~/mg_aki/results")
 
 # ── Nature-style rcParams ──
 for k, v in {
@@ -452,13 +456,14 @@ ax.text(
 )
 
 # Save
+os.makedirs(RESULTS, exist_ok=True)
 for ext in ("pdf", "png"):
     fig.savefig(
-        f"/home/claude/efig1_consort.{ext}",
+        os.path.join(RESULTS, f"efig1_consort.{ext}"),
         format=ext,
         dpi=300,
         bbox_inches="tight",
         pad_inches=0.08,
     )
 plt.close(fig)
-print("✓ Saved: efig1_consort.pdf / .png")
+print(f"✓ Saved: {RESULTS}/efig1_consort.pdf / .png")
