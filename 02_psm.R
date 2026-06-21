@@ -66,7 +66,7 @@ if (length(args) < 1) { cat("Usage: Rscript 02_psm.R <db>\n"); quit(status = 1) 
 db <- toupper(args[1]); tag <- tolower(db)
 
 SEP <- paste(rep("=", 70), collapse = "")
-cat(sprintf("\n%s\n02_psm.R — Risk-Set PSM: %s\n  Primary: ΔCr at T₀+%dh | PS: 21 covars (no drugs) | MICE m=%d averaged\n%s\n",
+cat(sprintf("\n%s\n02_psm.R — Risk-Set PSM: %s\n  Primary: ΔCr at T₀+%dh | PS: 21 covars (no drugs) | Labs: LAST | MICE m=%d averaged\n%s\n",
             SEP, db, PRIMARY_H, M_IMP, SEP))
 
 # ── Load data ─────────────────────────────────────────────────────
@@ -98,18 +98,18 @@ N <- nrow(all_pts)
 cat(sprintf("  Patients: %d (%d treated, %d control)\n", N,
             sum(all_pts$treated == 1, na.rm=TRUE), sum(all_pts$treated == 0, na.rm=TRUE)))
 
-# ── FIRST lab values ──────────────────────────────────────────────
-cat("  Computing FIRST lab values...\n")
+# ── LAST lab values (closest to T₀) ───────────────────────────────
+cat("  Computing LAST lab values...\n")
 for (ln in PS_LAB_BASES) {
   sub <- labs[labs$lab_name == ln, ]
   if (nrow(sub) == 0) next
   sub$mg_offset_h <- all_pts$mg_offset_h[match(sub$pid, all_pts$pid)]
   sub <- sub[sub$offset_h >= 0 & (is.na(sub$mg_offset_h) | sub$offset_h < sub$mg_offset_h), ]
   if (nrow(sub) == 0) next
-  s <- sub[order(sub$offset_h), ]
+  s <- sub[order(-sub$offset_h), ]  # descending: LAST value
   s <- s[!duplicated(s$pid), ]
   idx <- match(all_pts$pid, s$pid)
-  all_pts[[paste0("first_",ln)]] <- s$value[idx]
+  all_pts[[paste0("first_",ln)]] <- s$value[idx]  # reuse "first_" name for PS compatibility
   nf <- sum(!is.na(all_pts[[paste0("first_",ln)]]))
   cat(sprintf("    %s: %d (%.0f%%)\n", ln, nf, 100*nf/N))
 }
