@@ -454,7 +454,7 @@ ax.text(
 # Save
 for ext in ("pdf", "png"):
     fig.savefig(
-        f"/home/claude/efig1_consort.{ext}",
+        f"/home/g91p721/mg_aki/results/efig1_consort.{ext}",
         format=ext,
         dpi=300,
         bbox_inches="tight",
