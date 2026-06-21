@@ -108,13 +108,11 @@ def compute_km_data(tag):
     cr_all = pd.read_csv(os.path.join(RESULTS, f"did_cr_all_{tag}.csv"))
 
     cr_id = "patientunitstayid" if "patientunitstayid" in cr_all.columns else "stay_id"
-    cr_all["pid"] = cr_all[cr_id].astype(str)
+    cr_all["pid"] = cr_all[cr_id].astype(int).astype(str)
     if "offset_h" not in cr_all.columns:
         cr_all["offset_h"] = cr_all["labresultoffset"] / 60
 
-    cr_by_pid = {
-        str(pid): g.sort_values("offset_h") for pid, g in cr_all.groupby("pid")
-    }
+    cr_by_pid = {pid: g.sort_values("offset_h") for pid, g in cr_all.groupby("pid")}
     print(f"    Cr data: {len(cr_by_pid)} unique patients")
 
     rows = []
@@ -122,7 +120,7 @@ def compute_km_data(tag):
     n_no_cr = 0
     n_ok = 0
     for _, r in hte_data.iterrows():
-        pid = str(r["pid"])
+        pid = str(int(r["pid"]))
         tmg = r["t_mg"]
 
         cr_pt = cr_by_pid.get(pid)
