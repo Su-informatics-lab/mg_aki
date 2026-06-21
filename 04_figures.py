@@ -98,29 +98,40 @@ def compute_km_data(tag):
     """Compute time-to-first-AKI for each matched pair member."""
     cache = os.path.join(RESULTS, f"km_aki_{tag}.csv")
     if os.path.exists(cache):
-        return pd.read_csv(cache)
+        df = pd.read_csv(cache)
+        if len(df) > 0 and "event" in df.columns:
+            return df
+        os.remove(cache)  # stale/empty cache
 
     print(f"    Computing KM data for {tag} (one-time)...")
     hte_data = pd.read_csv(os.path.join(RESULTS, f"did_hte_data_{tag}.csv"))
     cr_all = pd.read_csv(os.path.join(RESULTS, f"did_cr_all_{tag}.csv"))
 
     cr_id = "patientunitstayid" if "patientunitstayid" in cr_all.columns else "stay_id"
-    cr_all["pid"] = cr_all[cr_id]
+    cr_all["pid"] = cr_all[cr_id].astype(str)
     if "offset_h" not in cr_all.columns:
         cr_all["offset_h"] = cr_all["labresultoffset"] / 60
 
-    cr_by_pid = {pid: g.sort_values("offset_h") for pid, g in cr_all.groupby("pid")}
+    cr_by_pid = {
+        str(pid): g.sort_values("offset_h") for pid, g in cr_all.groupby("pid")
+    }
+    print(f"    Cr data: {len(cr_by_pid)} unique patients")
 
     rows = []
+    n_no_pre = 0
+    n_no_cr = 0
+    n_ok = 0
     for _, r in hte_data.iterrows():
-        pid = r["pid"]
+        pid = str(r["pid"])
         tmg = r["t_mg"]
         cr_pre = r.get("cr_pre", np.nan)
         if pd.isna(cr_pre) or cr_pre <= 0:
+            n_no_pre += 1
             continue
 
         cr_pt = cr_by_pid.get(pid)
         if cr_pt is None:
+            n_no_cr += 1
             continue
 
         # Post-T₀ Cr measurements
@@ -148,10 +159,17 @@ def compute_km_data(tag):
                 rows.append(
                     {"treated": int(r.treated), "time": censor_t, "event": 0, "db": tag}
                 )
+        n_ok += 1
 
+    print(
+        f"    Processed: {n_ok} ok, {n_no_pre} no Cr_pre, {n_no_cr} pid not in Cr data"
+    )
+    if len(rows) == 0:
+        print("    WARN: no KM rows — returning None")
+        return None
     df = pd.DataFrame(rows)
     df.to_csv(cache, index=False)
-    print(f"    → {len(df)} patients, {df.event.sum()} AKI events")
+    print(f"    → {len(df)} patients, {int(df.event.sum())} AKI events")
     return df
 
 
