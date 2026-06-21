@@ -124,14 +124,20 @@ def compute_km_data(tag):
     for _, r in hte_data.iterrows():
         pid = str(r["pid"])
         tmg = r["t_mg"]
-        cr_pre = r.get("cr_pre", np.nan)
-        if pd.isna(cr_pre) or cr_pre <= 0:
-            n_no_pre += 1
-            continue
 
         cr_pt = cr_by_pid.get(pid)
         if cr_pt is None:
             n_no_cr += 1
+            continue
+
+        # Cr_pre = last Cr before T₀
+        pre = cr_pt[(cr_pt.offset_h >= 0) & (cr_pt.offset_h < tmg)]
+        if len(pre) == 0:
+            n_no_pre += 1
+            continue
+        cr_pre = pre.iloc[-1].labresult  # already sorted by offset_h
+        if pd.isna(cr_pre) or cr_pre <= 0:
+            n_no_pre += 1
             continue
 
         # Post-T₀ Cr measurements
