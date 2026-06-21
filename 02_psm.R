@@ -213,9 +213,11 @@ cat(sprintf("    Matchable: %d (%.1f%%), Unmatchable: %d (%.1f%%)\n",
 tmg_match   <- trt_tmg[has_rs]
 tmg_nomatch <- trt_tmg[no_rs]
 cat(sprintf("    t_mg (matchable):   median=%.1fh, IQR=[%.1f,%.1f]\n",
-            median(tmg_match), quantile(tmg_match,0.25), quantile(tmg_match,0.75)))
+            median(tmg_match, na.rm=TRUE), quantile(tmg_match,0.25,na.rm=TRUE),
+            quantile(tmg_match,0.75,na.rm=TRUE)))
 cat(sprintf("    t_mg (unmatchable): median=%.1fh, IQR=[%.1f,%.1f]\n",
-            median(tmg_nomatch), quantile(tmg_nomatch,0.25), quantile(tmg_nomatch,0.75)))
+            median(tmg_nomatch, na.rm=TRUE), quantile(tmg_nomatch,0.25,na.rm=TRUE),
+            quantile(tmg_nomatch,0.75,na.rm=TRUE)))
 
 # Why unmatchable? Check each condition
 cat("\n    Unmatchable breakdown (checking at t_mg):\n")
