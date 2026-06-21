@@ -123,8 +123,23 @@ extract_eicu_post_t0 <- function(pairs, all_pts) {
   dx <- dx[dx$patientunitstayid %in% all_pids, ]
   cat(sprintf("    Loaded %d diagnosis rows for %d patients\n", nrow(dx), length(all_pids)))
 
-  # Prior AF (from pastHistory — use ETL flag)
-  prior_af_pids <- all_pts$pid[all_pts$prior_af == 1]
+  # Prior AF: use ETL flag if available, otherwise load pastHistory
+  if ("prior_af" %in% names(all_pts)) {
+    prior_af_pids <- all_pts$pid[all_pts$prior_af == 1]
+  } else {
+    prior_af_pids <- character(0)
+    ph_path <- file.path(EICU_ROOT, "pastHistory.csv.gz")
+    if (!file.exists(ph_path)) ph_path <- file.path(EICU_ROOT, "pastHistory.csv")
+    if (file.exists(ph_path)) {
+      cat("    Loading pastHistory for prior AF...\n")
+      ph <- read.csv(ph_path, stringsAsFactors=FALSE)
+      ph <- ph[ph$patientunitstayid %in% all_pids, ]
+      if ("pasthistorypath" %in% names(ph)) {
+        prior_af_pids <- unique(ph$patientunitstayid[matches_any(ph$pasthistorypath, AF_PRIOR)])
+        cat(sprintf("    Prior AF: %d patients\n", length(prior_af_pids)))
+      }
+    }
+  }
 
   # ICU discharge offsets
   disch_map <- setNames(all_pts$icu_discharge_h * 60, all_pts$pid)  # in minutes
@@ -208,7 +223,7 @@ for(ln in LAB_BASES){sub<-labs[labs$lab_name==ln,];if(nrow(sub)==0)next
 
 # eICU: post-T₀ secondary outcomes
 eicu_sec <- NULL
-if (is_eicu && "prior_af" %in% names(all_pts)) {
+if (is_eicu) {
   eicu_sec <- extract_eicu_post_t0(pairs, all_pts)
   if (!is.null(eicu_sec))
     cat(sprintf("    Post-T0 POAF: %d/%d trt, %d/%d ctl\n",
@@ -261,6 +276,8 @@ cat(sprintf("  Dataset: %d rows (%d pairs)\n",nrow(df),nrow(df)/2))
 
 if (is_eicu && !is.null(eicu_sec))
   cat("  NOTE: POAF/encephalopathy/vent_arrhythmia use post-T0 extraction (7d window)\n")
+if (is_eicu && is.null(eicu_sec))
+  cat("  WARN: eICU post-T0 extraction FAILED - using ICU-stay flags (BIASED)\n")
 if (!is_eicu)
   cat("  NOTE: POAF/encephalopathy/vent_arrhythmia are hospitalization-level ICD (no T0 filter)\n")
 
