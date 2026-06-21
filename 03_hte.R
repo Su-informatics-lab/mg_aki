@@ -260,8 +260,10 @@ for(i in seq_len(nrow(pairs))){
     va_t<-all_pts$vent_arrhythmia[ti]; va_c<-all_pts$vent_arrhythmia[ci]
   }
 
-  covs<-c("age","is_female","bmi","egfr","surg_cabg","surg_valve","diabetes","ckd",
-          "heart_failure","last_magnesium")
+  covs<-c("age","is_female","bmi","egfr","surg_cabg","surg_valve","surg_combined",
+          "diabetes","ckd","heart_failure","hypertension","copd","pvd","stroke","liver_disease",
+          "last_magnesium","last_potassium","last_calcium","last_lactate",
+          "last_lactate_missing","last_heartrate")
   mk<-function(idx,trt,dcr,a48,a7,crp,pf,enc,va){
     r<-data.frame(pair_id=i,treated=trt,pid=all_pts$pid[idx],t_mg=tmg,
       dcr_48h=dcr,aki_48h=a48,aki_7d=a7,cr_pre=crp,

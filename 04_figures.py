@@ -827,12 +827,274 @@ def efig_sensitivity():
 
 
 # ═══════════════════════════════════════════════════════════════════
+# eFIGURE: 48h AKI HTE FOREST (supplement — secondary outcome)
+# ═══════════════════════════════════════════════════════════════════
+def efig_hte_48h():
+    print("\n── eFig: HTE forest (48h AKI, supplement) ──")
+    subgroups = [
+        "Overall",
+        None,
+        "Age < 65",
+        "Age >= 65",
+        None,
+        "eGFR < 60",
+        "eGFR >= 60",
+        None,
+        "Mg < 1.8",
+        "Mg >= 1.8",
+        None,
+        "CABG",
+        "Non-CABG",
+        None,
+        "Diabetes",
+        "No diabetes",
+        None,
+        "CKD",
+        "No CKD",
+        None,
+        "Heart failure",
+        "No HF",
+        None,
+        "BMI >= 30",
+        "BMI < 30",
+        None,
+        "DM + CKD",
+        "HF + CABG",
+        "Mg<1.8 + CKD",
+    ]
+
+    htes = {tag: load_hte(tag) for tag in DBS}
+    fig, ax = plt.subplots(figsize=(5.5, 7.5), constrained_layout=True)
+    ax.axvline(1, color="#ddd", lw=0.6, zorder=0)
+
+    y = 0
+    yticks = []
+    ylabels = []
+    for item in reversed(subgroups):
+        if item is None:
+            y += 0.6
+            continue
+        for di, tag in enumerate(DBS):
+            hte = htes.get(tag)
+            if hte is None:
+                continue
+            r = hte_row(hte, item, "aki_48h")
+            if r is None:
+                continue
+            est, lo, hi = or_ci(r)
+            if pd.isna(est) or est > 15:
+                continue
+            sig = not pd.isna(r["p"]) and r["p"] < 0.05
+            offset = 0.13 * (1 - 2 * di)
+            ax.errorbar(
+                est,
+                y + offset,
+                xerr=[[max(est - lo, 0.001)], [max(hi - est, 0.001)]],
+                fmt=MKR[tag],
+                color=CLR[tag],
+                ms=5 if sig else 3.5,
+                markerfacecolor=CLR[tag] if sig else "white",
+                markeredgecolor=CLR[tag],
+                markeredgewidth=0.7,
+                capsize=1.5,
+                capthick=0.4,
+                lw=0.5,
+                zorder=3,
+            )
+        yticks.append(y)
+        ylabels.append(item)
+        y += 1.0
+
+    ax.set_yticks(yticks)
+    ax.set_yticklabels(ylabels, fontsize=6)
+    ax.set_xlabel("Odds Ratio for 48-hour AKI (95% CI)")
+    ax.set_xscale("log")
+    ax.set_xlim(0.08, 4.0)
+    ax.set_xticks([0.1, 0.25, 0.5, 1, 2])
+    ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
+    for tag in DBS:
+        ax.plot(
+            [],
+            [],
+            MKR[tag],
+            color=CLR[tag],
+            markerfacecolor=CLR[tag],
+            ms=5,
+            label=LBL[tag],
+        )
+    ax.legend(loc="upper right", fontsize=6.5)
+    ax.text(
+        0.02, -0.02, "← Favors IV Mg", transform=ax.transAxes, fontsize=5.5, color=GRAY
+    )
+    ax.text(
+        0.98,
+        -0.02,
+        "Favors control →",
+        transform=ax.transAxes,
+        fontsize=5.5,
+        color=GRAY,
+        ha="right",
+    )
+    save(fig, "efig_hte_48h")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# eFIGURE: LOVE PLOT (covariate balance before/after matching)
+# ═══════════════════════════════════════════════════════════════════
+NICE_NAMES = {
+    "age": "Age",
+    "is_female": "Female sex",
+    "bmi": "BMI",
+    "surg_cabg": "CABG",
+    "surg_valve": "Valve surgery",
+    "surg_combined": "Combined surgery",
+    "heart_failure": "Heart failure",
+    "hypertension": "Hypertension",
+    "diabetes": "Diabetes",
+    "ckd": "CKD",
+    "copd": "COPD",
+    "pvd": "PVD",
+    "stroke": "Stroke/TIA",
+    "liver_disease": "Liver disease",
+    "egfr": "eGFR",
+    "last_calcium": "Calcium",
+    "last_lactate": "Lactate",
+    "last_lactate_missing": "Lactate (missing)",
+    "last_heartrate": "Heart rate",
+    "last_magnesium": "Magnesium",
+    "last_potassium": "Potassium",
+    "first_calcium": "Calcium",
+    "first_lactate": "Lactate",
+    "first_lactate_missing": "Lactate (missing)",
+    "first_heartrate": "Heart rate",
+}
+
+
+def compute_smds(df, ps_vars):
+    """Compute abs SMD for treated vs control on each variable."""
+    smds = {}
+    t1 = df[df.treated == 1]
+    t0 = df[df.treated == 0]
+    for v in ps_vars:
+        if v not in df.columns:
+            continue
+        x1 = t1[v].dropna()
+        x0 = t0[v].dropna()
+        if len(x1) < 5 or len(x0) < 5:
+            continue
+        m1, m0 = x1.mean(), x0.mean()
+        sp = np.sqrt((x1.var() + x0.var()) / 2)
+        smds[v] = abs(m1 - m0) / sp if sp > 1e-10 else 0
+    return smds
+
+
+def efig_love():
+    print("\n── eFig: Love plot (covariate balance) ──")
+    n = len(DBS)
+    fig, axes = plt.subplots(
+        1, n, figsize=(3.8 * n, 5.5), sharey=False, constrained_layout=True
+    )
+    if n == 1:
+        axes = [axes]
+
+    ps_vars = [
+        "age",
+        "is_female",
+        "bmi",
+        "surg_cabg",
+        "surg_valve",
+        "surg_combined",
+        "heart_failure",
+        "hypertension",
+        "diabetes",
+        "ckd",
+        "copd",
+        "pvd",
+        "stroke",
+        "liver_disease",
+        "egfr",
+    ]
+
+    for i, tag in enumerate(DBS):
+        ax = axes[i]
+        all_path = os.path.join(RESULTS, f"did_all_{tag}.csv")
+        hte_path = os.path.join(RESULTS, f"did_hte_data_{tag}.csv")
+        if not os.path.exists(all_path) or not os.path.exists(hte_path):
+            continue
+
+        raw = pd.read_csv(all_path)
+        matched = pd.read_csv(hte_path)
+
+        # Add lab columns from matched data that might be available
+        avail_vars = [v for v in ps_vars if v in raw.columns]
+        extra = [
+            v
+            for v in matched.columns
+            if v.startswith(("last_", "first_"))
+            and v in NICE_NAMES
+            and v not in avail_vars
+        ]
+        plot_vars = avail_vars + extra
+
+        raw_smds = compute_smds(raw, plot_vars)
+        matched_smds = compute_smds(matched, plot_vars)
+
+        # Sort by raw SMD
+        common = sorted(
+            set(raw_smds) & set(matched_smds), key=lambda v: raw_smds.get(v, 0)
+        )
+        if len(common) == 0:
+            continue
+
+        labels = [NICE_NAMES.get(v, v) for v in common]
+        raw_vals = [raw_smds[v] for v in common]
+        mat_vals = [matched_smds[v] for v in common]
+        ys = np.arange(len(common))
+
+        ax.axvline(0.1, color="#ccc", lw=0.5, ls="--")
+        for j in range(len(common)):
+            ax.plot([raw_vals[j], mat_vals[j]], [ys[j], ys[j]], color="#ddd", lw=0.4)
+        ax.scatter(
+            raw_vals,
+            ys,
+            marker="x",
+            s=18,
+            color=VERMIL,
+            linewidths=0.6,
+            zorder=3,
+            label="Before matching",
+        )
+        ax.scatter(
+            mat_vals, ys, marker="o", s=20, color=BLUE, zorder=4, label="After matching"
+        )
+        ax.set_yticks(ys)
+        ax.set_yticklabels(labels, fontsize=5.5)
+        ax.set_xlabel("Absolute SMD")
+        ax.set_xlim(0, max(raw_vals) * 1.1 + 0.02)
+        ax.legend(fontsize=5.5, loc="lower right")
+        ax.text(
+            -0.02,
+            1.04,
+            chr(ord("a") + i),
+            transform=ax.transAxes,
+            fontsize=10,
+            fontweight="bold",
+            va="top",
+        )
+        ax.set_title(LBL[tag], fontsize=8, pad=5)
+
+    save(fig, "efig_love_plot")
+
+
+# ═══════════════════════════════════════════════════════════════════
 FIGURES = {
     "fig1_primary": fig1_primary,
     "fig2_hte": fig2_hte,
     "fig3_benefit": fig3_benefit,
     "efig_timecourse": efig_timecourse,
     "efig_sensitivity": efig_sensitivity,
+    "efig_hte_48h": efig_hte_48h,
+    "efig_love": efig_love,
 }
 
 if __name__ == "__main__":

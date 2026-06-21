@@ -1,13 +1,15 @@
 #!/usr/bin/env Rscript
 # ============================================================================
-# 02_psm.R — Canonical Risk-Set PSM (v5 Final)
+# 02_psm.R — Canonical Risk-Set PSM (v5.1 — yet-untreated only)
 #
 # Specs:
 #   PRIMARY:  19 var, LAST labs, no K/Mg (best balance, avoids positivity issue)
 #   SENS_A:   21 var, LAST labs, + K/Mg  (over-adjustment check)
 #   SENS_B:   19 var, FIRST labs, no K/Mg (lab-timing sensitivity)
 #
-# Pools:    yet-untreated | never-treated
+# Pool:     yet-untreated only (sequential trial estimand)
+#           Never-treated pool removed: healthy-control bias, does not
+#           answer "should we give Mg now?" estimand.
 # Methods:  PSM | PSM+DR (adjust SMD>0.1)
 # Horizons: 6–48h
 # MICE:     m=20 averaged
@@ -71,7 +73,6 @@ safe_coeftest <- function(fit) {
   tryCatch(coeftest(fit), error = function(e) NULL)
 }
 
-# Helper: extract one lab timing (LAST or FIRST) from raw labs
 extract_labs <- function(labs, all_pts, lab_bases, prefix, descending) {
   for (ln in lab_bases) {
     sub <- labs[labs$lab_name == ln, ]
@@ -85,7 +86,6 @@ extract_labs <- function(labs, all_pts, lab_bases, prefix, descending) {
     col <- paste0(prefix, "_", ln)
     all_pts[[col]] <- s$value[idx]
   }
-  # lactate_missing indicator
   lac_col <- paste0(prefix, "_lactate")
   miss_col <- paste0(prefix, "_lactate_missing")
   all_pts[[miss_col]] <- as.integer(is.na(all_pts[[lac_col]]))
@@ -143,10 +143,9 @@ run_spec_pool <- function(spec_name, spec_obj, pool_name,
       tp <- as.character(all_pts$pid[match_trt[kk]])
       cp <- as.character(all_pts$pid[match_ctl[kk]])
       tmg <- trt_tmg[kk]
-      if (pool_name=="yet_untreated") {
-        cmg <- all_pts$mg_offset_h[match_ctl[kk]]
-        if (!is.na(cmg) && cmg < tmg+target_h) { valid[idx]<-FALSE; next }
-      }
+      # Yet-untreated: censor if control received Mg before outcome window
+      cmg <- all_pts$mg_offset_h[match_ctl[kk]]
+      if (!is.na(cmg) && cmg < tmg+target_h) { valid[idx]<-FALSE; next }
       pt <- find_cr_pre(cr_list[[tp]], tmg); pc <- find_cr_pre(cr_list[[cp]], tmg)
       qt <- find_cr(cr_list[[tp]], tmg+target_h); qc <- find_cr(cr_list[[cp]], tmg+target_h)
       if (any(is.na(c(pt[1],pc[1],qt[1],qc[1])))) { valid[idx]<-FALSE; next }
@@ -187,7 +186,6 @@ run_spec_pool <- function(spec_name, spec_obj, pool_name,
   }
   res <- do.call(rbind, results)
 
-  # Print PSM_DR results
   cat(sprintf("  ── PSM_DR [%s | %s] ──\n", spec_name, pool_name))
   sub <- res[res$method=="psm_dr",]
   for (i in seq_len(nrow(sub))) { r<-sub[i,]
@@ -209,7 +207,7 @@ if (length(args)<1) { cat("Usage: Rscript 02_psm.R <db>\n"); quit(status=1) }
 db <- toupper(args[1]); tag <- tolower(db)
 
 SEP <- paste(rep("=",70),collapse="")
-cat(sprintf("\n%s\n02_psm.R — %s\n  PRIMARY: 19var LAST (no K/Mg)\n  SENS_A:  21var LAST (all labs)\n  SENS_B:  19var FIRST (no K/Mg)\n  Pools: YT + NT | Methods: PSM + DR | Horizons: 6-48h\n%s\n",SEP,db,SEP))
+cat(sprintf("\n%s\n02_psm.R — %s\n  PRIMARY: 19var LAST (no K/Mg)\n  SENS_A:  21var LAST (all labs)\n  SENS_B:  19var FIRST (no K/Mg)\n  Pool: yet-untreated only | Methods: PSM + DR | Horizons: 6-48h\n%s\n",SEP,db,SEP))
 
 all_pts <- read.csv(file.path(RESULTS,sprintf("did_all_%s.csv",tag)),stringsAsFactors=FALSE)
 cr_all <- read.csv(file.path(RESULTS,sprintf("did_cr_all_%s.csv",tag)),stringsAsFactors=FALSE)
@@ -261,18 +259,15 @@ faki<-sapply(cr_list,function(cr){
   NA_real_})
 all_pts$first_aki_h<-faki[as.character(all_pts$pid)]
 
-# ── Risk sets ─────────────────────────────────────────────────────
-cat("  Risk sets...\n")
-rs_yt<-rs_nt<-vector("list",n_trt)
+# ── Risk sets (yet-untreated only) ────────────────────────────────
+cat("  Risk sets (yet-untreated)...\n")
+rs_yt<-vector("list",n_trt)
 for(k in seq_len(n_trt)){tm<-trt_tmg[k]
   rs_yt[[k]]<-which(all_pts$icu_discharge_h>tm&(is.na(all_pts$first_aki_h)|all_pts$first_aki_h>tm)&
     all_pts$earliest_cr_h<=tm&(is.na(all_pts$mg_offset_h)|all_pts$mg_offset_h>tm+PRIMARY_H)&
     all_pts$pid!=trt_pids[k])
-  rs_nt[[k]]<-which(all_pts$treated==0&all_pts$icu_discharge_h>tm&
-    (is.na(all_pts$first_aki_h)|all_pts$first_aki_h>tm)&all_pts$earliest_cr_h<=tm&
-    all_pts$pid!=trt_pids[k])
 }
-cat(sprintf("    YT: med=%.0f  NT: med=%.0f\n",median(sapply(rs_yt,length)),median(sapply(rs_nt,length))))
+cat(sprintf("    YT median risk set: %.0f\n",median(sapply(rs_yt,length))))
 
 # ── MICE on ALL candidate vars ────────────────────────────────────
 all_cand <- unique(unlist(lapply(SPECS, `[[`, "vars")))
@@ -297,14 +292,13 @@ caliper<-CALIPER_SD*sd(predict(pfit,type="response"),na.rm=TRUE)
 cat(sprintf("  Caliper: %.4f\n",caliper))
 
 # ═══════════════════════════════════════════════════════════════════
-# RUN 3 SPECS × 2 POOLS = 6 COMBINATIONS
+# RUN 3 SPECS × 1 POOL (yet-untreated only)
 # ═══════════════════════════════════════════════════════════════════
 all_res<-list(); all_pairs<-list()
-for(sn in names(SPECS)) for(pn in c("yet_untreated","never_treated")){
-  rs<-if(pn=="yet_untreated") rs_yt else rs_nt
-  out<-run_spec_pool(sn,SPECS[[sn]],pn,all_pts,trt_idx,rs,cr_list,trt_tmg,caliper)
+for(sn in names(SPECS)){
+  out<-run_spec_pool(sn,SPECS[[sn]],"yet_untreated",all_pts,trt_idx,rs_yt,cr_list,trt_tmg,caliper)
   if(!is.null(out)){all_res[[length(all_res)+1]]<-out$results
-    all_pairs[[paste(sn,pn,sep="_")]]<-out$pairs}
+    all_pairs[[paste(sn,"yet_untreated",sep="_")]]<-out$pairs}
 }
 
 res_all<-do.call(rbind,all_res); res_all$db<-db
@@ -313,14 +307,13 @@ for(nm in names(all_pairs))
   write.csv(all_pairs[[nm]],file.path(RESULTS,sprintf("did_pairs_%s_%s.csv",nm,tag)),row.names=FALSE)
 
 # ── Summary table ─────────────────────────────────────────────────
-cat(sprintf("\n%s\n  SUMMARY: %s (PSM_DR, 24h)\n%s\n",SEP,db,SEP))
-cat("                   yet-untreated              never-treated\n")
-cat("  spec             DiD       P      n         DiD       P      n\n")
-for(sn in names(SPECS)){parts<-c()
-  for(pl in c("yet_untreated","never_treated")){
-    r<-res_all[res_all$spec==sn&res_all$pool==pl&res_all$method=="psm_dr"&res_all$target_h==PRIMARY_H,]
-    if(nrow(r)==1&&!is.na(r$did)) parts<-c(parts,sprintf("%+.4f  %.3f  %4d",r$did,r$p,r$n))
-    else parts<-c(parts,"   --      --    -- ")}
-  cat(sprintf("  %-16s  %s      %s\n",sn,parts[1],parts[2]))}
+cat(sprintf("\n%s\n  SUMMARY: %s (PSM_DR, yet-untreated)\n%s\n",SEP,db,SEP))
+cat("  spec               24h DiD       P      n\n")
+for(sn in names(SPECS)){
+  r<-res_all[res_all$spec==sn&res_all$pool=="yet_untreated"&res_all$method=="psm_dr"&res_all$target_h==PRIMARY_H,]
+  if(nrow(r)==1&&!is.na(r$did))
+    cat(sprintf("  %-16s  %+.4f  %.3f  %4d\n",sn,r$did,r$p,r$n))
+  else cat(sprintf("  %-16s     --      --    --\n",sn))
+}
 
 cat(sprintf("\n%s\n02_psm.R -- %s DONE (%d rows)\n%s\n",SEP,db,nrow(res_all),SEP))
