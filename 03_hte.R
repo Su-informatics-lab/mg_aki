@@ -33,6 +33,9 @@ AF_PRIOR<- c("atrial fibrillation","atrial flutter","a-fib","afib","chronic af")
 ENC_PAT <- c("encephalopathy","delirium","altered mental","acute confusional","metabolic encephalopathy")
 VA_PAT  <- c("ventricular tachycardia","ventricular fibrillation","v-tach","v-fib","vtach","vfib","cardiac arrest")
 
+# ── Subgroups ──
+# Both sides of each comparison are needed: the HTE IS the contrast
+# between subgroup and complement (e.g., CKD vs No CKD).
 SUBGROUPS <- list(
   list(name="Overall",var=NULL),
   list(name="Age < 65",var="age",op="<",val=65),
@@ -128,7 +131,6 @@ extract_eicu_post_t0 <- function(pairs, all_pts) {
   dx <- dx[dx$patientunitstayid %in% all_pids, ]
   cat(sprintf("    Loaded %d diagnosis rows for %d patients\n", nrow(dx), length(all_pids)))
 
-  # Prior AF: use ETL flag if available, otherwise load pastHistory
   if ("prior_af" %in% names(all_pts)) {
     prior_af_pids <- all_pts$pid[all_pts$prior_af == 1]
   } else {
@@ -146,18 +148,13 @@ extract_eicu_post_t0 <- function(pairs, all_pts) {
     }
   }
 
-  # ICU discharge offsets
-  disch_map <- setNames(all_pts$icu_discharge_h * 60, all_pts$pid)  # in minutes
-
-  # For each pair: compute post-T₀ outcomes
+  disch_map <- setNames(all_pts$icu_discharge_h * 60, all_pts$pid)
   n <- nrow(pairs)
   poaf_trt <- poaf_ctl <- enc_trt <- enc_ctl <- va_trt <- va_ctl <- integer(n)
 
   for (i in seq_len(n)) {
     tp <- pairs$trt_pid[i]; cp <- pairs$ctl_pid[i]
-    t0_min <- pairs$t_mg[i] * 60  # T₀ in minutes
-
-    # Window: [T₀, min(T₀+7d, ICU discharge)]
+    t0_min <- pairs$t_mg[i] * 60
     end_trt <- min(t0_min + WINDOW_7D_MIN, disch_map[as.character(tp)], na.rm=TRUE)
     end_ctl <- min(t0_min + WINDOW_7D_MIN, disch_map[as.character(cp)], na.rm=TRUE)
 
@@ -168,16 +165,12 @@ extract_eicu_post_t0 <- function(pairs, all_pts) {
                 dx$diagnosisoffset <= info$end, ]
       if (nrow(pdx) == 0) next
       ds <- pdx$diagnosisstring
-
-      # POAF (exclude prior AF)
       if (!info$pid %in% prior_af_pids && any(matches_any(ds, AF_PAT))) {
         if (info$side=="trt") poaf_trt[i]<-1L else poaf_ctl[i]<-1L
       }
-      # Encephalopathy
       if (any(matches_any(ds, ENC_PAT))) {
         if (info$side=="trt") enc_trt[i]<-1L else enc_ctl[i]<-1L
       }
-      # Ventricular arrhythmia
       if (any(matches_any(ds, VA_PAT))) {
         if (info$side=="trt") va_trt[i]<-1L else va_ctl[i]<-1L
       }
@@ -246,13 +239,10 @@ for(i in seq_len(nrow(pairs))){
   dcr48_c<-{v<-find_cr(cr_list[[cp]],tmg+48);if(!is.na(v)&&!is.na(cr_pre_c))v-cr_pre_c else NA}
   m48t<-max_cr_win(cr_list[[tp]],tmg,48);m48c<-max_cr_win(cr_list[[cp]],tmg,48)
   m7t<-max_cr_win(cr_list[[tp]],tmg,168);m7c<-max_cr_win(cr_list[[cp]],tmg,168)
-  # Consolidated KDIGO: absolute (≥0.3) within 48h, ratio (≥1.5) within 7d
-  # 48h AKI: both criteria active (using max Cr within 48h)
   aki48_t<-as.integer(!is.na(m48t)&&!is.na(cr_pre_t)&&
     ((m48t-cr_pre_t)>=0.3||(cr_pre_t>0&&m48t/cr_pre_t>=1.5)))
   aki48_c<-as.integer(!is.na(m48c)&&!is.na(cr_pre_c)&&
     ((m48c-cr_pre_c)>=0.3||(cr_pre_c>0&&m48c/cr_pre_c>=1.5)))
-  # 7d AKI: absolute uses 48h max, ratio uses 7d max
   aki7_t<-as.integer(!is.na(cr_pre_t)&&cr_pre_t>0&&(
     (!is.na(m48t)&&(m48t-cr_pre_t)>=0.3)||(!is.na(m7t)&&m7t/cr_pre_t>=1.5)))
   aki7_c<-as.integer(!is.na(cr_pre_c)&&cr_pre_c>0&&(
@@ -260,7 +250,6 @@ for(i in seq_len(nrow(pairs))){
   ti<-which(all_pts$pid==pairs$trt_pid[i])[1];ci<-which(all_pts$pid==pairs$ctl_pid[i])[1]
   if(is.na(ti)||is.na(ci))next
 
-  # Secondary outcomes: post-T₀ for eICU, ICU-stay-level for MIMIC
   if (!is.null(eicu_sec)) {
     poaf_t<-eicu_sec$poaf_trt[i]; poaf_c<-eicu_sec$poaf_ctl[i]
     enc_t<-eicu_sec$enc_trt[i];   enc_c<-eicu_sec$enc_ctl[i]
