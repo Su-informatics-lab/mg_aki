@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-04_figures.py — All publication figures (except CONSORT)
+04_figures.py — Publication figures (aligned to manuscript blueprint)
+
+  fig1_primary     Fig 1: ΔCr DiD 36h + AKI RD (the "does it work" figure)
+  fig2_hte         Fig 2: HTE forest (the "who benefits" figure)
+  fig3_benefit     Fig 3: Benefit-harm spectrum (the "who to treat" figure)
+  efig_timecourse  eFig 3: ΔCr time course (PK plausibility)
+  efig_sensitivity eFig 6: Primary vs Sens A (positivity demonstration)
 
 Usage:
-  python 04_figures.py              # all figures
-  python 04_figures.py primary      # Fig 1: primary outcome forest
-  python 04_figures.py hte          # Fig 2: HTE forest
-  python 04_figures.py benefit_harm # Fig 3: benefit-harm spectrum
-  python 04_figures.py timecourse   # eFig: ΔCr time course
+  python 04_figures.py                # all
+  python 04_figures.py fig1_primary   # just one
 """
 
 import os
@@ -15,10 +18,11 @@ import sys
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 
-# ── Nature-style rcParams ─────────────────────────────────────────
+# ── Nature rcParams ───────────────────────────────────────────────
 for k, v in {
     "pdf.fonttype": 42,
     "ps.fonttype": 42,
@@ -29,7 +33,7 @@ for k, v in {
     "axes.titlesize": 8,
     "xtick.labelsize": 6.5,
     "ytick.labelsize": 6.5,
-    "legend.fontsize": 6,
+    "legend.fontsize": 6.5,
     "axes.linewidth": 0.5,
     "xtick.major.width": 0.5,
     "ytick.major.width": 0.5,
@@ -44,34 +48,25 @@ for k, v in {
     "savefig.facecolor": "white",
     "savefig.dpi": 300,
     "savefig.bbox": "tight",
-    "savefig.pad_inches": 0.04,
+    "savefig.pad_inches": 0.05,
 }.items():
     mpl.rcParams[k] = v
 
-# Wong/Okabe-Ito
 BLUE = "#0072B2"
 VERMIL = "#D55E00"
-SKY = "#56B4E9"
-ORANGE = "#E69F00"
-GREEN = "#009E73"
 GRAY = "#999999"
-
 RESULTS = os.path.expanduser("~/mg_aki/results")
-DB_ORDER = ["mimic", "eicu"]
-DB_LABEL = {"mimic": "MIMIC-IV", "eicu": "eICU-CRD"}
-DB_COLOR = {"mimic": BLUE, "eicu": VERMIL}
-DB_MARKER = {"mimic": "o", "eicu": "s"}
-
-SPEC = "primary"
-POOL = "yet_untreated"
-METHOD = "psm_dr"
+DBS = ["mimic", "eicu"]
+LBL = {"mimic": "MIMIC-IV", "eicu": "eICU-CRD"}
+CLR = {"mimic": BLUE, "eicu": VERMIL}
+MKR = {"mimic": "o", "eicu": "s"}
 
 
 def save(fig, name):
-    for ext in ["pdf", "png"]:
-        fig.savefig(os.path.join(RESULTS, f"{name}.{ext}"), format=ext, dpi=300)
+    for ext in ("pdf", "png"):
+        fig.savefig(os.path.join(RESULTS, f"{name}.{ext}"), format=ext)
     plt.close(fig)
-    print(f"  ✓ {name}.pdf/.png")
+    print(f"  ✓ {name}")
 
 
 def load_hte(tag):
@@ -79,187 +74,171 @@ def load_hte(tag):
     return pd.read_csv(p) if os.path.exists(p) else None
 
 
-def load_riskset(tag):
+def load_rs(tag):
     p = os.path.join(RESULTS, f"did_riskset_{tag}.csv")
     return pd.read_csv(p) if os.path.exists(p) else None
 
 
+def hte_row(hte, sg, oc):
+    """Get one row from HTE data."""
+    r = hte[(hte.subgroup == sg) & (hte.outcome == oc)]
+    return r.iloc[0] if len(r) > 0 else None
+
+
 def or_ci(row):
-    """Compute OR CI from est (=OR) and se (=SE of log-OR)."""
-    if pd.isna(row["est"]) or pd.isna(row["se"]) or row["est"] <= 0:
-        return row["est"], np.nan, np.nan
+    if row is None or pd.isna(row["est"]) or row["est"] <= 0 or pd.isna(row["se"]):
+        return np.nan, np.nan, np.nan
     lo = np.exp(np.log(row["est"]) - 1.96 * row["se"])
     hi = np.exp(np.log(row["est"]) + 1.96 * row["se"])
     return row["est"], lo, hi
 
 
 # ═══════════════════════════════════════════════════════════════════
-# FIGURE 1: PRIMARY OUTCOME FOREST
+# FIGURE 1: PRIMARY RESULT
+#   Panel A: ΔCr DiD at 36h (bars)
+#   Panel B: 48h AKI + 7d AKI risk difference (bars)
 # ═══════════════════════════════════════════════════════════════════
-def fig_primary():
-    """Forest plot: overall outcomes × 2 DBs + spec sensitivity for 48h AKI."""
-    print("\n── Figure 1: Primary outcome forest ──")
+def fig1_primary():
+    print("\n── Fig 1: Primary result ──")
+    fig, (ax_cr, ax_aki) = plt.subplots(
+        1, 2, figsize=(6.5, 3.0), constrained_layout=True
+    )
+    width = 0.35
 
-    outcomes = [
-        ("aki_48h", "48-hour AKI (KDIGO ≥ 1)"),
-        ("aki_7d", "7-day AKI (ratio ≥ 1.5)"),
-        ("hosp_mortality", "Hospital mortality"),
-        ("vent_arrhythmia", "Ventricular arrhythmia"),
-    ]
+    # ── Panel A: ΔCr DiD at 36h ──
+    ax = ax_cr
+    ax.axhline(0, color="#bbb", lw=0.5)
+    for i, tag in enumerate(DBS):
+        rs = load_rs(tag)
+        if rs is None:
+            continue
+        r = rs[
+            (rs.spec == "primary")
+            & (rs.pool == "yet_untreated")
+            & (rs.method == "psm_dr")
+            & (rs.target_h == 36)
+        ]
+        if len(r) == 0:
+            continue
+        r = r.iloc[0]
+        x = i * (width + 0.1)
+        sig = not pd.isna(r["p"]) and r["p"] < 0.05
+        bar = ax.bar(
+            x,
+            r["did"],
+            width,
+            color=CLR[tag],
+            alpha=0.85,
+            edgecolor=CLR[tag],
+            linewidth=0.5,
+        )
+        ax.errorbar(
+            x,
+            r["did"],
+            yerr=[[r["did"] - r["ci_lo"]], [r["ci_hi"] - r["did"]]],
+            fmt="none",
+            color="black",
+            capsize=3,
+            capthick=0.6,
+            lw=0.6,
+        )
+        stars = (
+            "***"
+            if r["p"] < 0.001
+            else "**" if r["p"] < 0.01 else "*" if r["p"] < 0.05 else ""
+        )
+        ax.text(
+            x,
+            min(r["ci_lo"], r["did"]) - 0.003,
+            f'{r["did"]:+.003f}{stars}',
+            ha="center",
+            va="top",
+            fontsize=7,
+            fontweight="bold",
+            color=CLR[tag],
+        )
 
-    fig, (ax_main, ax_spec) = plt.subplots(
-        1,
-        2,
-        figsize=(7.2, 3.2),
-        gridspec_kw={"width_ratios": [3, 2]},
-        constrained_layout=True,
+    ax.set_xticks([i * (width + 0.1) for i in range(len(DBS))])
+    ax.set_xticklabels([LBL[t] for t in DBS], fontsize=7)
+    ax.set_ylabel("DiD: ΔCr at 36h (mg/dL)")
+    ax.set_title("Creatinine change", fontsize=8, pad=4)
+    ax.text(
+        -0.18,
+        1.06,
+        "a",
+        transform=ax.transAxes,
+        fontsize=11,
+        fontweight="bold",
+        va="top",
     )
 
-    # ── Panel A: Overall outcomes ──
-    ax = ax_main
-    ax.axvline(1, color="#cccccc", lw=0.5, zorder=0)
-    y_pos = []
-    y_labels = []
-    y = 0
-    for oc_col, oc_label in reversed(outcomes):
-        for tag in reversed(DB_ORDER):
+    # ── Panel B: AKI Risk Difference ──
+    ax = ax_aki
+    ax.axhline(0, color="#bbb", lw=0.5)
+    outcomes = [
+        ("aki_48h", "48h AKI\n(≥0.3 mg/dL)"),
+        ("aki_7d", "7d AKI\n(ratio ≥1.5)"),
+    ]
+
+    for oi, (oc, oc_label) in enumerate(outcomes):
+        for di, tag in enumerate(DBS):
             hte = load_hte(tag)
             if hte is None:
                 continue
-            row = hte[(hte.subgroup == "Overall") & (hte.outcome == oc_col)]
-            if len(row) == 0:
+            r = hte_row(hte, "Overall", oc)
+            if r is None or pd.isna(r["rd"]):
                 continue
-            row = row.iloc[0]
-            est, lo, hi = or_ci(row)
-            if pd.isna(est):
-                continue
-
-            sig = not pd.isna(row["p"]) and row["p"] < 0.05
-            ax.errorbar(
-                est,
-                y,
-                xerr=[[est - lo], [hi - est]],
-                fmt=DB_MARKER[tag],
-                color=DB_COLOR[tag],
-                ms=6 if sig else 4.5,
-                markerfacecolor=DB_COLOR[tag] if sig else "white",
-                markeredgecolor=DB_COLOR[tag],
-                markeredgewidth=0.8,
-                capsize=2,
-                capthick=0.5,
-                lw=0.7,
-                zorder=3,
+            rd_pct = r["rd"] * 100
+            x = oi * 1.2 + di * (width + 0.05)
+            sig = not pd.isna(r["p"]) and r["p"] < 0.05
+            ax.bar(
+                x,
+                rd_pct,
+                width,
+                color=CLR[tag],
+                alpha=0.85,
+                edgecolor=CLR[tag],
+                linewidth=0.5,
             )
-
-            # Annotate OR
-            txt = f"{est:.2f}"
-            if not pd.isna(row["p"]):
-                txt += "*" if row["p"] < 0.05 else ""
+            nnt = int(round(1 / abs(r["rd"]))) if abs(r["rd"]) > 0.005 else None
+            label = f"{rd_pct:+.1f}%"
+            if nnt:
+                label += f"\nNNT={nnt}"
             ax.text(
-                max(hi, est) + 0.04,
-                y,
-                txt,
-                va="center",
+                x,
+                rd_pct - 0.3,
+                label,
+                ha="center",
+                va="top",
                 fontsize=5.5,
-                color=DB_COLOR[tag],
+                color=CLR[tag],
+                fontweight="bold",
             )
-            y_pos.append(y)
-            y_labels.append(f"{DB_LABEL[tag]}" if tag == DB_ORDER[0] else "")
-            y += 1
-        y += 0.5  # gap between outcomes
 
-    ax.set_yticks([i * 2.5 + 0.5 for i in range(len(outcomes))])
-    ax.set_yticklabels([oc[1] for oc in outcomes], fontsize=6.5)
-    ax.set_xlabel("Odds Ratio (95% CI)")
-    ax.set_xlim(0.3, 1.8)
-    ax.text(
-        -0.15,
-        1.05,
-        "a",
-        transform=ax.transAxes,
-        fontsize=10,
-        fontweight="bold",
-        va="top",
-    )
-    ax.set_title("Overall outcomes", fontsize=7, pad=4)
-
-    # Legend
-    for tag in DB_ORDER:
-        ax.plot(
-            [],
-            [],
-            DB_MARKER[tag],
-            color=DB_COLOR[tag],
-            markerfacecolor=DB_COLOR[tag],
-            ms=5,
-            label=DB_LABEL[tag],
-        )
-    ax.legend(loc="upper right", fontsize=6, handletextpad=0.3)
-
-    # ── Panel B: 48h AKI across specs ──
-    ax = ax_spec
-    ax.axvline(1, color="#cccccc", lw=0.5, zorder=0)
-
-    spec_labels = {
-        "primary": "Primary\n(19 var, no K⁺/Mg)",
-        "sens_a": "Sensitivity A\n(21 var, + K⁺/Mg)",
-        "sens_b": "Sensitivity B\n(19 var, FIRST labs)",
-    }
-    specs = ["primary", "sens_a", "sens_b"]
-    y = 0
-    for sn in reversed(specs):
-        for tag in reversed(DB_ORDER):
-            rs = load_riskset(tag)
-            if rs is None:
-                continue
-            # Get 48h AKI from HTE for primary, but for sens_a/sens_b we need
-            # to use ΔCr at 24h from riskset as a proxy... Actually we only
-            # have HTE for primary spec. For spec comparison, use riskset DiD.
-            row = rs[
-                (rs.spec == sn)
-                & (rs.pool == POOL)
-                & (rs.method == METHOD)
-                & (rs.target_h == 24)
-            ]
-            if len(row) == 0:
-                continue
-            row = row.iloc[0]
-            if pd.isna(row["did"]):
-                continue
-
-            sig = not pd.isna(row["p"]) and row["p"] < 0.05
-            ax.errorbar(
-                row["did"],
-                y,
-                xerr=[[row["did"] - row["ci_lo"]], [row["ci_hi"] - row["did"]]],
-                fmt=DB_MARKER[tag],
-                color=DB_COLOR[tag],
-                ms=6 if sig else 4.5,
-                markerfacecolor=DB_COLOR[tag] if sig else "white",
-                markeredgecolor=DB_COLOR[tag],
-                markeredgewidth=0.8,
-                capsize=2,
-                capthick=0.5,
-                lw=0.7,
-                zorder=3,
-            )
-            y += 1
-        y += 0.5
-
-    ax.axvline(0, color="#cccccc", lw=0.5, zorder=0)
-    ax.set_yticks([i * 2.5 + 0.5 for i in range(len(specs))])
-    ax.set_yticklabels([spec_labels[s] for s in specs], fontsize=6)
-    ax.set_xlabel("DiD: ΔCr at 24h (mg/dL)")
+    ax.set_xticks([oi * 1.2 + 0.2 for oi in range(len(outcomes))])
+    ax.set_xticklabels([oc[1] for oc in outcomes], fontsize=6.5)
+    ax.set_ylabel("Risk Difference (%)")
+    ax.set_title("Clinical AKI", fontsize=8, pad=4)
     ax.text(
         -0.18,
-        1.05,
+        1.06,
         "b",
         transform=ax.transAxes,
-        fontsize=10,
+        fontsize=11,
         fontweight="bold",
         va="top",
     )
-    ax.set_title("Sensitivity: covariate specification", fontsize=7, pad=4)
+
+    # Shared legend
+    from matplotlib.patches import Patch
+
+    fig.legend(
+        handles=[Patch(color=CLR[t], label=LBL[t]) for t in DBS],
+        loc="lower center",
+        ncol=2,
+        fontsize=6.5,
+        bbox_to_anchor=(0.5, -0.04),
+    )
 
     save(fig, "fig1_primary")
 
@@ -267,118 +246,122 @@ def fig_primary():
 # ═══════════════════════════════════════════════════════════════════
 # FIGURE 2: HTE FOREST
 # ═══════════════════════════════════════════════════════════════════
-def fig_hte():
-    """HTE forest: subgroups × 48h AKI, both databases."""
-    print("\n── Figure 2: HTE forest ──")
+def fig2_hte():
+    print("\n── Fig 2: HTE forest ──")
 
-    subgroups = [
-        "Overall",
-        "Age < 65",
-        "Age >= 65",
-        "eGFR < 60",
-        "eGFR >= 60",
-        "Mg < 1.8",
-        "Mg >= 1.8",
-        "CABG",
-        "Non-CABG",
-        "Diabetes",
-        "No diabetes",
-        "CKD",
-        "No CKD",
-        "Heart failure",
-        "No HF",
-        "BMI >= 30",
-        "BMI < 30",
-        "DM + CKD",
-        "HF + CABG",
-        "Mg<1.8 + CKD",
+    # Ordered top to bottom as displayed
+    groups = [
+        ("Overall", None),
+        ("Age < 65", "age_ge65"),
+        ("Age >= 65", None),
+        ("eGFR < 60", "egfr_lt60"),
+        ("eGFR >= 60", None),
+        ("Mg < 1.8", "mg_lt18"),
+        ("Mg >= 1.8", None),
+        ("CABG", "surg_cabg"),
+        ("Non-CABG", None),
+        ("Diabetes", "diabetes"),
+        ("No diabetes", None),
+        ("CKD", "ckd"),
+        ("No CKD", None),
+        ("Heart failure", "heart_failure"),
+        ("No HF", None),
+        ("BMI >= 30", "bmi_ge30"),
+        ("BMI < 30", None),
+        None,  # separator
+        ("DM + CKD", None),
+        ("HF + CABG", None),
+        ("Mg<1.8 + CKD", None),
     ]
-    # Group separators (after these indices)
-    group_gaps = {1, 3, 5, 7, 9, 11, 13, 15, 16}
 
-    fig, ax = plt.subplots(figsize=(5.5, 7), constrained_layout=True)
-    ax.axvline(1, color="#cccccc", lw=0.5, zorder=0)
-    ax.axvspan(0.95, 1.05, color="#f5f5f5", zorder=0)
+    # Load interaction P from the HTE data (MIMIC)
+    # We'll just display them from known values
+    htes = {tag: load_hte(tag) for tag in DBS}
+
+    fig, ax = plt.subplots(figsize=(5.5, 7.5), constrained_layout=True)
+    ax.axvline(1, color="#ddd", lw=0.6, zorder=0)
 
     y = 0
-    yticks = []
-    ylabels = []
-    for i, sg in enumerate(reversed(subgroups)):
-        for j, tag in enumerate(reversed(DB_ORDER)):
-            hte = load_hte(tag)
+    yticks, ylabels = [], []
+    prev_was_sep = False
+
+    for item in reversed(groups):
+        if item is None:
+            y += 0.8
+            prev_was_sep = True
+            continue
+
+        sg_name, int_var = item
+        for di, tag in enumerate(reversed(DBS)):
+            hte = htes.get(tag)
             if hte is None:
                 continue
-            row = hte[(hte.subgroup == sg) & (hte.outcome == "aki_48h")]
-            if len(row) == 0:
+            r = hte_row(hte, sg_name, "aki_48h")
+            if r is None:
                 continue
-            row = row.iloc[0]
-            est, lo, hi = or_ci(row)
-            if pd.isna(est) or est > 10:
+            est, lo, hi = or_ci(r)
+            if pd.isna(est) or est > 15:
                 continue
 
-            sig = not pd.isna(row["p"]) and row["p"] < 0.05
-            offset = 0.15 if tag == DB_ORDER[0] else -0.15
+            offset = 0.15 if di == 0 else -0.15
+            sig = not pd.isna(r["p"]) and r["p"] < 0.05
+            t = tag if di == 0 else DBS[0]  # reversed order
+            actual_tag = DBS[1] if di == 0 else DBS[0]
             ax.errorbar(
                 est,
                 y + offset,
-                xerr=[[max(est - lo, 0)], [max(hi - est, 0)]],
-                fmt=DB_MARKER[tag],
-                color=DB_COLOR[tag],
+                xerr=[[max(est - lo, 0.001)], [max(hi - est, 0.001)]],
+                fmt=MKR[actual_tag],
+                color=CLR[actual_tag],
                 ms=5 if sig else 3.5,
-                markerfacecolor=DB_COLOR[tag] if sig else "white",
-                markeredgecolor=DB_COLOR[tag],
+                markerfacecolor=CLR[actual_tag] if sig else "white",
+                markeredgecolor=CLR[actual_tag],
                 markeredgewidth=0.7,
                 capsize=1.5,
                 capthick=0.4,
-                lw=0.6,
+                lw=0.5,
                 zorder=3,
             )
 
         yticks.append(y)
-        ylabels.append(sg)
-        idx_from_end = len(subgroups) - 1 - i
-        if idx_from_end in group_gaps:
-            y += 1.5
-        else:
-            y += 1
+        label = sg_name
+        if sg_name == "Overall":
+            label = "Overall"
+        ylabels.append(label)
+
+        # Gap between pairs
+        idx = len(groups) - 1 - groups.index(item) if item in groups else 0
+        y += 1.0
 
     ax.set_yticks(yticks)
     ax.set_yticklabels(ylabels, fontsize=6)
     ax.set_xlabel("Odds Ratio for 48h AKI (95% CI)")
-    ax.set_xlim(0.05, 3.0)
     ax.set_xscale("log")
+    ax.set_xlim(0.08, 4.0)
     ax.set_xticks([0.1, 0.25, 0.5, 1, 2])
-    ax.get_xaxis().set_major_formatter(mpl.ticker.ScalarFormatter())
+    ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
 
-    # Legend
-    for tag in DB_ORDER:
+    for tag in DBS:
         ax.plot(
             [],
             [],
-            DB_MARKER[tag],
-            color=DB_COLOR[tag],
-            markerfacecolor=DB_COLOR[tag],
+            MKR[tag],
+            color=CLR[tag],
+            markerfacecolor=CLR[tag],
             ms=5,
-            label=DB_LABEL[tag],
+            label=LBL[tag],
         )
-    ax.legend(loc="upper right", fontsize=6)
+    ax.legend(loc="upper right", fontsize=6.5)
 
-    # Annotations
     ax.text(
-        0.08,
-        -0.03,
-        "← Favors IV Mg",
-        transform=ax.transAxes,
-        fontsize=5,
-        color=GRAY,
-        ha="left",
+        0.02, -0.025, "← Favors IV Mg", transform=ax.transAxes, fontsize=5.5, color=GRAY
     )
     ax.text(
-        0.92,
-        -0.03,
+        0.98,
+        -0.025,
         "Favors control →",
         transform=ax.transAxes,
-        fontsize=5,
+        fontsize=5.5,
         color=GRAY,
         ha="right",
     )
@@ -389,174 +372,171 @@ def fig_hte():
 # ═══════════════════════════════════════════════════════════════════
 # FIGURE 3: BENEFIT-HARM SPECTRUM
 # ═══════════════════════════════════════════════════════════════════
-def fig_benefit_harm():
-    """Mg-stratified RD + crossed phenotype panel."""
-    print("\n── Figure 3: Benefit-harm spectrum ──")
-
+def fig3_benefit():
+    print("\n── Fig 3: Benefit-harm spectrum ──")
     fig, (ax_mg, ax_cross) = plt.subplots(
         1,
         2,
-        figsize=(7.2, 3.5),
+        figsize=(7.0, 3.2),
+        gridspec_kw={"width_ratios": [3, 2]},
         constrained_layout=True,
     )
+    width = 0.28
 
-    # ── Panel A: Mg-stratified outcomes ──
+    # ── Panel A: Mg-stratified RD% for 48h AKI ──
     ax = ax_mg
-    outcomes = [
+    ax.axhline(0, color="#bbb", lw=0.5)
+    mg_groups = ["Mg < 1.8", "Mg >= 1.8"]
+    oc_list = [
         ("aki_48h", "48h AKI"),
         ("aki_7d", "7d AKI"),
         ("hosp_mortality", "Mortality"),
     ]
-    mg_groups = ["Mg < 1.8", "Mg >= 1.8"]
-    x = np.arange(len(outcomes))
-    width = 0.18
 
     for gi, mg_sg in enumerate(mg_groups):
-        for ti, tag in enumerate(DB_ORDER):
-            hte = load_hte(tag)
-            if hte is None:
-                continue
-            rds = []
-            for oc_col, _ in outcomes:
-                row = hte[(hte.subgroup == mg_sg) & (hte.outcome == oc_col)]
-                if len(row) > 0 and not pd.isna(row.iloc[0]["rd"]):
-                    rds.append(row.iloc[0]["rd"] * 100)
-                else:
-                    rds.append(0)
-
-            offset = (gi * len(DB_ORDER) + ti - 1.5) * width
-            color = DB_COLOR[tag]
-            alpha = 1.0 if gi == 1 else 0.5  # Mg≥1.8 solid, <1.8 faded
-            hatch = "" if gi == 1 else "///"
-            bars = ax.bar(
-                x + offset,
-                rds,
-                width * 0.9,
-                color=color,
-                alpha=alpha,
-                hatch=hatch,
-                edgecolor=color,
-                linewidth=0.5,
-            )
-
-            for bar, rd in zip(bars, rds):
-                if abs(rd) > 0.5:
+        for oi, (oc, oc_lbl) in enumerate(oc_list):
+            for di, tag in enumerate(DBS):
+                hte = load_hte(tag)
+                if hte is None:
+                    continue
+                r = hte_row(hte, mg_sg, oc)
+                if r is None or pd.isna(r["rd"]):
+                    continue
+                rd_pct = r["rd"] * 100
+                x = oi * 1.6 + (gi * len(DBS) + di) * (width + 0.02)
+                alpha = 0.9 if gi == 1 else 0.4
+                hatch = "" if gi == 1 else "///"
+                ax.bar(
+                    x,
+                    rd_pct,
+                    width,
+                    color=CLR[tag],
+                    alpha=alpha,
+                    hatch=hatch,
+                    edgecolor=CLR[tag],
+                    linewidth=0.4,
+                )
+                if abs(rd_pct) > 0.8:
+                    va = "bottom" if rd_pct > 0 else "top"
                     ax.text(
-                        bar.get_x() + bar.get_width() / 2,
-                        rd,
-                        f"{rd:+.1f}",
+                        x,
+                        rd_pct,
+                        f"{rd_pct:+.1f}",
                         ha="center",
-                        va="bottom" if rd > 0 else "top",
+                        va=va,
                         fontsize=4.5,
-                        color=color,
+                        color=CLR[tag],
                     )
 
-    ax.axhline(0, color="#aaa", lw=0.4)
-    ax.set_xticks(x)
-    ax.set_xticklabels([oc[1] for oc in outcomes], fontsize=6.5)
+    ax.set_xticks([oi * 1.6 + 0.6 for oi in range(len(oc_list))])
+    ax.set_xticklabels([oc[1] for oc in oc_list], fontsize=6.5)
     ax.set_ylabel("Risk Difference (%)")
     ax.text(
-        -0.15,
-        1.05,
+        -0.14,
+        1.06,
         "a",
         transform=ax.transAxes,
-        fontsize=10,
+        fontsize=11,
         fontweight="bold",
         va="top",
     )
     ax.set_title("Mg-stratified treatment effect", fontsize=7, pad=4)
 
-    # Manual legend
     from matplotlib.patches import Patch
 
-    legend_elements = [
-        Patch(facecolor=BLUE, alpha=1, label="MIMIC Mg≥1.8"),
-        Patch(
-            facecolor=BLUE, alpha=0.5, hatch="///", edgecolor=BLUE, label="MIMIC Mg<1.8"
-        ),
-        Patch(facecolor=VERMIL, alpha=1, label="eICU Mg≥1.8"),
-        Patch(
-            facecolor=VERMIL,
-            alpha=0.5,
-            hatch="///",
-            edgecolor=VERMIL,
-            label="eICU Mg<1.8",
-        ),
-    ]
-    ax.legend(handles=legend_elements, fontsize=5, loc="lower left", ncol=2)
+    ax.legend(
+        handles=[
+            Patch(color=BLUE, alpha=0.9, label="MIMIC Mg≥1.8"),
+            Patch(
+                color=BLUE, alpha=0.4, hatch="///", edgecolor=BLUE, label="MIMIC Mg<1.8"
+            ),
+            Patch(color=VERMIL, alpha=0.9, label="eICU Mg≥1.8"),
+            Patch(
+                color=VERMIL,
+                alpha=0.4,
+                hatch="///",
+                edgecolor=VERMIL,
+                label="eICU Mg<1.8",
+            ),
+        ],
+        fontsize=5,
+        loc="lower left",
+        ncol=2,
+    )
 
-    # ── Panel B: Crossed phenotypes ──
+    # ── Panel B: Crossed phenotype forest ──
     ax = ax_cross
-    ax.axvline(1, color="#cccccc", lw=0.5, zorder=0)
+    ax.axvline(1, color="#ddd", lw=0.6, zorder=0)
 
     crossed = [
         ("HF + CABG", "HF + CABG"),
         ("DM + CKD", "DM + CKD"),
-        ("Mg<1.8 + CKD", "Mg<1.8 + CKD (HARM?)"),
+        ("Mg<1.8 + CKD", "Mg<1.8 + CKD"),
     ]
 
     y = 0
     yticks, ylabels = [], []
     for sg_key, sg_label in reversed(crossed):
-        for tag in reversed(DB_ORDER):
+        for di, tag in enumerate(reversed(DBS)):
             hte = load_hte(tag)
             if hte is None:
                 continue
-            row = hte[(hte.subgroup == sg_key) & (hte.outcome == "aki_48h")]
-            if len(row) == 0:
+            r = hte_row(hte, sg_key, "aki_48h")
+            if r is None:
                 continue
-            row = row.iloc[0]
-            est, lo, hi = or_ci(row)
+            est, lo, hi = or_ci(r)
             if pd.isna(est) or est > 20:
                 continue
 
-            sig = not pd.isna(row["p"]) and row["p"] < 0.05
-            offset = 0.12 if tag == DB_ORDER[0] else -0.12
+            actual_tag = DBS[1 - di]
+            offset = 0.12 if di == 0 else -0.12
+            sig = not pd.isna(r["p"]) and r["p"] < 0.05
             ax.errorbar(
                 est,
                 y + offset,
-                xerr=[[max(est - lo, 0)], [max(hi - est, 0)]],
-                fmt=DB_MARKER[tag],
-                color=DB_COLOR[tag],
+                xerr=[[max(est - lo, 0.001)], [max(hi - est, 0.001)]],
+                fmt=MKR[actual_tag],
+                color=CLR[actual_tag],
                 ms=6 if sig else 4,
-                markerfacecolor=DB_COLOR[tag] if sig else "white",
-                markeredgecolor=DB_COLOR[tag],
+                markerfacecolor=CLR[actual_tag] if sig else "white",
+                markeredgecolor=CLR[actual_tag],
                 markeredgewidth=0.8,
                 capsize=2,
                 capthick=0.5,
-                lw=0.7,
+                lw=0.6,
                 zorder=3,
             )
 
             # n annotation
-            n_txt = f"n={row['n_trt']}v{row['n_ctl']}"
             ax.text(
-                0.02,
+                0.03,
                 y + offset,
-                n_txt,
+                f'n={int(r["n_trt"])}v{int(r["n_ctl"])}',
                 fontsize=4.5,
                 color=GRAY,
+                va="center",
                 transform=mpl.transforms.blended_transform_factory(
                     ax.transAxes, ax.transData
                 ),
             )
+
         yticks.append(y)
         ylabels.append(sg_label)
-        y += 1.5
+        y += 1.3
 
     ax.set_yticks(yticks)
     ax.set_yticklabels(ylabels, fontsize=6.5)
-    ax.set_xlabel("Odds Ratio for 48h AKI (95% CI)")
+    ax.set_xlabel("OR for 48h AKI (95% CI)")
     ax.set_xscale("log")
-    ax.set_xlim(0.05, 5)
+    ax.set_xlim(0.05, 6)
     ax.set_xticks([0.1, 0.25, 0.5, 1, 2, 4])
-    ax.get_xaxis().set_major_formatter(mpl.ticker.ScalarFormatter())
+    ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
     ax.text(
-        -0.2,
-        1.05,
+        -0.22,
+        1.06,
         "b",
         transform=ax.transAxes,
-        fontsize=10,
+        fontsize=11,
         fontweight="bold",
         va="top",
     )
@@ -568,48 +548,47 @@ def fig_benefit_harm():
 # ═══════════════════════════════════════════════════════════════════
 # eFIGURE: TIME COURSE
 # ═══════════════════════════════════════════════════════════════════
-def fig_timecourse():
-    """ΔCr time course (6-48h), primary spec, both databases."""
-    print("\n── eFigure: ΔCr time course ──")
-
-    dbs = []
-    for tag in DB_ORDER:
-        df = load_riskset(tag)
+def efig_timecourse():
+    print("\n── eFig: ΔCr time course ──")
+    avail = []
+    for tag in DBS:
+        df = load_rs(tag)
         if df is not None and "spec" in df.columns:
-            dbs.append((tag, df))
+            avail.append((tag, df))
 
-    n = len(dbs)
+    n = len(avail)
     fig, axes = plt.subplots(
-        1, n, figsize=(3.5 * n, 3.0), sharey=True, constrained_layout=True
+        1, n, figsize=(3.5 * n, 2.8), sharey=True, constrained_layout=True
     )
     if n == 1:
         axes = [axes]
 
-    for i, (tag, df) in enumerate(dbs):
+    for i, (tag, df) in enumerate(avail):
         ax = axes[i]
-        ax.axhline(0, color="#aaa", lw=0.5, zorder=1)
-        ax.axvspan(22, 26, color="#f0f0f0", zorder=0)
+        ax.axhline(0, color="#aaa", lw=0.5)
+        ax.axvspan(34, 38, color="#f0f0f0", zorder=0)
 
         sub = (
-            df[(df.spec == SPEC) & (df.pool == POOL) & (df.method == METHOD)]
+            df[
+                (df.spec == "primary")
+                & (df.pool == "yet_untreated")
+                & (df.method == "psm_dr")
+            ]
             .sort_values("target_h")
             .dropna(subset=["did"])
         )
         if len(sub) == 0:
             continue
 
-        h = sub.target_h.values
-        d = sub.did.values
-        lo = sub.ci_lo.values
-        hi = sub.ci_hi.values
-        pv = sub.p.values
+        h, d = sub.target_h.values, sub.did.values
+        lo, hi, pv = sub.ci_lo.values, sub.ci_hi.values, sub.p.values
 
         ax.fill_between(h, lo, hi, alpha=0.15, color=BLUE, zorder=2)
         ax.plot(
             h,
             d,
             color=BLUE,
-            lw=1.5,
+            lw=1.4,
             marker="o",
             ms=5,
             markerfacecolor="white",
@@ -617,19 +596,17 @@ def fig_timecourse():
             markeredgecolor=BLUE,
             zorder=4,
         )
-
         for j in range(len(h)):
             if not np.isnan(pv[j]) and pv[j] < 0.05:
                 ax.plot(h[j], d[j], "o", ms=5, color=BLUE, zorder=5)
 
         ax.set_xticks([6, 12, 18, 24, 30, 36, 42, 48])
         ax.set_xlim(3, 51)
-        ax.set_xlabel("Hours from T₀ (first IV Mg)")
+        ax.set_xlabel("Hours from T₀")
         if i == 0:
             ax.set_ylabel("DiD: ΔCr (mg/dL)")
-
         ax.text(
-            -0.12,
+            -0.14,
             1.06,
             chr(ord("a") + i),
             transform=ax.transAxes,
@@ -637,45 +614,116 @@ def fig_timecourse():
             fontweight="bold",
             va="top",
         )
-        ax.set_title(DB_LABEL.get(tag, tag), fontsize=8, pad=6)
+        ax.set_title(LBL.get(tag, tag), fontsize=8, pad=5)
 
     fig.text(
         0.5,
-        -0.02,
-        "Primary spec (19 var, no K⁺/Mg), PSM+DR  |  "
-        "Filled ● = P<0.05  |  Gray = 24h  |  DiD<0 = renoprotective",
+        -0.03,
+        "Primary (19 var, no K⁺/Mg), PSM+DR  |  Filled ● = P<0.05  |  "
+        "Gray band = 36h primary  |  DiD<0 = renoprotective",
         ha="center",
         fontsize=5.5,
         color="#666",
     )
-
     save(fig, "efig_timecourse")
 
 
 # ═══════════════════════════════════════════════════════════════════
-# MAIN
+# eFIGURE: SENSITIVITY (primary vs sens_a)
+# ═══════════════════════════════════════════════════════════════════
+def efig_sensitivity():
+    print("\n── eFig: Primary vs Sensitivity A ──")
+    avail = []
+    for tag in DBS:
+        df = load_rs(tag)
+        if df is not None and "spec" in df.columns:
+            avail.append((tag, df))
+
+    specs = [
+        ("primary", "Primary (no K⁺/Mg)", BLUE),
+        ("sens_a", "Sensitivity A (+K⁺/Mg)", VERMIL),
+    ]
+    n = len(avail)
+    fig, axes = plt.subplots(
+        1, n, figsize=(3.5 * n, 2.8), sharey=True, constrained_layout=True
+    )
+    if n == 1:
+        axes = [axes]
+
+    for i, (tag, df) in enumerate(avail):
+        ax = axes[i]
+        ax.axhline(0, color="#aaa", lw=0.5)
+        for sn, slbl, scol in specs:
+            sub = (
+                df[
+                    (df.spec == sn)
+                    & (df.pool == "yet_untreated")
+                    & (df.method == "psm_dr")
+                ]
+                .sort_values("target_h")
+                .dropna(subset=["did"])
+            )
+            if len(sub) == 0:
+                continue
+            h, d = sub.target_h.values, sub.did.values
+            lo, hi, pv = sub.ci_lo.values, sub.ci_hi.values, sub.p.values
+            ls = "-" if sn == "primary" else "--"
+            ax.fill_between(h, lo, hi, alpha=0.10, color=scol)
+            ax.plot(
+                h,
+                d,
+                color=scol,
+                lw=1.2,
+                ls=ls,
+                marker="o",
+                ms=4,
+                markerfacecolor="white",
+                markeredgecolor=scol,
+                markeredgewidth=0.8,
+                label=slbl,
+            )
+            for j in range(len(h)):
+                if not np.isnan(pv[j]) and pv[j] < 0.05:
+                    ax.plot(h[j], d[j], "o", ms=4, color=scol, zorder=5)
+
+        ax.set_xticks([6, 12, 18, 24, 30, 36, 42, 48])
+        ax.set_xlim(3, 51)
+        ax.set_xlabel("Hours from T₀")
+        if i == 0:
+            ax.set_ylabel("DiD: ΔCr (mg/dL)")
+            ax.legend(fontsize=5.5, loc="lower left")
+        ax.text(
+            -0.14,
+            1.06,
+            chr(ord("a") + i),
+            transform=ax.transAxes,
+            fontsize=10,
+            fontweight="bold",
+            va="top",
+        )
+        ax.set_title(LBL.get(tag, tag), fontsize=8, pad=5)
+
+    save(fig, "efig_sensitivity")
+
+
 # ═══════════════════════════════════════════════════════════════════
 FIGURES = {
-    "primary": fig_primary,
-    "hte": fig_hte,
-    "benefit_harm": fig_benefit_harm,
-    "timecourse": fig_timecourse,
+    "fig1_primary": fig1_primary,
+    "fig2_hte": fig2_hte,
+    "fig3_benefit": fig3_benefit,
+    "efig_timecourse": efig_timecourse,
+    "efig_sensitivity": efig_sensitivity,
 }
 
 if __name__ == "__main__":
     print("=" * 70)
     print("04_figures.py — Publication figures")
     print("=" * 70)
-
     args = [a.lower() for a in sys.argv[1:]]
     to_draw = args if args else list(FIGURES.keys())
-
     for name in to_draw:
         if name in FIGURES:
             FIGURES[name]()
         else:
-            print(f"  Unknown figure: {name}. Options: {list(FIGURES.keys())}")
-
-    print("\n" + "=" * 70)
-    print("Done.")
+            print(f"  Unknown: {name}. Options: {list(FIGURES.keys())}")
     print("=" * 70)
