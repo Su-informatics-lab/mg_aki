@@ -4,9 +4,10 @@
 #
 # Primary endpoint: ΔCr at T₀ + 24h
 # Lab timing: FIRST (admission baseline)
-# MICE m=20, single run
+# PS: 21 covariates (no drug flags — 256-spec sweep confirmed irrelevant)
+# MICE: m=20, averaged → single PS → single match
 # Control pool: Mg-free through T₀ + 24h
-# Effect monitoring: 6–36h (contamination check for >24h)
+# Effect monitoring: 6–36h
 #
 # Usage: Rscript 02_psm.R eicu
 #        Rscript 02_psm.R mimic
@@ -15,18 +16,17 @@
 suppressPackageStartupMessages({ library(sandwich); library(lmtest); library(mice) })
 
 RESULTS    <- path.expand("~/mg_aki/results")
-PRIMARY_H  <- 24       # primary: ΔCr at T₀ + 24h
-CR_WINDOW  <- 12       # ±12h tolerance for Cr lookup
+PRIMARY_H  <- 24
+CR_WINDOW  <- 12
 CALIPER_SD <- 0.2
 M_IMP      <- 20
 TARGETS    <- c(6, 12, 18, 24, 30, 36)
 
-# PS covariates
+# PS: 21 covariates (no chronic drugs)
 PS_FIXED <- c("age","is_female","bmi",
               "surg_cabg","surg_valve","surg_combined",
               "heart_failure","hypertension","diabetes","ckd",
-              "copd","pvd","stroke","liver_disease","egfr",
-              "ppi_chronic","loop_diuretic_chronic","acei_arb_chronic","nsaid_chronic")
+              "copd","pvd","stroke","liver_disease","egfr")
 PS_LAB_BASES <- c("magnesium","potassium","calcium","lactate","heartrate")
 
 # ═══════════════════════════════════════════════════════════════════
@@ -66,20 +66,18 @@ if (length(args) < 1) { cat("Usage: Rscript 02_psm.R <db>\n"); quit(status = 1) 
 db <- toupper(args[1]); tag <- tolower(db)
 
 SEP <- paste(rep("=", 70), collapse = "")
-cat(sprintf("\n%s\n02_psm.R — Risk-Set PSM: %s\n  Primary: ΔCr at T₀+%dh | Labs: FIRST | MICE m=%d\n%s\n",
+cat(sprintf("\n%s\n02_psm.R — Risk-Set PSM: %s\n  Primary: ΔCr at T₀+%dh | PS: 21 covars (no drugs) | MICE m=%d averaged\n%s\n",
             SEP, db, PRIMARY_H, M_IMP, SEP))
 
 # ── Load data ─────────────────────────────────────────────────────
 all_pts <- read.csv(file.path(RESULTS, sprintf("did_all_%s.csv", tag)), stringsAsFactors = FALSE)
 cr_all  <- read.csv(file.path(RESULTS, sprintf("did_cr_all_%s.csv", tag)), stringsAsFactors = FALSE)
 
-# Normalize cr_all pid + offset
 cr_id <- if ("patientunitstayid" %in% names(cr_all)) "patientunitstayid" else "stay_id"
 cr_all$pid <- cr_all[[cr_id]]
 if (!"offset_h" %in% names(cr_all)) cr_all$offset_h <- cr_all$labresultoffset / 60
 cr_all <- cr_all[order(cr_all$pid, cr_all$offset_h), ]
 
-# Load labs (electrolytes + downsampled HR)
 cat("  Loading labs...\n")
 labs_raw <- read.csv(file.path(RESULTS, sprintf("did_labs_all_%s.csv", tag)), stringsAsFactors = FALSE)
 pid_col_lab <- if ("patientunitstayid" %in% names(labs_raw)) "patientunitstayid" else "stay_id"
@@ -98,10 +96,9 @@ rm(labs_raw, labs_elec, labs_hr); gc()
 
 N <- nrow(all_pts)
 cat(sprintf("  Patients: %d (%d treated, %d control)\n", N,
-            sum(all_pts$treated == 1, na.rm=TRUE),
-            sum(all_pts$treated == 0, na.rm=TRUE)))
+            sum(all_pts$treated == 1, na.rm=TRUE), sum(all_pts$treated == 0, na.rm=TRUE)))
 
-# ── Pre-compute FIRST lab values ──────────────────────────────────
+# ── FIRST lab values ──────────────────────────────────────────────
 cat("  Computing FIRST lab values...\n")
 for (ln in PS_LAB_BASES) {
   sub <- labs[labs$lab_name == ln, ]
@@ -121,11 +118,10 @@ all_pts$first_lactate_missing <- as.integer(is.na(all_pts$first_lactate))
 # ── Treatment indices ─────────────────────────────────────────────
 trt_idx <- which(all_pts$treated == 1 & !is.na(all_pts$mg_offset_h))
 n_trt <- length(trt_idx)
-cat(sprintf("  Treated with valid t_mg: %d\n", n_trt))
+cat(sprintf("  Treated: %d\n", n_trt))
 
 # ── Risk sets ─────────────────────────────────────────────────────
 cat("  Pre-computing risk sets...\n")
-
 cr_list <- split(cr_all[, c("labresult","offset_h")], cr_all$pid)
 
 earliest_cr <- sapply(cr_list, function(x) min(x$offset_h, na.rm = TRUE))
@@ -162,7 +158,6 @@ for (k in seq_len(n_trt)) {
     (is.na(all_pts$mg_offset_h) | all_pts$mg_offset_h > t_mg + PRIMARY_H) &
     all_pts$pid != trt_pids[k])
 }
-
 rs_sizes <- vapply(risk_sets, length, integer(1))
 cat(sprintf("    Risk sets: median=%.0f, IQR=[%.0f,%.0f], empty=%d\n",
             median(rs_sizes), quantile(rs_sizes, 0.25), quantile(rs_sizes, 0.75),
@@ -177,7 +172,7 @@ ps_vars <- ps_vars[vapply(ps_vars, function(v) {
 }, logical(1))]
 cat(sprintf("  PS covariates (%d): %s\n", length(ps_vars), paste(ps_vars, collapse=", ")))
 
-# ── MICE ──────────────────────────────────────────────────────────
+# ── MICE m=20, average imputed values ─────────────────────────────
 to_impute <- ps_vars[vapply(ps_vars, function(v) any(is.na(all_pts[[v]])), logical(1))]
 cat(sprintf("  MICE m=%d on %d vars: %s\n", M_IMP, length(to_impute), paste(to_impute, collapse=", ")))
 
@@ -187,169 +182,138 @@ if (length(to_impute) > 0) {
   for (v in to_impute) meth[v] <- "pmm"
   imp <- mice(mice_df, m = M_IMP, method = meth, printFlag = FALSE, maxit = 10)
   cat(sprintf("  MICE done. Logged events: %d\n", nrow(imp$loggedEvents)))
+
+  # Average across m imputations → single dataset
+  for (v in to_impute) {
+    vals <- sapply(1:M_IMP, function(m) complete(imp, m)[[v]])
+    all_pts[[v]] <- rowMeans(vals, na.rm = TRUE)
+  }
+  cat("  Imputed values averaged across m=20\n")
 } else {
-  imp <- NULL
+  cat("  No imputation needed\n")
 }
 
-# ── Per-imputation matching + outcome ─────────────────────────────
-cat("  Matching...\n")
-all_dids <- list()
-m1_match_trt <- NULL; m1_match_ctl <- NULL; m1_matched <- NULL; m1_d <- NULL
+# ── Fit PS + Match (ONCE) ─────────────────────────────────────────
+cat("  Fitting PS and matching...\n")
+ps_fml <- as.formula(paste("treated ~", paste(ps_vars, collapse = "+")))
+ps_fit <- glm(ps_fml, data = all_pts, family = binomial())
+all_pts$ps <- predict(ps_fit, type = "response")
+caliper <- CALIPER_SD * sd(all_pts$ps, na.rm = TRUE)
 
-for (m_idx in 1:M_IMP) {
-  if (m_idx %% 5 == 1) cat(sprintf("  m=%d...", m_idx))
+match_trt <- integer(n_trt); match_ctl <- integer(n_trt)
+match_ps  <- numeric(n_trt); matched <- logical(n_trt)
 
-  d <- all_pts
-  if (!is.null(imp)) {
-    imp_df <- complete(imp, m_idx)
-    for (v in to_impute) d[[v]] <- imp_df[[v]]
-  }
-
-  ps_fml <- as.formula(paste("treated ~", paste(ps_vars, collapse = "+")))
-  ps_fit <- tryCatch(glm(ps_fml, data = d, family = binomial()),
-                     error = function(e) { cat("PS failed\n"); return(NULL) })
-  if (is.null(ps_fit)) next
-  d$ps <- predict(ps_fit, type = "response")
-  caliper <- CALIPER_SD * sd(d$ps, na.rm = TRUE)
-
-  match_trt <- integer(n_trt); match_ctl <- integer(n_trt)
-  match_ps  <- numeric(n_trt); matched <- logical(n_trt)
-
-  for (k in seq_len(n_trt)) {
-    rs <- risk_sets[[k]]
-    if (length(rs) == 0) next
-    ps_i <- d$ps[trt_idx[k]]
-    ps_dist <- abs(d$ps[rs] - ps_i)
-    within_cal <- which(ps_dist <= caliper)
-    if (length(within_cal) == 0) next
-    best <- within_cal[which.min(ps_dist[within_cal])]
-    match_trt[k] <- trt_idx[k]; match_ctl[k] <- rs[best]
-    match_ps[k] <- ps_dist[best]; matched[k] <- TRUE
-  }
-
-  n_matched <- sum(matched)
-  if (n_matched < 50) next
-  if (m_idx == 1) {
-    m1_match_trt <- match_trt; m1_match_ctl <- match_ctl
-    m1_matched <- matched; m1_d <- d
-  }
-
-  for (target_h in TARGETS) {
-    dcr_trt <- dcr_ctl <- numeric(n_matched)
-    valid <- logical(n_matched); idx <- 0
-    for (kk in which(matched)) {
-      idx <- idx + 1
-      tpid <- as.character(all_pts$pid[match_trt[kk]])
-      cpid <- as.character(all_pts$pid[match_ctl[kk]])
-      t_mg <- trt_tmg[kk]
-
-      # Contamination check: control received Mg during outcome window?
-      ctl_mg_h <- all_pts$mg_offset_h[match_ctl[kk]]
-      if (!is.na(ctl_mg_h) && ctl_mg_h < t_mg + target_h) {
-        valid[idx] <- FALSE; next
-      }
-
-      pre_t <- find_cr_pre(cr_list[[tpid]], t_mg)
-      pre_c <- find_cr_pre(cr_list[[cpid]], t_mg)
-      post_t <- find_cr(cr_list[[tpid]], t_mg + target_h)
-      post_c <- find_cr(cr_list[[cpid]], t_mg + target_h)
-
-      if (any(is.na(c(pre_t[1], pre_c[1], post_t[1], post_c[1])))) {
-        valid[idx] <- FALSE; next
-      }
-      dcr_trt[idx] <- post_t[1] - pre_t[1]
-      dcr_ctl[idx] <- post_c[1] - pre_c[1]
-      valid[idx] <- TRUE
-    }
-
-    n_valid <- sum(valid)
-    if (n_valid < 30) {
-      all_dids[[length(all_dids)+1]] <- data.frame(
-        m=m_idx, target_h=target_h, n=n_valid,
-        did=NA, se=NA, n_matched=n_matched, stringsAsFactors=FALSE)
-      next
-    }
-
-    pair_df <- data.frame(
-      delta_cr = c(dcr_trt[valid], dcr_ctl[valid]),
-      treated = rep(c(1,0), each = n_valid))
-    fit <- lm(delta_cr ~ treated, data = pair_df)
-    ct <- safe_coeftest(fit)
-    est <- if (!is.null(ct) && "treated" %in% rownames(ct)) ct["treated",1] else coef(fit)["treated"]
-    se  <- if (!is.null(ct) && "treated" %in% rownames(ct)) ct["treated",2] else NA
-
-    all_dids[[length(all_dids)+1]] <- data.frame(
-      m=m_idx, target_h=target_h, n=n_valid,
-      did=est, se=se, n_matched=n_matched, stringsAsFactors=FALSE)
-  }
+for (k in seq_len(n_trt)) {
+  rs <- risk_sets[[k]]
+  if (length(rs) == 0) next
+  ps_i <- all_pts$ps[trt_idx[k]]
+  ps_dist <- abs(all_pts$ps[rs] - ps_i)
+  within_cal <- which(ps_dist <= caliper)
+  if (length(within_cal) == 0) next
+  best <- within_cal[which.min(ps_dist[within_cal])]
+  match_trt[k] <- trt_idx[k]; match_ctl[k] <- rs[best]
+  match_ps[k] <- ps_dist[best]; matched[k] <- TRUE
 }
-cat("\n")
+n_matched <- sum(matched)
+cat(sprintf("  Matched: %d/%d (%.1f%%)\n", n_matched, n_trt, 100*n_matched/n_trt))
 
-res <- do.call(rbind, all_dids)
+# ── Compute outcomes ──────────────────────────────────────────────
+cat("  Computing outcomes...\n")
+results <- list()
 
-# ── Rubin's rules ─────────────────────────────────────────────────
-cat(sprintf("\n  ── RESULTS (FIRST labs, primary=%dh) ──\n", PRIMARY_H))
-cat("  target   DiD        SE       P        95%% CI                n    FMI\n")
-cat("  ──────   ────────   ──────   ──────   ────────────────────   ───  ─────\n")
+for (target_h in TARGETS) {
+  dcr_trt <- dcr_ctl <- numeric(n_matched)
+  valid <- logical(n_matched); idx <- 0
+  for (kk in which(matched)) {
+    idx <- idx + 1
+    tpid <- as.character(all_pts$pid[match_trt[kk]])
+    cpid <- as.character(all_pts$pid[match_ctl[kk]])
+    t_mg <- trt_tmg[kk]
 
-pooled <- list()
-for (th in TARGETS) {
-  sub <- res[res$target_h == th & !is.na(res$did) & !is.na(res$se), ]
-  if (nrow(sub) < 2) { cat(sprintf("  %4dh    (insufficient data)\n", th)); next }
-  Q <- mean(sub$did); U <- mean(sub$se^2); B <- var(sub$did)
-  m_v <- nrow(sub)
-  T_var <- U + (1 + 1/m_v) * B; T_se <- sqrt(T_var)
-  lam <- ((1 + 1/m_v) * B) / T_var
-  df <- max(3, (m_v - 1) / lam^2)
-  p <- 2 * pt(abs(Q/T_se), df = df, lower.tail = FALSE)
-  ci_lo <- Q - qt(0.975, df) * T_se; ci_hi <- Q + qt(0.975, df) * T_se
-  sig <- if (!is.na(p) && p < 0.05) " *" else "  "
-  pri <- if (th == PRIMARY_H) " << PRIMARY" else ""
-  n_avg <- mean(sub$n)
-  cat(sprintf("  %4dh    %+.4f   %.4f   %.4f%s [%+.4f,%+.4f]   %3.0f  %.3f%s\n",
-              th, Q, T_se, p, sig, ci_lo, ci_hi, n_avg, lam, pri))
-  pooled[[length(pooled)+1]] <- data.frame(
-    target_h=th, did=Q, se=T_se, p=p, ci_lo=ci_lo, ci_hi=ci_hi,
-    fmi=lam, n_avg=n_avg, stringsAsFactors=FALSE)
+    # Contamination check for targets beyond PRIMARY_H
+    ctl_mg_h <- all_pts$mg_offset_h[match_ctl[kk]]
+    if (!is.na(ctl_mg_h) && ctl_mg_h < t_mg + target_h) {
+      valid[idx] <- FALSE; next
+    }
+
+    pre_t <- find_cr_pre(cr_list[[tpid]], t_mg)
+    pre_c <- find_cr_pre(cr_list[[cpid]], t_mg)
+    post_t <- find_cr(cr_list[[tpid]], t_mg + target_h)
+    post_c <- find_cr(cr_list[[cpid]], t_mg + target_h)
+
+    if (any(is.na(c(pre_t[1], pre_c[1], post_t[1], post_c[1])))) {
+      valid[idx] <- FALSE; next
+    }
+    dcr_trt[idx] <- post_t[1] - pre_t[1]
+    dcr_ctl[idx] <- post_c[1] - pre_c[1]
+    valid[idx] <- TRUE
+  }
+
+  n_valid <- sum(valid)
+  if (n_valid < 30) {
+    results[[length(results)+1]] <- data.frame(
+      target_h=target_h, n=n_valid, did=NA, se=NA, p=NA, ci_lo=NA, ci_hi=NA)
+    next
+  }
+
+  pair_df <- data.frame(
+    delta_cr = c(dcr_trt[valid], dcr_ctl[valid]),
+    treated = rep(c(1,0), each = n_valid))
+  fit <- lm(delta_cr ~ treated, data = pair_df)
+  ct <- safe_coeftest(fit)
+  est <- if (!is.null(ct) && "treated" %in% rownames(ct)) ct["treated",1] else coef(fit)["treated"]
+  se  <- if (!is.null(ct) && "treated" %in% rownames(ct)) ct["treated",2] else NA
+  p   <- if (!is.null(ct) && "treated" %in% rownames(ct)) ct["treated",4] else NA
+  ci_lo <- est - 1.96 * se; ci_hi <- est + 1.96 * se
+
+  results[[length(results)+1]] <- data.frame(
+    target_h=target_h, n=n_valid, did=est, se=se, p=p, ci_lo=ci_lo, ci_hi=ci_hi)
+}
+
+# ── Results ───────────────────────────────────────────────────────
+res <- do.call(rbind, results)
+cat(sprintf("\n  ── RESULTS (%s, primary=%dh) ──\n", db, PRIMARY_H))
+cat("  target   DiD        SE       P        95% CI                n\n")
+cat("  ──────   ────────   ──────   ──────   ────────────────────  ────\n")
+
+for (i in 1:nrow(res)) {
+  r <- res[i, ]
+  if (is.na(r$did)) { cat(sprintf("  %4dh    (insufficient data)\n", r$target_h)); next }
+  sig <- if (!is.na(r$p) && r$p < 0.05) " *" else "  "
+  pri <- if (r$target_h == PRIMARY_H) " << PRIMARY" else ""
+  cat(sprintf("  %4dh    %+.4f   %.4f   %.4f%s [%+.4f,%+.4f]  %4d%s\n",
+              r$target_h, r$did, r$se, r$p, sig, r$ci_lo, r$ci_hi, r$n, pri))
 }
 
 # ── Balance ───────────────────────────────────────────────────────
-if (!is.null(m1_d) && !is.null(m1_matched) && sum(m1_matched) > 50) {
-  cat(sprintf("\n  Matched (m=1): %d/%d (%.1f%%)\n",
-              sum(m1_matched), n_trt, 100*sum(m1_matched)/n_trt))
-  cat("\n  ── COVARIATE BALANCE (m=1) ──\n")
-  cat("  Covariate                raw_SMD  matched_SMD  status\n")
-  cat("  ───────────────────────  ───────  ───────────  ──────\n")
+cat(sprintf("\n  ── COVARIATE BALANCE ──\n"))
+cat("  Covariate                raw_SMD  matched_SMD  status\n")
+cat("  ───────────────────────  ───────  ───────────  ──────\n")
 
-  trt_all <- which(m1_d$treated == 1); ctl_all <- which(m1_d$treated == 0)
-  trt_m <- m1_match_trt[m1_matched]; ctl_m <- m1_match_ctl[m1_matched]
-  n_viol <- 0
+trt_all <- which(all_pts$treated == 1); ctl_all <- which(all_pts$treated == 0)
+trt_m <- match_trt[matched]; ctl_m <- match_ctl[matched]
+n_viol <- 0; max_smd <- 0
 
-  for (v in ps_vars) {
-    x1_raw <- m1_d[[v]][trt_all]; x0_raw <- m1_d[[v]][ctl_all]
-    x1_mat <- m1_d[[v]][trt_m];   x0_mat <- m1_d[[v]][ctl_m]
-    sp_raw <- sqrt((var(x1_raw, na.rm=T) + var(x0_raw, na.rm=T)) / 2)
-    sp_mat <- sqrt((var(x1_mat, na.rm=T) + var(x0_mat, na.rm=T)) / 2)
-    smd_raw <- if (!is.na(sp_raw) && sp_raw > 1e-10)
-                 abs(mean(x1_raw,na.rm=T) - mean(x0_raw,na.rm=T)) / sp_raw else NA
-    smd_mat <- if (!is.na(sp_mat) && sp_mat > 1e-10)
-                 abs(mean(x1_mat,na.rm=T) - mean(x0_mat,na.rm=T)) / sp_mat else NA
-    flag <- if (!is.na(smd_mat) && smd_mat > 0.1) { n_viol <- n_viol+1; "VIOL" } else "ok"
-    cat(sprintf("  %-25s  %.3f    %.3f       %s\n", v,
-                ifelse(is.na(smd_raw), NA, smd_raw),
-                ifelse(is.na(smd_mat), NA, smd_mat), flag))
-  }
-  cat(sprintf("\n  Max matched SMD: %.3f | Violations (>0.1): %d/%d\n",
-              max(vapply(ps_vars, function(v) {
-                x1 <- m1_d[[v]][trt_m]; x0 <- m1_d[[v]][ctl_m]
-                sp <- sqrt((var(x1,na.rm=T)+var(x0,na.rm=T))/2)
-                if (!is.na(sp) && sp > 1e-10) abs(mean(x1,na.rm=T)-mean(x0,na.rm=T))/sp else 0
-              }, numeric(1))),
-              n_viol, length(ps_vars)))
-
-  write.csv(do.call(rbind, pooled),
-            file.path(RESULTS, sprintf("did_riskset_%s.csv", tag)), row.names = FALSE)
+for (v in ps_vars) {
+  x1_raw <- all_pts[[v]][trt_all]; x0_raw <- all_pts[[v]][ctl_all]
+  x1_mat <- all_pts[[v]][trt_m];   x0_mat <- all_pts[[v]][ctl_m]
+  sp_raw <- sqrt((var(x1_raw, na.rm=T) + var(x0_raw, na.rm=T)) / 2)
+  sp_mat <- sqrt((var(x1_mat, na.rm=T) + var(x0_mat, na.rm=T)) / 2)
+  smd_raw <- if (!is.na(sp_raw) && sp_raw > 1e-10)
+               abs(mean(x1_raw,na.rm=T) - mean(x0_raw,na.rm=T)) / sp_raw else NA
+  smd_mat <- if (!is.na(sp_mat) && sp_mat > 1e-10)
+               abs(mean(x1_mat,na.rm=T) - mean(x0_mat,na.rm=T)) / sp_mat else NA
+  if (!is.na(smd_mat) && smd_mat > max_smd) max_smd <- smd_mat
+  flag <- if (!is.na(smd_mat) && smd_mat > 0.1) { n_viol <- n_viol+1; "VIOL" } else "ok"
+  cat(sprintf("  %-25s  %.3f    %.3f       %s\n", v,
+              ifelse(is.na(smd_raw), NA, smd_raw),
+              ifelse(is.na(smd_mat), NA, smd_mat), flag))
 }
+cat(sprintf("\n  Max matched SMD: %.3f | Violations (>0.1): %d/%d\n",
+            max_smd, n_viol, length(ps_vars)))
+
+# ── Save ──────────────────────────────────────────────────────────
+write.csv(res, file.path(RESULTS, sprintf("did_riskset_%s.csv", tag)), row.names = FALSE)
 
 cat(sprintf("\n%s\n02_psm.R — %s COMPLETE\n  Output: did_riskset_%s.csv\n%s\n",
             SEP, db, tag, SEP))
