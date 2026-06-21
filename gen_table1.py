@@ -139,6 +139,13 @@ def build_table1(db_tag):
     pairs_path = os.path.join(RESULTS, f"did_pairs_primary_yet_untreated_{tag}.csv")
     all_path = os.path.join(RESULTS, f"did_all_{tag}.csv")
     hte_path = os.path.join(RESULTS, f"did_hte_data_{tag}.csv")
+    trt_path = os.path.join(RESULTS, f"did_treated_{tag}.csv")
+    ctl_path = os.path.join(RESULTS, f"did_control_{tag}.csv")
+
+    # Strategy: try hte_data first (has matched pairs with covariates),
+    # then pairs + all_pts, then pairs + treated/control files
+    trt = None
+    ctl = None
 
     if not os.path.exists(pairs_path):
         print(f"  WARN: {pairs_path} not found, trying hte_data")
@@ -153,42 +160,96 @@ def build_table1(db_tag):
         print(f"  Using hte_data: {len(trt)} treated, {len(ctl)} control")
     else:
         pairs = pd.read_csv(pairs_path)
-        print(f"  Loaded {len(pairs)} matched pairs")
-
-        # Load full patient data
-        all_pts = pd.read_csv(all_path)
-        id_col = (
-            "patientunitstayid" if "patientunitstayid" in all_pts.columns else "stay_id"
+        # Detect pair ID columns
+        trt_pid_col = [
+            c for c in pairs.columns if "trt" in c.lower() and "pid" in c.lower()
+        ]
+        ctl_pid_col = [
+            c for c in pairs.columns if "ctl" in c.lower() and "pid" in c.lower()
+        ]
+        if not trt_pid_col or not ctl_pid_col:
+            print(f"  Pairs columns: {list(pairs.columns)}")
+            trt_pid_col = [pairs.columns[0]]  # assume first two are trt, ctl
+            ctl_pid_col = [pairs.columns[1]]
+        trt_pid_col = trt_pid_col[0]
+        ctl_pid_col = ctl_pid_col[0]
+        print(
+            f"  Loaded {len(pairs)} matched pairs (cols: {trt_pid_col}, {ctl_pid_col})"
         )
-        all_pts["pid"] = all_pts[id_col].astype(str)
 
-        # Also load hte_data for outcomes (aki_48h, aki_7d computed there)
-        hte_data = None
-        if os.path.exists(hte_path):
-            hte_data = pd.read_csv(hte_path)
-            hte_data["pid"] = hte_data["pid"].astype(str)
+        # Load full patient data — try did_all first, then combine treated+control
+        all_pts = None
+        if os.path.exists(all_path):
+            all_pts = pd.read_csv(all_path)
+        elif os.path.exists(trt_path) and os.path.exists(ctl_path):
+            print(f"  did_all not found; combining did_treated + did_control")
+            _t = pd.read_csv(trt_path)
+            _c = pd.read_csv(ctl_path)
+            shared_cols = [c for c in _t.columns if c in _c.columns]
+            all_pts = pd.concat([_t[shared_cols], _c[shared_cols]], ignore_index=True)
+        else:
+            # Last resort: use hte_data
+            print(f"  No patient data files found, falling back to hte_data")
+            if os.path.exists(hte_path):
+                df = pd.read_csv(hte_path)
+                df["pid"] = df["pid"].astype(str)
+                trt = df[df.treated == 1]
+                ctl = df[df.treated == 0]
+                print(f"  Using hte_data: {len(trt)} treated, {len(ctl)} control")
+                # Skip the all_pts merge path
+                all_pts = None
 
-        # Get matched patient IDs
-        trt_pids = set(pairs["trt_pid"].astype(str))
-        ctl_pids = set(pairs["ctl_pid"].astype(str))
+        if all_pts is not None:
+            # Detect ID column: canonical 01_etl.py uses 'pid'
+            id_candidates = ["pid", "stay_id", "patientunitstayid"]
+            id_col = None
+            for c in id_candidates:
+                if c in all_pts.columns:
+                    id_col = c
+                    break
+            if id_col is None:
+                print(
+                    f"  ERROR: no ID column found. Columns: {list(all_pts.columns[:15])}"
+                )
+                return None
+            if id_col != "pid":
+                all_pts["pid"] = all_pts[id_col].astype(str)
+            else:
+                all_pts["pid"] = all_pts["pid"].astype(str)
+            print(f"  ID column: {id_col} ({len(all_pts)} patients)")
 
-        trt = all_pts[all_pts.pid.isin(trt_pids)].copy()
-        ctl = all_pts[all_pts.pid.isin(ctl_pids)].copy()
+            # Also load hte_data for outcomes (aki_48h, aki_7d computed there)
+            hte_data = None
+            if os.path.exists(hte_path):
+                hte_data = pd.read_csv(hte_path)
+                hte_data["pid"] = hte_data["pid"].astype(str)
 
-        # Merge outcome columns from hte_data if available
-        if hte_data is not None:
-            for oc in ["aki_48h", "aki_7d", "dcr_48h", "cr_pre"]:
-                if oc in hte_data.columns and oc not in trt.columns:
-                    ht = hte_data[hte_data.treated == 1][["pid", oc]].drop_duplicates(
-                        "pid"
-                    )
-                    hc = hte_data[hte_data.treated == 0][["pid", oc]].drop_duplicates(
-                        "pid"
-                    )
-                    trt = trt.merge(ht, on="pid", how="left")
-                    ctl = ctl.merge(hc, on="pid", how="left")
+            # Get matched patient IDs
+            trt_pids = set(pairs[trt_pid_col].astype(str))
+            ctl_pids = set(pairs[ctl_pid_col].astype(str))
 
-        print(f"  Matched: {len(trt)} treated, {len(ctl)} control")
+            trt = all_pts[all_pts.pid.isin(trt_pids)].copy()
+            ctl = all_pts[all_pts.pid.isin(ctl_pids)].copy()
+
+            # Merge outcome columns from hte_data if available
+            if hte_data is not None:
+                for oc in ["aki_48h", "aki_7d", "dcr_48h", "cr_pre"]:
+                    if oc in hte_data.columns and oc not in trt.columns:
+                        ht = hte_data[hte_data.treated == 1][
+                            ["pid", oc]
+                        ].drop_duplicates("pid")
+                        hc = hte_data[hte_data.treated == 0][
+                            ["pid", oc]
+                        ].drop_duplicates("pid")
+                        trt = trt.merge(ht, on="pid", how="left")
+                        ctl = ctl.merge(hc, on="pid", how="left")
+
+            print(f"  Matched: {len(trt)} treated, {len(ctl)} control")
+        else:
+            # all_pts was None — we already loaded from hte_data above
+            if trt is None or ctl is None:
+                print(f"  ERROR: could not load any data for {tag}")
+                return None
 
     # Build table rows
     rows = []
