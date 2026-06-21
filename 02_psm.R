@@ -197,7 +197,7 @@ for (k in seq_len(n_trt)) {
 }
 
 rs_sizes <- vapply(risk_sets, length, integer(1))
-cat(sprintf("    Risk set sizes: median=%d, IQR=[%d,%d], min=%d, empty=%d\n",
+cat(sprintf("    Risk set sizes: median=%.0f, IQR=[%.0f,%.0f], min=%.0f, empty=%d\n",
             median(rs_sizes), quantile(rs_sizes, 0.25), quantile(rs_sizes, 0.75),
             min(rs_sizes), sum(rs_sizes == 0)))
 
@@ -233,6 +233,7 @@ run_timing <- function(timing) {
 
   # ── Per-imputation matching + outcome ─────────────────────────
   all_dids <- list()
+  m1_match_trt <- NULL; m1_match_ctl <- NULL; m1_matched <- NULL; m1_d <- NULL
 
   for (m_idx in 1:M_IMP) {
     if (m_idx %% 5 == 1) cat(sprintf("  m=%d...", m_idx))
@@ -272,6 +273,12 @@ run_timing <- function(timing) {
 
     n_matched <- sum(matched)
     if (n_matched < 50) next
+
+    # Save m=1 for balance reporting
+    if (m_idx == 1) {
+      m1_match_trt <- match_trt; m1_match_ctl <- match_ctl
+      m1_matched <- matched; m1_d <- d
+    }
 
     # Compute outcomes
     for (target_h in TARGETS) {
@@ -359,6 +366,45 @@ run_timing <- function(timing) {
   if (nrow(m1) > 0) {
     cat(sprintf("\n  Matched (m=1): %d/%d (%.1f%%)\n",
                 m1$n_matched[1], n_trt, 100*m1$n_matched[1]/n_trt))
+  }
+
+  # ── BALANCE (SMD before/after matching, m=1) ────────────────
+  if (!is.null(m1_d) && !is.null(m1_matched) && sum(m1_matched) > 50) {
+    cat("\n  ── COVARIATE BALANCE (m=1) ──\n")
+    cat("  Covariate                raw_SMD  matched_SMD  status\n")
+    cat("  ───────────────────────  ───────  ───────────  ──────\n")
+
+    trt_all <- which(m1_d$treated == 1)
+    ctl_all <- which(m1_d$treated == 0)
+    trt_m <- m1_match_trt[m1_matched]
+    ctl_m <- m1_match_ctl[m1_matched]
+    n_viol <- 0
+
+    balance_rows <- list()
+    for (v in ps_vars) {
+      x1_raw <- m1_d[[v]][trt_all]; x0_raw <- m1_d[[v]][ctl_all]
+      x1_mat <- m1_d[[v]][trt_m];   x0_mat <- m1_d[[v]][ctl_m]
+      sp_raw <- sqrt((var(x1_raw, na.rm=T) + var(x0_raw, na.rm=T)) / 2)
+      sp_mat <- sqrt((var(x1_mat, na.rm=T) + var(x0_mat, na.rm=T)) / 2)
+      smd_raw <- if (!is.na(sp_raw) && sp_raw > 1e-10)
+                   abs(mean(x1_raw,na.rm=T) - mean(x0_raw,na.rm=T)) / sp_raw else NA
+      smd_mat <- if (!is.na(sp_mat) && sp_mat > 1e-10)
+                   abs(mean(x1_mat,na.rm=T) - mean(x0_mat,na.rm=T)) / sp_mat else NA
+      flag <- if (!is.na(smd_mat) && smd_mat > 0.1) { n_viol <- n_viol+1; "VIOL" } else "ok"
+      cat(sprintf("  %-25s  %.3f    %.3f       %s\n", v,
+                  ifelse(is.na(smd_raw), NA, smd_raw),
+                  ifelse(is.na(smd_mat), NA, smd_mat), flag))
+      balance_rows[[length(balance_rows)+1]] <- data.frame(
+        timing=timing, covariate=v, smd_raw=smd_raw, smd_mat=smd_mat, stringsAsFactors=FALSE)
+    }
+    cat(sprintf("\n  Max matched SMD: %.3f | Violations (>0.1): %d/%d\n",
+                max(sapply(balance_rows, function(r) r$smd_mat), na.rm=TRUE),
+                n_viol, length(ps_vars)))
+
+    # Save balance
+    bal_df <- do.call(rbind, balance_rows)
+    write.csv(bal_df, file.path(RESULTS, sprintf("did_balance_%s_%s.csv", timing, tag)),
+              row.names = FALSE)
   }
 
   do.call(rbind, pooled)
