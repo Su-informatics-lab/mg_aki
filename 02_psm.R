@@ -179,7 +179,7 @@ first_aki <- sapply(cr_list, function(cr_pt) {
 })
 all_pts$first_aki_h <- first_aki[as.character(all_pts$pid)]
 
-# Exit time: when patient becomes ineligible as control
+# Exit time for display only (not used in risk set)
 all_pts$exit_time <- pmin(
   all_pts$icu_discharge_h,
   ifelse(is.na(all_pts$mg_offset_h), Inf, all_pts$mg_offset_h),
@@ -190,8 +190,15 @@ cat(sprintf("    Median exit_time (controls): %.1fh\n",
             median(all_pts$exit_time[all_pts$treated == 0], na.rm = TRUE)))
 
 # Pre-compute risk set INDICES for each treated patient
-# (These don't depend on imputation or lab timing)
+# Control must be CLEAN through the outcome window (t_mg + PRIMARY_H):
+#   1. Still in ICU at t_mg
+#   2. No AKI at t_mg
+#   3. Has Cr before t_mg
+#   4. Has NOT received IV Mg by t_mg + PRIMARY_H (no contamination)
+#   5. Not the treated patient themselves
 cat("    Building risk set indices...\n")
+cat(sprintf("    Outcome window: %dh (controls must be Mg-free through t_mg + %dh)\n",
+            PRIMARY_H, PRIMARY_H))
 trt_pids <- all_pts$pid[trt_idx]
 trt_tmg  <- all_pts$mg_offset_h[trt_idx]
 risk_sets <- vector("list", n_trt)
@@ -199,8 +206,10 @@ risk_sets <- vector("list", n_trt)
 for (k in seq_len(n_trt)) {
   t_mg <- trt_tmg[k]
   eligible <- which(
-    all_pts$exit_time > t_mg &
-    all_pts$earliest_cr_h <= t_mg &
+    all_pts$icu_discharge_h > t_mg &                                          # alive + in ICU
+    (is.na(all_pts$first_aki_h) | all_pts$first_aki_h > t_mg) &              # no AKI at t_mg
+    all_pts$earliest_cr_h <= t_mg &                                            # has Cr before t_mg
+    (is.na(all_pts$mg_offset_h) | all_pts$mg_offset_h > t_mg + PRIMARY_H) &  # Mg-free through outcome
     all_pts$pid != trt_pids[k])
   risk_sets[[k]] <- eligible
 }
