@@ -99,9 +99,8 @@ run_pool <- function(pool_name, all_pts, trt_idx, cr_list, ps_vars, caliper) {
   trt_pids <- all_pts$pid[trt_idx]
   trt_tmg  <- all_pts$mg_offset_h[trt_idx]
 
-  cat(sprintf("\n{'='%.0s", rep("", 70)))
-  cat(sprintf("\n  POOL: %s  (n_trt = %d)\n", toupper(pool_name), n_trt))
-  cat(sprintf("{'='%.0s}\n", rep("", 70)))
+  sep <- paste(rep("=", 70), collapse = "")
+  cat(sprintf("\n%s\n  POOL: %s  (n_trt = %d)\n%s\n", sep, toupper(pool_name), n_trt, sep))
 
   # ── Risk sets ─────────────────────────────────────────────────
   cat(sprintf("  Building %s risk sets...\n", pool_name))
