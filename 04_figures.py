@@ -3,8 +3,8 @@
 04_figures.py — Publication figures (v3: KM for AKI)
 
   fig1_primary     Fig 1: ΔCr bar + KM AKI incidence + AKI rates
-  fig2_hte         Fig 2: HTE forest
-  fig3_benefit     Fig 3: Benefit-harm spectrum
+  fig2_hte         Fig 2: HTE forest (7d AKI — primary outcome)
+  fig3_benefit     Fig 3: Benefit-harm spectrum (7d AKI in Panel B)
   efig_timecourse  eFig: ΔCr time course
   efig_sensitivity eFig: Primary vs Sens A
 
@@ -101,7 +101,7 @@ def compute_km_data(tag):
         df = pd.read_csv(cache)
         if len(df) > 0 and "event" in df.columns:
             return df
-        os.remove(cache)  # stale/empty cache
+        os.remove(cache)
 
     print(f"    Computing KM data for {tag} (one-time)...")
     hte_data = pd.read_csv(os.path.join(RESULTS, f"did_hte_data_{tag}.csv"))
@@ -128,24 +128,19 @@ def compute_km_data(tag):
             n_no_cr += 1
             continue
 
-        # Cr_pre = last Cr before T₀
         pre = cr_pt[(cr_pt.offset_h >= 0) & (cr_pt.offset_h < tmg)]
         if len(pre) == 0:
             n_no_pre += 1
             continue
-        cr_pre = pre.iloc[-1].labresult  # already sorted by offset_h
+        cr_pre = pre.iloc[-1].labresult
         if pd.isna(cr_pre) or cr_pre <= 0:
             n_no_pre += 1
             continue
 
-        # Post-T₀ Cr measurements
         post = cr_pt[cr_pt.offset_h > tmg].copy()
         post["hours_from_t0"] = post.offset_h - tmg
-        post = post[post.hours_from_t0 <= 168]  # 7d max
+        post = post[post.hours_from_t0 <= 168]
 
-        # Find first AKI (KDIGO temporal criteria)
-        #   ΔCr ≥ 0.3: within 48h only
-        #   ratio ≥ 1.5: within 7 days
         time_aki = np.nan
         for _, cr in post.iterrows():
             h = cr.hours_from_t0
@@ -162,7 +157,6 @@ def compute_km_data(tag):
                 {"treated": int(r.treated), "time": time_aki, "event": 1, "db": tag}
             )
         else:
-            # Censored at last available Cr or 168h
             censor_t = post.hours_from_t0.max() if len(post) > 0 else 0
             if censor_t > 0:
                 rows.append(
@@ -199,7 +193,6 @@ def kaplan_meier(times, events):
     at_risk = n
 
     for ut in unique_t:
-        # Events and censorings before this time
         n_censor = np.sum(
             (t_sorted < ut)
             & (e_sorted == 0)
@@ -223,7 +216,7 @@ def kaplan_meier(times, events):
 
     km_t = np.array(km_t)
     cum_inc = 1 - np.array(km_surv)
-    ci_lo = 1 - np.array(km_hi)  # inverted for cumulative incidence
+    ci_lo = 1 - np.array(km_hi)
     ci_hi = 1 - np.array(km_lo)
     return km_t, cum_inc, ci_lo, ci_hi
 
@@ -417,7 +410,7 @@ def fig1_primary():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# FIGURE 2: HTE FOREST
+# FIGURE 2: HTE FOREST — 7-day AKI (primary outcome)
 # ═══════════════════════════════════════════════════════════════════
 def fig2_hte():
     print("\n── Fig 2: HTE forest ──")
@@ -468,7 +461,7 @@ def fig2_hte():
             hte = htes.get(tag)
             if hte is None:
                 continue
-            r = hte_row(hte, item, "aki_48h")
+            r = hte_row(hte, item, "aki_7d")
             if r is None:
                 continue
             est, lo, hi = or_ci(r)
@@ -497,7 +490,7 @@ def fig2_hte():
 
     ax.set_yticks(yticks)
     ax.set_yticklabels(ylabels, fontsize=6)
-    ax.set_xlabel("Odds Ratio for 48h AKI (95% CI)")
+    ax.set_xlabel("Odds Ratio for 7-day AKI (95% CI)")
     ax.set_xscale("log")
     ax.set_xlim(0.08, 4.0)
     ax.set_xticks([0.1, 0.25, 0.5, 1, 2])
@@ -618,7 +611,7 @@ def fig3_benefit():
         ncol=2,
     )
 
-    # ── Panel B: Crossed phenotype forest ──
+    # ── Panel B: Crossed phenotype forest — 7-day AKI (primary) ──
     ax = ax_cross
     ax.axvline(1, color="#ddd", lw=0.6, zorder=0)
     crossed = [
@@ -634,7 +627,7 @@ def fig3_benefit():
             hte = load_hte(tag)
             if hte is None:
                 continue
-            r = hte_row(hte, sg_key, "aki_48h")
+            r = hte_row(hte, sg_key, "aki_7d")
             if r is None:
                 continue
             est, lo, hi = or_ci(r)
@@ -673,7 +666,7 @@ def fig3_benefit():
         y += 1.3
     ax.set_yticks(yticks)
     ax.set_yticklabels(ylabels, fontsize=6.5)
-    ax.set_xlabel("OR for 48h AKI")
+    ax.set_xlabel("OR for 7-day AKI")
     ax.set_xscale("log")
     ax.set_xlim(0.05, 6)
     ax.set_xticks([0.1, 0.25, 0.5, 1, 2, 4])
