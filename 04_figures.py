@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """
-04_figures.py — Publication figures (v3: KM for AKI)
+04_figures.py — Publication figures (v4: fixed love plot)
 
   fig1_primary     Fig 1: ΔCr bar + KM AKI incidence + AKI rates
   fig2_hte         Fig 2: HTE forest (7d AKI — primary outcome)
   fig3_benefit     Fig 3: Benefit-harm spectrum (7d AKI in Panel B)
   efig_timecourse  eFig: ΔCr time course
   efig_sensitivity eFig: Primary vs Sens A
+  efig_hte_48h     eFig: 48h AKI HTE forest (supplement)
+  efig_love        eFig: Love plot — ALL 19 PS covariates + supp Mg/K
+
+Changes from v3:
+  - efig_love: shows all 19 PS covariates (was 15, missing 4 labs)
+  - efig_love: sorted by matched SMD descending (violation at top)
+  - efig_love: adds Mg/K as supplementary vars below separator
 
 Usage:
   python 04_figures.py                # all
-  python 04_figures.py fig1_primary   # just one
+  python 04_figures.py efig_love      # just the love plot
 """
 
 import os
@@ -65,7 +72,7 @@ def save(fig, name):
     for ext in ("pdf", "png"):
         fig.savefig(os.path.join(RESULTS, f"{name}.{ext}"), format=ext)
     plt.close(fig)
-    print(f"  ✓ {name}")
+    print(f"  \u2713 {name}")
 
 
 def load_hte(tag):
@@ -91,11 +98,10 @@ def or_ci(row):
     return row["est"], lo, hi
 
 
-# ═══════════════════════════════════════════════════════════════════
-# KM COMPUTATION: time-to-first-AKI from raw Cr
-# ═══════════════════════════════════════════════════════════════════
+# ====================================================================
+# KM COMPUTATION
+# ====================================================================
 def compute_km_data(tag):
-    """Compute time-to-first-AKI for each matched pair member."""
     cache = os.path.join(RESULTS, f"km_aki_{tag}.csv")
     if os.path.exists(cache):
         df = pd.read_csv(cache)
@@ -116,18 +122,14 @@ def compute_km_data(tag):
     print(f"    Cr data: {len(cr_by_pid)} unique patients")
 
     rows = []
-    n_no_pre = 0
-    n_no_cr = 0
-    n_ok = 0
+    n_no_pre = n_no_cr = n_ok = 0
     for _, r in hte_data.iterrows():
         pid = str(int(r["pid"]))
         tmg = r["t_mg"]
-
         cr_pt = cr_by_pid.get(pid)
         if cr_pt is None:
             n_no_cr += 1
             continue
-
         pre = cr_pt[(cr_pt.offset_h >= 0) & (cr_pt.offset_h < tmg)]
         if len(pre) == 0:
             n_no_pre += 1
@@ -136,22 +138,17 @@ def compute_km_data(tag):
         if pd.isna(cr_pre) or cr_pre <= 0:
             n_no_pre += 1
             continue
-
         post = cr_pt[cr_pt.offset_h > tmg].copy()
         post["hours_from_t0"] = post.offset_h - tmg
         post = post[post.hours_from_t0 <= 168]
-
         time_aki = np.nan
         for _, cr in post.iterrows():
             h = cr.hours_from_t0
             delta = cr.labresult - cr_pre
             ratio = cr.labresult / cr_pre if cr_pre > 0 else 0
-            aki_absolute = (h <= 48) and (delta >= 0.3)
-            aki_ratio = ratio >= 1.5
-            if aki_absolute or aki_ratio:
+            if (h <= 48 and delta >= 0.3) or ratio >= 1.5:
                 time_aki = h
                 break
-
         if not np.isnan(time_aki):
             rows.append(
                 {"treated": int(r.treated), "time": time_aki, "event": 1, "db": tag}
@@ -168,30 +165,23 @@ def compute_km_data(tag):
         f"    Processed: {n_ok} ok, {n_no_pre} no Cr_pre, {n_no_cr} pid not in Cr data"
     )
     if len(rows) == 0:
-        print("    WARN: no KM rows — returning None")
         return None
     df = pd.DataFrame(rows)
     df.to_csv(cache, index=False)
-    print(f"    → {len(df)} patients, {int(df.event.sum())} AKI events")
+    print(f"    \u2192 {len(df)} patients, {int(df.event.sum())} AKI events")
     return df
 
 
 def kaplan_meier(times, events):
-    """Compute KM cumulative incidence (1 - survival) with Greenwood CI."""
     n = len(times)
     order = np.argsort(times)
     t_sorted = times[order]
     e_sorted = events[order]
-
     unique_t = np.unique(t_sorted[e_sorted == 1])
-    km_t = [0.0]
-    km_surv = [1.0]
-    km_lo = [1.0]
-    km_hi = [1.0]
+    km_t, km_surv, km_lo, km_hi = [0.0], [1.0], [1.0], [1.0]
     var_sum = 0.0
     surv = 1.0
     at_risk = n
-
     for ut in unique_t:
         n_censor = np.sum(
             (t_sorted < ut)
@@ -206,38 +196,28 @@ def kaplan_meier(times, events):
         if at_risk > d:
             var_sum += d / (at_risk * (at_risk - d))
         se = surv * np.sqrt(var_sum) if var_sum > 0 else 0
-
         km_t.append(ut)
         km_surv.append(surv)
         km_lo.append(max(0, surv - 1.96 * se))
         km_hi.append(min(1, surv + 1.96 * se))
-
         at_risk -= d
-
     km_t = np.array(km_t)
-    cum_inc = 1 - np.array(km_surv)
-    ci_lo = 1 - np.array(km_hi)
-    ci_hi = 1 - np.array(km_lo)
-    return km_t, cum_inc, ci_lo, ci_hi
+    return km_t, 1 - np.array(km_surv), 1 - np.array(km_hi), 1 - np.array(km_lo)
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ====================================================================
 # FIGURE 1: PRIMARY RESULT (3 panels)
-#   A: ΔCr DiD bar at 36h
-#   B: KM cumulative AKI incidence (0-7d)
-#   C: AKI rates (48h + 7d) by DB
-# ═══════════════════════════════════════════════════════════════════
+# ====================================================================
 def fig1_primary():
-    print("\n── Fig 1: Primary result ──")
+    print("\n\u2500\u2500 Fig 1: Primary result \u2500\u2500")
     fig = plt.figure(figsize=(7.2, 3.2), constrained_layout=True)
     gs = fig.add_gridspec(1, 3, width_ratios=[1.2, 2.2, 1.5])
     ax_cr = fig.add_subplot(gs[0])
     ax_km = fig.add_subplot(gs[1])
     ax_bar = fig.add_subplot(gs[2])
-
     width = 0.32
 
-    # ── Panel A: ΔCr DiD at 36h ──
+    # Panel A: dCr DiD at 36h
     ax = ax_cr
     ax.axhline(0, color="#bbb", lw=0.5)
     for i, tag in enumerate(DBS):
@@ -287,10 +267,9 @@ def fig1_primary():
             fontweight="bold",
             color=CLR[tag],
         )
-
     ax.set_xticks(range(len(DBS)))
     ax.set_xticklabels([LBL[t] for t in DBS], fontsize=6)
-    ax.set_ylabel("DiD: ΔCr at 36h\n(mg/dL)")
+    ax.set_ylabel("DiD: \u0394Cr at 36h\n(mg/dL)")
     ax.text(
         -0.25,
         1.06,
@@ -301,7 +280,7 @@ def fig1_primary():
         va="top",
     )
 
-    # ── Panel B: KM cumulative AKI incidence ──
+    # Panel B: KM cumulative AKI incidence
     ax = ax_km
     for tag in DBS:
         km_data = compute_km_data(tag)
@@ -315,20 +294,18 @@ def fig1_primary():
             if len(sub) < 20:
                 continue
             t, ci, ci_lo, ci_hi = kaplan_meier(sub.time.values, sub.event.values)
-            color = CLR[tag]
             ax.step(
                 t,
                 ci * 100,
                 where="post",
-                color=color,
+                color=CLR[tag],
                 ls=ls,
                 lw=1.2,
                 label=f"{LBL[tag]} {trt_lbl}",
             )
             ax.fill_between(
-                t, ci_lo * 100, ci_hi * 100, step="post", alpha=alpha, color=color
+                t, ci_lo * 100, ci_hi * 100, step="post", alpha=alpha, color=CLR[tag]
             )
-
     ax.axvline(48, color="#ddd", lw=4, alpha=0.5, zorder=0)
     ax.text(
         48,
@@ -339,7 +316,7 @@ def fig1_primary():
         ha="center",
         va="bottom",
     )
-    ax.set_xlabel("Hours from T₀")
+    ax.set_xlabel("Hours from T\u2080")
     ax.set_ylabel("Cumulative AKI\nincidence (%)")
     ax.set_xlim(0, 168)
     ax.set_xticks([0, 24, 48, 72, 96, 120, 144, 168])
@@ -355,7 +332,7 @@ def fig1_primary():
         va="top",
     )
 
-    # ── Panel C: AKI rate bars ──
+    # Panel C: AKI rate bars
     ax = ax_bar
     ax.axhline(0, color="#bbb", lw=0.5)
     outcomes = [("aki_48h", "48h AKI"), ("aki_7d", "7d AKI")]
@@ -392,7 +369,6 @@ def fig1_primary():
                 color=CLR[tag],
                 fontweight="bold",
             )
-
     ax.set_xticks([oi * 1.2 + 0.2 for oi in range(len(outcomes))])
     ax.set_xticklabels([oc[1] for oc in outcomes], fontsize=6.5)
     ax.set_ylabel("Risk Difference (%)")
@@ -409,11 +385,10 @@ def fig1_primary():
     save(fig, "fig1_primary")
 
 
-# ═══════════════════════════════════════════════════════════════════
-# FIGURE 2: HTE FOREST — 7-day AKI (primary outcome)
-# ═══════════════════════════════════════════════════════════════════
-def fig2_hte():
-    print("\n── Fig 2: HTE forest ──")
+# ====================================================================
+# FIGURE 2: HTE FOREST — 7-day AKI
+# ====================================================================
+def _hte_forest(outcome, xlabel, figname):
     subgroups = [
         "Overall",
         None,
@@ -445,14 +420,11 @@ def fig2_hte():
         "HF + CABG",
         "Mg<1.8 + CKD",
     ]
-
     htes = {tag: load_hte(tag) for tag in DBS}
     fig, ax = plt.subplots(figsize=(5.5, 7.5), constrained_layout=True)
     ax.axvline(1, color="#ddd", lw=0.6, zorder=0)
-
     y = 0
-    yticks = []
-    ylabels = []
+    yticks, ylabels = [], []
     for item in reversed(subgroups):
         if item is None:
             y += 0.6
@@ -461,7 +433,7 @@ def fig2_hte():
             hte = htes.get(tag)
             if hte is None:
                 continue
-            r = hte_row(hte, item, "aki_7d")
+            r = hte_row(hte, item, outcome)
             if r is None:
                 continue
             est, lo, hi = or_ci(r)
@@ -487,10 +459,9 @@ def fig2_hte():
         yticks.append(y)
         ylabels.append(item)
         y += 1.0
-
     ax.set_yticks(yticks)
     ax.set_yticklabels(ylabels, fontsize=6)
-    ax.set_xlabel("Odds Ratio for 7-day AKI (95% CI)")
+    ax.set_xlabel(xlabel)
     ax.set_xscale("log")
     ax.set_xlim(0.08, 4.0)
     ax.set_xticks([0.1, 0.25, 0.5, 1, 2])
@@ -507,25 +478,42 @@ def fig2_hte():
         )
     ax.legend(loc="upper right", fontsize=6.5)
     ax.text(
-        0.02, -0.02, "← Favors IV Mg", transform=ax.transAxes, fontsize=5.5, color=GRAY
+        0.02,
+        -0.02,
+        "\u2190 Favors IV Mg",
+        transform=ax.transAxes,
+        fontsize=5.5,
+        color=GRAY,
     )
     ax.text(
         0.98,
         -0.02,
-        "Favors control →",
+        "Favors control \u2192",
         transform=ax.transAxes,
         fontsize=5.5,
         color=GRAY,
         ha="right",
     )
-    save(fig, "fig2_hte")
+    save(fig, figname)
 
 
-# ═══════════════════════════════════════════════════════════════════
+def fig2_hte():
+    print("\n\u2500\u2500 Fig 2: HTE forest \u2500\u2500")
+    _hte_forest("aki_7d", "Odds Ratio for 7-day AKI (95% CI)", "fig2_hte")
+
+
+def efig_hte_48h():
+    print("\n\u2500\u2500 eFig: HTE forest (48h AKI, supplement) \u2500\u2500")
+    _hte_forest("aki_48h", "Odds Ratio for 48-hour AKI (95% CI)", "efig_hte_48h")
+
+
+# ====================================================================
 # FIGURE 3: BENEFIT-HARM SPECTRUM
-# ═══════════════════════════════════════════════════════════════════
+# ====================================================================
 def fig3_benefit():
-    print("\n── Fig 3: Benefit-harm spectrum ──")
+    print("\n\u2500\u2500 Fig 3: Benefit-harm spectrum \u2500\u2500")
+    from matplotlib.patches import Patch
+
     fig, (ax_mg, ax_cross) = plt.subplots(
         1,
         2,
@@ -534,9 +522,8 @@ def fig3_benefit():
         constrained_layout=True,
     )
     width = 0.28
-    from matplotlib.patches import Patch
 
-    # ── Panel A: Mg-stratified RD% ──
+    # Panel A: Mg-stratified RD%
     ax = ax_mg
     ax.axhline(0, color="#bbb", lw=0.5)
     mg_groups = ["Mg < 1.8", "Mg >= 1.8"]
@@ -593,11 +580,11 @@ def fig3_benefit():
     ax.set_title("Mg-stratified treatment effect", fontsize=7, pad=4)
     ax.legend(
         handles=[
-            Patch(color=BLUE, alpha=0.9, label="MIMIC Mg≥1.8"),
+            Patch(color=BLUE, alpha=0.9, label="MIMIC Mg\u22651.8"),
             Patch(
                 color=BLUE, alpha=0.4, hatch="///", edgecolor=BLUE, label="MIMIC Mg<1.8"
             ),
-            Patch(color=VERMIL, alpha=0.9, label="eICU Mg≥1.8"),
+            Patch(color=VERMIL, alpha=0.9, label="eICU Mg\u22651.8"),
             Patch(
                 color=VERMIL,
                 alpha=0.4,
@@ -611,7 +598,7 @@ def fig3_benefit():
         ncol=2,
     )
 
-    # ── Panel B: Crossed phenotype forest — 7-day AKI (primary) ──
+    # Panel B: Crossed phenotype forest — 7-day AKI
     ax = ax_cross
     ax.axvline(1, color="#ddd", lw=0.6, zorder=0)
     crossed = [
@@ -620,8 +607,7 @@ def fig3_benefit():
         ("Mg<1.8 + CKD", "Mg<1.8 + CKD"),
     ]
     y = 0
-    yticks = []
-    ylabels = []
+    yticks, ylabels = [], []
     for sg_key, sg_lbl in reversed(crossed):
         for di, tag in enumerate(DBS):
             hte = load_hte(tag)
@@ -684,11 +670,11 @@ def fig3_benefit():
     save(fig, "fig3_benefit_harm")
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ====================================================================
 # eFIGURE: TIME COURSE
-# ═══════════════════════════════════════════════════════════════════
+# ====================================================================
 def efig_timecourse():
-    print("\n── eFig: ΔCr time course ──")
+    print("\n\u2500\u2500 eFig: \u0394Cr time course \u2500\u2500")
     avail = [(t, load_rs(t)) for t in DBS if load_rs(t) is not None]
     n = len(avail)
     fig, axes = plt.subplots(
@@ -731,9 +717,9 @@ def efig_timecourse():
                 ax.plot(h[j], d[j], "o", ms=5, color=BLUE, zorder=5)
         ax.set_xticks([6, 12, 18, 24, 30, 36, 42, 48])
         ax.set_xlim(3, 51)
-        ax.set_xlabel("Hours from T₀")
+        ax.set_xlabel("Hours from T\u2080")
         if i == 0:
-            ax.set_ylabel("DiD: ΔCr (mg/dL)")
+            ax.set_ylabel("DiD: \u0394Cr (mg/dL)")
         ax.text(
             -0.14,
             1.06,
@@ -747,8 +733,7 @@ def efig_timecourse():
     fig.text(
         0.5,
         -0.03,
-        "Primary (19 var), PSM+DR  |  ● = P<0.05  |  "
-        "Gray = 36h primary  |  DiD<0 = renoprotective",
+        "Primary (19 var), PSM+DR  |  \u25cf = P<0.05  |  Gray = 36h primary  |  DiD<0 = renoprotective",
         ha="center",
         fontsize=5.5,
         color="#666",
@@ -756,11 +741,11 @@ def efig_timecourse():
     save(fig, "efig_timecourse")
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ====================================================================
 # eFIGURE: SENSITIVITY (primary vs sens_a)
-# ═══════════════════════════════════════════════════════════════════
+# ====================================================================
 def efig_sensitivity():
-    print("\n── eFig: Primary vs Sensitivity A ──")
+    print("\n\u2500\u2500 eFig: Primary vs Sensitivity A \u2500\u2500")
     avail = [(t, load_rs(t)) for t in DBS if load_rs(t) is not None]
     n = len(avail)
     fig, axes = plt.subplots(
@@ -769,8 +754,8 @@ def efig_sensitivity():
     if n == 1:
         axes = [axes]
     specs = [
-        ("primary", "Primary (no K⁺/Mg)", BLUE),
-        ("sens_a", "+K⁺/Mg (positivity issue)", VERMIL),
+        ("primary", "Primary (no K\u207a/Mg)", BLUE),
+        ("sens_a", "+K\u207a/Mg (positivity issue)", VERMIL),
     ]
     for i, (tag, df) in enumerate(avail):
         ax = axes[i]
@@ -809,9 +794,9 @@ def efig_sensitivity():
                     ax.plot(h[j], d[j], "o", ms=4, color=sc, zorder=5)
         ax.set_xticks([6, 12, 18, 24, 30, 36, 42, 48])
         ax.set_xlim(3, 51)
-        ax.set_xlabel("Hours from T₀")
+        ax.set_xlabel("Hours from T\u2080")
         if i == 0:
-            ax.set_ylabel("DiD: ΔCr (mg/dL)")
+            ax.set_ylabel("DiD: \u0394Cr (mg/dL)")
             ax.legend(fontsize=5.5, loc="lower left")
         ax.text(
             -0.14,
@@ -826,122 +811,37 @@ def efig_sensitivity():
     save(fig, "efig_sensitivity")
 
 
-# ═══════════════════════════════════════════════════════════════════
-# eFIGURE: 48h AKI HTE FOREST (supplement — secondary outcome)
-# ═══════════════════════════════════════════════════════════════════
-def efig_hte_48h():
-    print("\n── eFig: HTE forest (48h AKI, supplement) ──")
-    subgroups = [
-        "Overall",
-        None,
-        "Age < 65",
-        "Age >= 65",
-        None,
-        "eGFR < 60",
-        "eGFR >= 60",
-        None,
-        "Mg < 1.8",
-        "Mg >= 1.8",
-        None,
-        "CABG",
-        "Non-CABG",
-        None,
-        "Diabetes",
-        "No diabetes",
-        None,
-        "CKD",
-        "No CKD",
-        None,
-        "Heart failure",
-        "No HF",
-        None,
-        "BMI >= 30",
-        "BMI < 30",
-        None,
-        "DM + CKD",
-        "HF + CABG",
-        "Mg<1.8 + CKD",
-    ]
+# ====================================================================
+# eFIGURE: LOVE PLOT — ALL 19 PS covariates + supplementary Mg/K
+#   FIXED in v4: was 15 vars (missing 4 labs), now 19 + 2 supp
+#   Sorted by matched SMD descending (violation visible at top)
+# ====================================================================
+# All 19 primary PS covariates
+PS_VARS = [
+    "age",
+    "is_female",
+    "bmi",
+    "surg_cabg",
+    "surg_valve",
+    "surg_combined",
+    "heart_failure",
+    "hypertension",
+    "diabetes",
+    "ckd",
+    "copd",
+    "pvd",
+    "stroke",
+    "liver_disease",
+    "egfr",
+    "last_calcium",
+    "last_lactate",
+    "last_lactate_missing",
+    "last_heartrate",
+]
+# Supplementary (not in PS model, shown below separator)
+SUPP_VARS = ["last_magnesium", "last_potassium"]
 
-    htes = {tag: load_hte(tag) for tag in DBS}
-    fig, ax = plt.subplots(figsize=(5.5, 7.5), constrained_layout=True)
-    ax.axvline(1, color="#ddd", lw=0.6, zorder=0)
-
-    y = 0
-    yticks = []
-    ylabels = []
-    for item in reversed(subgroups):
-        if item is None:
-            y += 0.6
-            continue
-        for di, tag in enumerate(DBS):
-            hte = htes.get(tag)
-            if hte is None:
-                continue
-            r = hte_row(hte, item, "aki_48h")
-            if r is None:
-                continue
-            est, lo, hi = or_ci(r)
-            if pd.isna(est) or est > 15:
-                continue
-            sig = not pd.isna(r["p"]) and r["p"] < 0.05
-            offset = 0.13 * (1 - 2 * di)
-            ax.errorbar(
-                est,
-                y + offset,
-                xerr=[[max(est - lo, 0.001)], [max(hi - est, 0.001)]],
-                fmt=MKR[tag],
-                color=CLR[tag],
-                ms=5 if sig else 3.5,
-                markerfacecolor=CLR[tag] if sig else "white",
-                markeredgecolor=CLR[tag],
-                markeredgewidth=0.7,
-                capsize=1.5,
-                capthick=0.4,
-                lw=0.5,
-                zorder=3,
-            )
-        yticks.append(y)
-        ylabels.append(item)
-        y += 1.0
-
-    ax.set_yticks(yticks)
-    ax.set_yticklabels(ylabels, fontsize=6)
-    ax.set_xlabel("Odds Ratio for 48-hour AKI (95% CI)")
-    ax.set_xscale("log")
-    ax.set_xlim(0.08, 4.0)
-    ax.set_xticks([0.1, 0.25, 0.5, 1, 2])
-    ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
-    for tag in DBS:
-        ax.plot(
-            [],
-            [],
-            MKR[tag],
-            color=CLR[tag],
-            markerfacecolor=CLR[tag],
-            ms=5,
-            label=LBL[tag],
-        )
-    ax.legend(loc="upper right", fontsize=6.5)
-    ax.text(
-        0.02, -0.02, "← Favors IV Mg", transform=ax.transAxes, fontsize=5.5, color=GRAY
-    )
-    ax.text(
-        0.98,
-        -0.02,
-        "Favors control →",
-        transform=ax.transAxes,
-        fontsize=5.5,
-        color=GRAY,
-        ha="right",
-    )
-    save(fig, "efig_hte_48h")
-
-
-# ═══════════════════════════════════════════════════════════════════
-# eFIGURE: LOVE PLOT (covariate balance before/after matching)
-# ═══════════════════════════════════════════════════════════════════
-NICE_NAMES = {
+NICE = {
     "age": "Age",
     "is_female": "Female sex",
     "bmi": "BMI",
@@ -957,124 +857,132 @@ NICE_NAMES = {
     "stroke": "Stroke/TIA",
     "liver_disease": "Liver disease",
     "egfr": "eGFR",
-    "last_calcium": "Calcium",
-    "last_lactate": "Lactate",
-    "last_lactate_missing": "Lactate (missing)",
-    "last_heartrate": "Heart rate",
-    "last_magnesium": "Magnesium",
-    "last_potassium": "Potassium",
-    "first_calcium": "Calcium",
-    "first_lactate": "Lactate",
-    "first_lactate_missing": "Lactate (missing)",
-    "first_heartrate": "Heart rate",
+    "last_calcium": "Calcium*",
+    "last_lactate": "Lactate*",
+    "last_lactate_missing": "Lactate missing*",
+    "last_heartrate": "Heart rate*",
+    "last_magnesium": "Magnesium\u2020",
+    "last_potassium": "Potassium\u2020",
 }
 
 
-def compute_smds(df, ps_vars):
-    """Compute abs SMD for treated vs control on each variable."""
-    smds = {}
-    t1 = df[df.treated == 1]
-    t0 = df[df.treated == 0]
-    for v in ps_vars:
-        if v not in df.columns:
-            continue
-        x1 = t1[v].dropna()
-        x0 = t0[v].dropna()
-        if len(x1) < 5 or len(x0) < 5:
-            continue
-        m1, m0 = x1.mean(), x0.mean()
-        sp = np.sqrt((x1.var() + x0.var()) / 2)
-        smds[v] = abs(m1 - m0) / sp if sp > 1e-10 else 0
-    return smds
+def _smd(x1, x0):
+    x1, x0 = x1.dropna(), x0.dropna()
+    if len(x1) < 5 or len(x0) < 5:
+        return np.nan
+    m1, m0 = x1.mean(), x0.mean()
+    sp = np.sqrt((x1.var() + x0.var()) / 2)
+    return abs(m1 - m0) / sp if sp > 1e-10 else 0.0
+
+
+def _compute_smds(df, var_list):
+    t1, t0 = df[df.treated == 1], df[df.treated == 0]
+    return {
+        v: _smd(t1[v].astype(float), t0[v].astype(float))
+        for v in var_list
+        if v in df.columns
+    }
 
 
 def efig_love():
-    print("\n── eFig: Love plot (covariate balance) ──")
+    print("\n\u2500\u2500 eFig: Love plot (covariate balance) \u2500\u2500")
+    from matplotlib.lines import Line2D
+
     n = len(DBS)
     fig, axes = plt.subplots(
-        1, n, figsize=(3.8 * n, 5.5), sharey=False, constrained_layout=True
+        1, n, figsize=(3.8 * n, 5.8), sharey=False, constrained_layout=True
     )
     if n == 1:
         axes = [axes]
-
-    ps_vars = [
-        "age",
-        "is_female",
-        "bmi",
-        "surg_cabg",
-        "surg_valve",
-        "surg_combined",
-        "heart_failure",
-        "hypertension",
-        "diabetes",
-        "ckd",
-        "copd",
-        "pvd",
-        "stroke",
-        "liver_disease",
-        "egfr",
-    ]
 
     for i, tag in enumerate(DBS):
         ax = axes[i]
         all_path = os.path.join(RESULTS, f"did_all_{tag}.csv")
         hte_path = os.path.join(RESULTS, f"did_hte_data_{tag}.csv")
         if not os.path.exists(all_path) or not os.path.exists(hte_path):
+            print(f"    SKIP {tag}: missing data files")
             continue
 
-        raw = pd.read_csv(all_path)
-        matched = pd.read_csv(hte_path)
+        raw_df = pd.read_csv(all_path)
+        matched_df = pd.read_csv(hte_path)
 
-        # Add lab columns from matched data that might be available
-        avail_vars = [v for v in ps_vars if v in raw.columns]
-        extra = [
-            v
-            for v in matched.columns
-            if v.startswith(("last_", "first_"))
-            and v in NICE_NAMES
-            and v not in avail_vars
-        ]
-        plot_vars = avail_vars + extra
+        # Matched SMDs: pair-level (controls duplicated = correct for replacement)
+        matched_smds = _compute_smds(matched_df, PS_VARS + SUPP_VARS)
 
-        raw_smds = compute_smds(raw, plot_vars)
-        matched_smds = compute_smds(matched, plot_vars)
-
-        # Sort by raw SMD
-        common = sorted(
-            set(raw_smds) & set(matched_smds), key=lambda v: raw_smds.get(v, 0)
+        # Raw SMDs: baseline vars from did_all, lab vars from unique matched patients
+        baseline = [v for v in PS_VARS if not v.startswith("last_")]
+        raw_smds = _compute_smds(raw_df, baseline)
+        unique_matched = matched_df.drop_duplicates(subset="pid")
+        lab_raw = _compute_smds(
+            unique_matched, [v for v in PS_VARS if v.startswith("last_")] + SUPP_VARS
         )
-        if len(common) == 0:
-            continue
+        raw_smds.update(lab_raw)
 
-        labels = [NICE_NAMES.get(v, v) for v in common]
-        raw_vals = [raw_smds[v] for v in common]
-        mat_vals = [matched_smds[v] for v in common]
-        ys = np.arange(len(common))
+        # ── Build rows for PS covariates, sorted by matched SMD desc ──
+        ps_rows = []
+        for v in PS_VARS:
+            m = matched_smds.get(v, np.nan)
+            r = raw_smds.get(v, np.nan)
+            if np.isnan(m):
+                continue
+            ps_rows.append((v, NICE.get(v, v), r, m))
+        ps_rows.sort(key=lambda x: -x[3])  # sort by matched SMD, largest first
 
-        ax.axvline(0.1, color="#ccc", lw=0.5, ls="--")
-        for j in range(len(common)):
-            ax.plot([raw_vals[j], mat_vals[j]], [ys[j], ys[j]], color="#ddd", lw=0.4)
-        ax.scatter(
-            raw_vals,
-            ys,
-            marker="x",
-            s=18,
-            color=VERMIL,
-            linewidths=0.6,
-            zorder=3,
-            label="Before matching",
-        )
-        ax.scatter(
-            mat_vals, ys, marker="o", s=20, color=BLUE, zorder=4, label="After matching"
-        )
+        # Supplementary vars
+        supp_rows = []
+        for v in SUPP_VARS:
+            m = matched_smds.get(v, np.nan)
+            r = raw_smds.get(v, np.nan)
+            if np.isnan(m):
+                continue
+            supp_rows.append((v, NICE.get(v, v), r, m))
+
+        all_rows = ps_rows + supp_rows
+        n_ps = len(ps_rows)
+        n_all = len(all_rows)
+
+        # Y positions: PS at top, gap, supplementary at bottom
+        ys = []
+        for j in range(n_all):
+            if j < n_ps:
+                ys.append(n_all - j)
+            else:
+                ys.append(n_all - j - 0.7)  # gap before supplementary
+
+        # Threshold line
+        ax.axvline(0.10, color="#999", lw=0.5, ls="--", zorder=0)
+
+        # Separator between PS and supplementary
+        if n_ps < n_all:
+            sep_y = ys[n_ps - 1] - 0.5
+            ax.axhline(sep_y, color="#ccc", lw=0.4, ls="-")
+
+        # Connecting lines
+        for j, (v, lbl, r_val, m_val) in enumerate(all_rows):
+            if not np.isnan(r_val):
+                ax.plot([r_val, m_val], [ys[j], ys[j]], color="#ddd", lw=0.5, zorder=1)
+
+        # Before-matching crosses
+        for j, (v, lbl, r_val, m_val) in enumerate(all_rows):
+            if np.isnan(r_val):
+                continue
+            c = VERMIL if j < n_ps else GRAY
+            ax.scatter(
+                r_val, ys[j], marker="x", s=22, color=c, linewidths=0.7, zorder=3
+            )
+
+        # After-matching dots
+        for j, (v, lbl, r_val, m_val) in enumerate(all_rows):
+            c = BLUE if j < n_ps else GRAY
+            ax.scatter(m_val, ys[j], marker="o", s=20, color=c, linewidths=0, zorder=4)
+
         ax.set_yticks(ys)
-        ax.set_yticklabels(labels, fontsize=5.5)
+        ax.set_yticklabels([r[1] for r in all_rows], fontsize=5.5)
         ax.set_xlabel("Absolute SMD")
-        ax.set_xlim(0, max(raw_vals) * 1.1 + 0.02)
-        ax.legend(fontsize=5.5, loc="lower right")
+        ax.set_xlim(-0.01, None)
         ax.text(
             -0.02,
-            1.04,
+            1.03,
             chr(ord("a") + i),
             transform=ax.transAxes,
             fontsize=10,
@@ -1083,10 +991,60 @@ def efig_love():
         )
         ax.set_title(LBL[tag], fontsize=8, pad=5)
 
+        # Print summary
+        viol = [(lbl, m) for _, lbl, _, m in ps_rows if m > 0.10]
+        print(
+            f"    {LBL[tag]}: {len(ps_rows)} PS covariates, "
+            f"{len(viol)} violations"
+            + (f" ({', '.join(f'{l}={m:.3f}' for l, m in viol)})" if viol else "")
+        )
+
+    # Shared legend
+    fig.legend(
+        handles=[
+            Line2D(
+                [0],
+                [0],
+                marker="x",
+                color=VERMIL,
+                ls="None",
+                ms=5,
+                markeredgewidth=0.8,
+                label="Before matching",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color=BLUE,
+                ls="None",
+                ms=4,
+                label="After matching",
+            ),
+        ],
+        loc="lower center",
+        ncol=2,
+        frameon=False,
+        fontsize=6,
+        bbox_to_anchor=(0.5, -0.01),
+    )
+
+    # Footnote
+    fig.text(
+        0.5,
+        -0.035,
+        "* Lab value closest to T\u2080 (PS covariate)   "
+        "\u2020 Not in PS model (shown for reference)",
+        ha="center",
+        fontsize=5,
+        style="italic",
+        color="#666",
+    )
+
     save(fig, "efig_love_plot")
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ====================================================================
 FIGURES = {
     "fig1_primary": fig1_primary,
     "fig2_hte": fig2_hte,
@@ -1099,7 +1057,7 @@ FIGURES = {
 
 if __name__ == "__main__":
     print("=" * 70)
-    print("04_figures.py — Publication figures")
+    print("04_figures.py \u2014 Publication figures")
     print("=" * 70)
     args = [a.lower() for a in sys.argv[1:]]
     to_draw = args if args else list(FIGURES.keys())
