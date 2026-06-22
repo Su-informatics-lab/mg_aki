@@ -274,6 +274,7 @@ all_cand <- unique(unlist(lapply(SPECS, `[[`, "vars")))
 all_cand <- intersect(all_cand, names(all_pts))
 all_cand <- all_cand[vapply(all_cand,function(v){x<-all_pts[[v]];!all(is.na(x))&&var(x,na.rm=T)>1e-10},logical(1))]
 to_imp <- all_cand[vapply(all_cand,function(v)any(is.na(all_pts[[v]])),logical(1))]
+set.seed(2026)  # reproducibility: MICE + matching
 cat(sprintf("\n  MICE m=%d on %d vars: %s\n",M_IMP,length(to_imp),paste(to_imp,collapse=", ")))
 if(length(to_imp)>0){
   md<-all_pts[,c("treated",all_cand)]; mt<-rep("",ncol(md)); names(mt)<-names(md)
