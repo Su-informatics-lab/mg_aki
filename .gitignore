@@ -6,3 +6,11 @@ results/did_matched_*.csv
 # Raw database files
 eicu-crd-2.0/
 mimic-iv-3.1/
+
+# Patient-level CSVs (PhysioNet DUA)
+results/did_all_*.csv
+results/did_cr_all_*.csv
+results/did_labs_all_*.csv
+results/did_pairs_*.csv
+results/did_hte_data_*.csv
+results/km_aki_*.csv

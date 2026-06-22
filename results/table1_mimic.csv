@@ -1,0 +1,34 @@
+Variable,"IV Mg (n=6,354)","Control (n=3,412)",SMD
+**Demographics**,,,
+"  Age, mean (SD), y",67.0 (12.5),66.9 (12.4),0.010
+"  Female sex, n (%)","2,176 (34.2)","1,160 (34.0)",0.005
+"  BMI, mean (SD), kg/m²",28.6 (6.0),28.6 (5.9),0.000
+"**Surgery type, n (%)**",,,
+  CABG,"1,325 (20.9)",654 (19.2),0.042
+  Valve surgery,826 (13.0),389 (11.4),0.049
+  Combined CABG + valve,477 (7.5),239 (7.0),0.019
+"**Comorbidities, n (%)**",,,
+  Heart failure,"1,912 (30.1)","1,046 (30.7)",0.012
+  Hypertension,"4,826 (76.0)","2,670 (78.3)",0.055
+  Diabetes mellitus,"2,021 (31.8)","1,104 (32.4)",0.012
+  Chronic kidney disease,892 (14.0),553 (16.2),0.061
+  COPD,"1,284 (20.2)",674 (19.8),0.011
+  Peripheral vascular disease,341 (5.4),165 (4.8),0.024
+  Stroke/TIA,549 (8.6),313 (9.2),0.019
+  Liver disease,300 (4.7),188 (5.5),0.036
+**Renal function**,,,
+"  eGFR, mean (SD), mL/min/1.73 m²",84.3 (22.5),82.9 (23.9),0.061
+"  Baseline creatinine, mean (SD), mg/dL",0.98 (0.45),0.97 (0.43),0.019
+**Laboratory values (closest to T₀)**,,,
+"  Serum calcium, mean (SD), mg/dL",—,—,—
+"  Lactate, mean (SD), mmol/L",—,—,—
+"  Lactate missing, n (%)",—,—,—
+"  Heart rate, mean (SD), bpm",—,—,—
+**Supplementary labs (not in PS model)**,,,
+"  Serum magnesium, mean (SD), mg/dL",—,—,—
+"  Serum potassium, mean (SD), mEq/L",—,—,—
+**Outcomes**,,,
+"  48-hour AKI, n (%)","1,402 (22.1)",909 (26.6),0.107 *
+"  7-day AKI, n (%)","1,653 (26.0)","1,034 (30.3)",0.095
+"  Hospital mortality, n (%)",216 (3.4),127 (3.7),0.017
+"  Ventricular arrhythmia, n (%)",420 (6.6),194 (5.7),0.038
