@@ -77,7 +77,22 @@ def save(fig, name):
 
 def load_hte(tag):
     p = os.path.join(RESULTS, f"did_hte_{tag}.csv")
-    return pd.read_csv(p) if os.path.exists(p) else None
+    if not os.path.exists(p):
+        return None
+    df = pd.read_csv(p)
+    # Compat: map new 03_hte.R columns to old names expected by figures
+    if "or" in df.columns and "est" not in df.columns:
+        df["est"] = df["or"]
+    if "rate_trt" in df.columns and "rd" not in df.columns:
+        df["rd"] = df["rate_trt"] - df["rate_ctl"]
+    if "or_lo" in df.columns and "se" not in df.columns:
+        df["se"] = (np.log(df["or_hi"].clip(1e-6)) - np.log(df["or_lo"].clip(1e-6))) / (
+            2 * 1.96
+        )
+    if "n" in df.columns and "n_trt" not in df.columns:
+        df["n_trt"] = df.get("events_trt", df["n"] // 2)
+        df["n_ctl"] = df.get("events_ctl", df["n"] // 2)
+    return df
 
 
 def load_rs(tag):
@@ -101,6 +116,38 @@ def or_ci(row):
 # ====================================================================
 # KM COMPUTATION
 # ====================================================================
+
+
+def ensure_hte_data(tag):
+    """Generate did_hte_data_{db}.csv from pairs + did_all if missing."""
+    cache = os.path.join(RESULTS, f"did_hte_data_{tag}.csv")
+    if os.path.exists(cache):
+        return
+    print(f"    Generating did_hte_data_{tag}.csv from matched pairs...")
+    pairs_path = os.path.join(RESULTS, f"did_pairs_primary_yet_untreated_{tag}.csv")
+    all_path = os.path.join(RESULTS, f"did_all_{tag}.csv")
+    if not os.path.exists(pairs_path) or not os.path.exists(all_path):
+        print(f"    Missing input files for {tag}")
+        return
+    pairs = pd.read_csv(pairs_path)
+    all_pts = pd.read_csv(all_path)
+    pid_map = all_pts.set_index("pid")
+    rows = []
+    for _, pr in pairs.iterrows():
+        for pid, trt_val in [(pr.trt_pid, 1), (pr.ctl_pid, 0)]:
+            if pid in pid_map.index:
+                row = pid_map.loc[pid].to_dict()
+                row["pid"] = pid
+                row["treated"] = trt_val
+                row["t_mg"] = pr.t_mg
+                rows.append(row)
+    df = pd.DataFrame(rows)
+    df.to_csv(cache, index=False)
+    print(
+        f"    → {len(df)} rows ({df.treated.sum():.0f} trt, {(1-df.treated).sum():.0f} ctl)"
+    )
+
+
 def compute_km_data(tag):
     cache = os.path.join(RESULTS, f"km_aki_{tag}.csv")
     if os.path.exists(cache):
@@ -109,6 +156,7 @@ def compute_km_data(tag):
             return df
         os.remove(cache)
 
+    ensure_hte_data(tag)
     print(f"    Computing KM data for {tag} (one-time)...")
     hte_data = pd.read_csv(os.path.join(RESULTS, f"did_hte_data_{tag}.csv"))
     cr_all = pd.read_csv(os.path.join(RESULTS, f"did_cr_all_{tag}.csv"))
@@ -899,6 +947,7 @@ def efig_love():
         ax = axes[i]
         all_path = os.path.join(RESULTS, f"did_all_{tag}.csv")
         hte_path = os.path.join(RESULTS, f"did_hte_data_{tag}.csv")
+        ensure_hte_data(tag)
         if not os.path.exists(all_path) or not os.path.exists(hte_path):
             print(f"    SKIP {tag}: missing data files")
             continue
