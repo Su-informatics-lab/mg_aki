@@ -1158,7 +1158,7 @@ def fig4_precision():
     ax.set_xscale("log")
     ax.set_xlim(0.35, 3.0)
     ax.set_xticks([0.5, 0.75, 1.0, 1.5, 2.0])
-    ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
+    ax.set_xticklabels(["0.50", "0.75", "1.00", "1.50", "2.00"])
     ax.set_ylabel("Baseline serum Mg (mg/dL)")
     ax.invert_yaxis()
 
