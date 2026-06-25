@@ -1,19 +1,18 @@
 #!/usr/bin/env Rscript
 # ============================================================================
-# 03_hte.R — HTE with post-T₀ secondary outcomes (v5.1)
+# 03_hte.R — Heterogeneous Treatment Effects (PAIR-PRESERVING)
 #
-# AKI definition: Consolidated KDIGO (2012)
-#   ≤48h: ΔCr ≥ 0.3 OR ratio ≥ 1.5 (both criteria active)
-#   >48h: ratio ≥ 1.5 only (absolute criterion expired)
-#   UO criterion not used (unreliable in cardiac surgery ICU)
+# CRITICAL FIX: Subgroup analyses subset by the TREATED patient's covariate
+# and compare against their MATCHED CONTROL, regardless of the control's
+# covariate value. This preserves the propensity-score-matched pair structure.
 #
-# Outcomes (all T₀-anchored):
-#   ΔCr 48h:        Cr at T₀+48h − Cr_pre
-#   48h AKI:        consolidated KDIGO within 48h of T₀
-#   7d AKI:         consolidated KDIGO within 7d of T₀
-#   Mortality:      per-stay (patient alive at T₀ by construction)
-#   POAF/Enceph/VA: eICU: post-T₀ from raw dx table (7d window)
-#                   MIMIC: hospitalization-level ICD (no T₀ filter)
+# WRONG:  df[df$ckd == 1, ]  → breaks pairs (filters both patients by own CKD)
+# RIGHT:  idx <- which(ckd_trt == 1); run_or(aki_trt[idx], aki_ctl[idx])
+#
+# Outputs:
+#   results/did_hte_{db}.csv         — single subgroup ORs
+#   results/did_hte_crossed_{db}.csv — pairwise crossed phenotype ORs
+#   results/did_hte_interact_{db}.csv — interaction test P-values
 #
 # Usage: Rscript 03_hte.R mimic
 #        Rscript 03_hte.R eicu
@@ -21,315 +20,368 @@
 
 suppressPackageStartupMessages({ library(sandwich); library(lmtest) })
 
-RESULTS   <- path.expand("~/mg_aki/results")
-EICU_ROOT <- path.expand("~/mg_aki/eicu-crd-2.0")
-CR_WINDOW <- 12
-WINDOW_7D_MIN <- 7 * 24 * 60   # 7 days in minutes
-LAB_BASES <- c("magnesium","potassium","calcium","lactate","heartrate")
+RESULTS <- path.expand("~/mg_aki/results")
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) < 1) { cat("Usage: Rscript 03_hte.R <db>\n"); quit(status = 1) }
+tag <- tolower(args[1]); db <- toupper(tag)
 
-# Secondary outcome patterns (eICU diagnosis text matching)
-AF_PAT  <- c("atrial fibrillation","atrial flutter","a-fib","afib","new onset af")
-AF_PRIOR<- c("atrial fibrillation","atrial flutter","a-fib","afib","chronic af")
-ENC_PAT <- c("encephalopathy","delirium","altered mental","acute confusional","metabolic encephalopathy")
-VA_PAT  <- c("ventricular tachycardia","ventricular fibrillation","v-tach","v-fib","vtach","vfib","cardiac arrest")
+SEP <- paste(rep("=", 70), collapse = "")
+cat(sprintf("\n%s\n03_hte.R — %s (pair-preserving)\n%s\n", SEP, db, SEP))
 
-# ── Subgroups ──
-# Both sides of each comparison are needed: the HTE IS the contrast
-# between subgroup and complement (e.g., CKD vs No CKD).
-SUBGROUPS <- list(
-  list(name="Overall",var=NULL),
-  list(name="Age < 65",var="age",op="<",val=65),
-  list(name="Age >= 65",var="age",op=">=",val=65),
-  list(name="eGFR < 60",var="egfr",op="<",val=60),
-  list(name="eGFR >= 60",var="egfr",op=">=",val=60),
-  list(name="Mg < 1.8",var="last_magnesium",op="<",val=1.8),
-  list(name="Mg >= 1.8",var="last_magnesium",op=">=",val=1.8),
-  list(name="CABG",var="surg_cabg",op="==",val=1),
-  list(name="Non-CABG",var="surg_cabg",op="==",val=0),
-  list(name="Diabetes",var="diabetes",op="==",val=1),
-  list(name="No diabetes",var="diabetes",op="==",val=0),
-  list(name="CKD",var="ckd",op="==",val=1),
-  list(name="No CKD",var="ckd",op="==",val=0),
-  list(name="Heart failure",var="heart_failure",op="==",val=1),
-  list(name="No HF",var="heart_failure",op="==",val=0),
-  list(name="BMI >= 30",var="bmi",op=">=",val=30),
-  list(name="BMI < 30",var="bmi",op="<",val=30),
-  list(name="DM + CKD",var=c("diabetes","ckd"),op=c("==","=="),val=c(1,1)),
-  list(name="HF + CABG",var=c("heart_failure","surg_cabg"),op=c("==","=="),val=c(1,1)),
-  list(name="Mg<1.8 + CKD",var=c("last_magnesium","ckd"),op=c("<","=="),val=c(1.8,1))
+# ══════════════════════════════════════════════════════════════════
+# LOAD DATA
+# ══════════════════════════════════════════════════════════════════
+all_pts <- read.csv(file.path(RESULTS, sprintf("did_all_%s.csv", tag)), stringsAsFactors = FALSE)
+pairs   <- read.csv(file.path(RESULTS, sprintf("did_pairs_primary_yet_untreated_%s.csv", tag)),
+                     stringsAsFactors = FALSE)
+cr_all  <- read.csv(file.path(RESULTS, sprintf("did_cr_all_%s.csv", tag)), stringsAsFactors = FALSE)
+
+cr_id <- if ("patientunitstayid" %in% names(cr_all)) "patientunitstayid" else "stay_id"
+cr_all$pid <- cr_all[[cr_id]]
+if (!"offset_h" %in% names(cr_all)) cr_all$offset_h <- cr_all$labresultoffset / 60
+cr_all <- cr_all[order(cr_all$pid, cr_all$offset_h), ]
+cr_list <- split(cr_all[, c("labresult", "offset_h")], cr_all$pid)
+
+trt_rows <- match(pairs$trt_pid, all_pts$pid)
+ctl_rows <- match(pairs$ctl_pid, all_pts$pid)
+n_pairs  <- nrow(pairs)
+
+cat(sprintf("  Pairs: %d | Patients: %d\n", n_pairs, nrow(all_pts)))
+
+# ══════════════════════════════════════════════════════════════════
+# COMPUTE ALL OUTCOMES
+# ══════════════════════════════════════════════════════════════════
+
+# ── AKI stages (from Cr) ──────────────────────────────────────────
+compute_aki <- function(pid, t_mg) {
+  cr <- cr_list[[as.character(pid)]]
+  if (is.null(cr) || nrow(cr) < 1) return(c(NA, NA, NA, NA))
+  pre <- cr[cr$offset_h >= 0 & cr$offset_h < t_mg, ]
+  if (nrow(pre) == 0) return(c(NA, NA, NA, NA))
+  bl <- pre$labresult[which.max(pre$offset_h)]
+  if (is.na(bl) || bl <= 0) return(c(NA, NA, NA, NA))
+
+  # 48h AKI, 7d AKI (Stage 1+), Stage 2+, Stage 3+
+  aki_48h <- 0; aki_7d <- 0; stage2 <- 0; stage3 <- 0
+  post <- cr[cr$offset_h >= t_mg & cr$offset_h <= (t_mg + 168), ]
+  if (nrow(post) == 0) return(c(0, 0, 0, 0))
+
+  for (i in seq_len(nrow(post))) {
+    h <- post$offset_h[i] - t_mg
+    val <- post$labresult[i]
+    delta <- val - bl
+    ratio <- val / bl
+
+    # KDIGO Stage 1+ consolidated
+    if (h <= 48 && (delta >= 0.3 || ratio >= 1.5)) { aki_7d <- 1; aki_48h <- 1 }
+    if (h > 48 && ratio >= 1.5) aki_7d <- 1
+
+    # 48h AKI only (absolute + ratio, within 48h)
+    if (h <= 48 && (delta >= 0.3 || ratio >= 1.5)) aki_48h <- 1
+
+    # Stage 2+
+    if (ratio >= 2.0) stage2 <- 1
+    # Stage 3+
+    if (ratio >= 3.0 || val >= 4.0) stage3 <- 1
+  }
+  c(aki_48h, aki_7d, stage2, stage3)
+}
+
+cat("  Computing AKI outcomes...\n")
+aki_trt <- aki_ctl <- matrix(NA, n_pairs, 4)
+colnames(aki_trt) <- colnames(aki_ctl) <- c("aki_48h", "aki_7d", "aki_stage2", "aki_stage3")
+for (i in seq_len(n_pairs)) {
+  aki_trt[i, ] <- compute_aki(pairs$trt_pid[i], pairs$t_mg[i])
+  aki_ctl[i, ] <- compute_aki(pairs$ctl_pid[i], pairs$t_mg[i])
+}
+
+# ── Pre-computed binary outcomes (from did_all) ───────────────────
+outcome_names <- c("aki_48h", "aki_7d", "aki_stage2", "aki_stage3",
+                    "hosp_mortality", "encephalopathy", "vent_arrhythmia", "poaf")
+
+# Build outcome matrices: trt and ctl vectors, indexed by pair
+out_trt <- list(); out_ctl <- list()
+for (j in 1:4) {
+  out_trt[[colnames(aki_trt)[j]]] <- aki_trt[, j]
+  out_ctl[[colnames(aki_ctl)[j]]] <- aki_ctl[, j]
+}
+for (oc in c("hosp_mortality", "encephalopathy", "vent_arrhythmia", "poaf")) {
+  if (oc %in% names(all_pts)) {
+    out_trt[[oc]] <- all_pts[[oc]][trt_rows]
+    out_ctl[[oc]] <- all_pts[[oc]][ctl_rows]
+  }
+}
+cat(sprintf("  Outcomes: %s\n", paste(names(out_trt), collapse = ", ")))
+
+# ══════════════════════════════════════════════════════════════════
+# TREATED PATIENT COVARIATES (for subgroup definition)
+# ══════════════════════════════════════════════════════════════════
+
+# All covariates indexed by pair (from TREATED patient only)
+egfr_trt   <- all_pts$egfr[trt_rows]
+age_trt    <- all_pts$age[trt_rows]
+female_trt <- all_pts$is_female[trt_rows]
+dm_trt     <- all_pts$diabetes[trt_rows]
+ckd_trt    <- all_pts$ckd[trt_rows]
+hf_trt     <- all_pts$heart_failure[trt_rows]
+cabg_trt   <- if ("surg_cabg" %in% names(all_pts)) all_pts$surg_cabg[trt_rows] else rep(0, n_pairs)
+bmi_trt    <- all_pts$bmi[trt_rows]
+htn_trt    <- all_pts$hypertension[trt_rows]
+copd_trt   <- all_pts$copd[trt_rows]
+
+# Baseline Mg (try multiple column names)
+mg_trt <- rep(NA, n_pairs)
+for (mc in c("last_magnesium", "first_mg_value", "first_magnesium")) {
+  if (mc %in% names(all_pts)) { mg_trt <- all_pts[[mc]][trt_rows]; break }
+}
+
+# ── Define subgroup flags ─────────────────────────────────────────
+subgroups <- list(
+  # Overall
+  list(name = "Overall",           idx = seq_len(n_pairs)),
+  # Age
+  list(name = "Age < 65",          idx = which(!is.na(age_trt) & age_trt < 65)),
+  list(name = "Age >= 65",         idx = which(!is.na(age_trt) & age_trt >= 65)),
+  # eGFR (5-bin stratification — THE FIX)
+  list(name = "eGFR >= 90",        idx = which(!is.na(egfr_trt) & egfr_trt >= 90)),
+  list(name = "eGFR 60-89",        idx = which(!is.na(egfr_trt) & egfr_trt >= 60 & egfr_trt < 90)),
+  list(name = "eGFR 45-59",        idx = which(!is.na(egfr_trt) & egfr_trt >= 45 & egfr_trt < 60)),
+  list(name = "eGFR 30-44",        idx = which(!is.na(egfr_trt) & egfr_trt >= 30 & egfr_trt < 45)),
+  list(name = "eGFR < 30",         idx = which(!is.na(egfr_trt) & egfr_trt < 30)),
+  # Also keep the old binary for backward compat, but now correct
+  list(name = "eGFR < 60",         idx = which(!is.na(egfr_trt) & egfr_trt < 60)),
+  list(name = "eGFR >= 60",        idx = which(!is.na(egfr_trt) & egfr_trt >= 60)),
+  # Mg
+  list(name = "Mg < 1.8",          idx = which(!is.na(mg_trt) & mg_trt < 1.8)),
+  list(name = "Mg >= 1.8",         idx = which(!is.na(mg_trt) & mg_trt >= 1.8)),
+  # Surgery
+  list(name = "CABG",              idx = which(cabg_trt == 1)),
+  list(name = "Non-CABG",          idx = which(cabg_trt == 0)),
+  # Comorbidities
+  list(name = "Diabetes",          idx = which(dm_trt == 1)),
+  list(name = "No diabetes",       idx = which(dm_trt == 0)),
+  list(name = "CKD",               idx = which(ckd_trt == 1)),
+  list(name = "No CKD",            idx = which(ckd_trt == 0)),
+  list(name = "Heart failure",     idx = which(hf_trt == 1)),
+  list(name = "No HF",             idx = which(hf_trt == 0)),
+  list(name = "BMI >= 30",         idx = which(!is.na(bmi_trt) & bmi_trt >= 30)),
+  list(name = "BMI < 30",          idx = which(!is.na(bmi_trt) & bmi_trt < 30)),
+  list(name = "Female",            idx = which(female_trt == 1)),
+  list(name = "Male",              idx = which(female_trt == 0)),
+  # Crossed phenotypes
+  list(name = "DM + CKD",          idx = which(dm_trt == 1 & ckd_trt == 1)),
+  list(name = "HF + CABG",         idx = which(hf_trt == 1 & cabg_trt == 1)),
+  list(name = "Mg<1.8 + CKD",      idx = which(!is.na(mg_trt) & mg_trt < 1.8 & ckd_trt == 1))
 )
 
-# ═══════════════════════════════════════════════════════════════════
-# HELPERS
-# ═══════════════════════════════════════════════════════════════════
-find_cr <- function(cp,th,w=CR_WINDOW){if(is.null(cp)||nrow(cp)==0)return(NA)
-  cd<-cp[cp$offset_h>=(th-w)&cp$offset_h<=(th+w),];if(nrow(cd)==0)return(NA)
-  cd$labresult[which.min(abs(cd$offset_h-th))]}
-find_cr_pre <- function(cp,th){if(is.null(cp)||nrow(cp)==0)return(NA)
-  cd<-cp[cp$offset_h>=0&cp$offset_h<th,];if(nrow(cd)==0)return(NA)
-  cd$labresult[which.max(cd$offset_h)]}
-max_cr_win <- function(cp,t0,hrs){if(is.null(cp)||nrow(cp)==0)return(NA)
-  cd<-cp[cp$offset_h>=t0&cp$offset_h<=(t0+hrs),];if(nrow(cd)==0)return(NA)
-  max(cd$labresult,na.rm=TRUE)}
-
-safe_ct <- function(fit){
-  ct<-tryCatch(suppressWarnings(coeftest(fit,vcov.=vcovHC(fit,type="HC1"))),error=function(e)NULL)
-  if(!is.null(ct)&&is.matrix(ct)&&"treated"%in%rownames(ct)&&ncol(ct)>=4&&!any(is.nan(ct["treated",]))) ct
-  else tryCatch(coeftest(fit),error=function(e)NULL)}
-
-matches_any <- function(s, pats) {
-  s <- tolower(as.character(s)); m <- rep(FALSE, length(s))
-  for (p in pats) m <- m | grepl(tolower(p), s, fixed=TRUE)
-  m
+# ══════════════════════════════════════════════════════════════════
+# OR HELPER (pair-preserving)
+# ══════════════════════════════════════════════════════════════════
+run_or <- function(ot, oc) {
+  valid <- !is.na(ot) & !is.na(oc)
+  ot <- ot[valid]; oc <- oc[valid]
+  n <- sum(valid); et <- sum(ot); ec <- sum(oc)
+  if (n < 30 || (et + ec) == 0)
+    return(data.frame(or = NA, or_lo = NA, or_hi = NA, p = NA,
+                      rate_trt = NA, rate_ctl = NA, n = n, events_trt = et, events_ctl = ec))
+  r1 <- mean(ot); r0 <- mean(oc)
+  df <- data.frame(outcome = c(ot, oc), treated = rep(c(1, 0), each = sum(valid)))
+  fit <- tryCatch(glm(outcome ~ treated, data = df, family = quasibinomial()),
+                  error = function(e) NULL)
+  if (is.null(fit))
+    return(data.frame(or = NA, or_lo = NA, or_hi = NA, p = NA,
+                      rate_trt = r1, rate_ctl = r0, n = n, events_trt = et, events_ctl = ec))
+  ct <- tryCatch(coeftest(fit, vcov. = vcovHC(fit, type = "HC1")),
+                 error = function(e) tryCatch(coeftest(fit), error = function(e2) NULL))
+  if (is.null(ct))
+    return(data.frame(or = NA, or_lo = NA, or_hi = NA, p = NA,
+                      rate_trt = r1, rate_ctl = r0, n = n, events_trt = et, events_ctl = ec))
+  or <- exp(ct["treated", "Estimate"])
+  lo <- exp(ct["treated", "Estimate"] - 1.96 * ct["treated", "Std. Error"])
+  hi <- exp(ct["treated", "Estimate"] + 1.96 * ct["treated", "Std. Error"])
+  p  <- ct["treated", ncol(ct)]
+  data.frame(or = round(or, 4), or_lo = round(lo, 4), or_hi = round(hi, 4), p = round(p, 6),
+             rate_trt = round(r1, 4), rate_ctl = round(r0, 4), n = n,
+             events_trt = et, events_ctl = ec)
 }
 
-test_sg <- function(df, sg, oc, otype) {
-  if(!is.null(sg$var)){mask<-rep(TRUE,nrow(df))
-    for(i in seq_along(sg$var)){v<-sg$var[i];o<-sg$op[i];val<-sg$val[i]
-      if(!v%in%names(df))return(NULL); x<-df[[v]]
-      mask<-mask&!is.na(x)&switch(o,"<"=x<val,">="=x>=val,"=="=x==val)}
-    sub<-df[mask,]} else sub<-df
-  nt<-sum(sub$treated==1);nc<-sum(sub$treated==0)
-  if(nt<15||nc<15) return(data.frame(subgroup=sg$name,outcome=oc,type=otype,
-    n_trt=nt,n_ctl=nc,est=NA,se=NA,p=NA,rate_trt=NA,rate_ctl=NA,rd=NA,nnt=NA,stringsAsFactors=FALSE))
-  if(otype=="continuous"){sub<-sub[!is.na(sub[[oc]]),];if(nrow(sub)<30)return(NULL)
-    fit<-lm(as.formula(paste(oc,"~treated")),data=sub);ct<-safe_ct(fit);if(is.null(ct))return(NULL)
-    data.frame(subgroup=sg$name,outcome=oc,type="continuous",n_trt=sum(sub$treated==1),
-      n_ctl=sum(sub$treated==0),est=ct["treated",1],se=ct["treated",2],p=ct["treated",4],
-      rate_trt=NA,rate_ctl=NA,rd=NA,nnt=NA,stringsAsFactors=FALSE)
-  } else {sub<-sub[!is.na(sub[[oc]]),]
-    r1<-mean(sub[[oc]][sub$treated==1]);r0<-mean(sub[[oc]][sub$treated==0])
-    rd<-r1-r0;nnt<-if(abs(rd)>0.001)round(1/abs(rd))else NA
-    fit<-tryCatch(glm(as.formula(paste(oc,"~treated")),data=sub,family=quasibinomial()),error=function(e)NULL)
-    if(is.null(fit)||!"treated"%in%names(coef(fit)))return(NULL)
-    ct<-safe_ct(fit);if(is.null(ct))return(NULL)
-    data.frame(subgroup=sg$name,outcome=oc,type="binary",n_trt=sum(sub$treated==1),
-      n_ctl=sum(sub$treated==0),est=exp(ct["treated",1]),se=ct["treated",2],p=ct["treated",4],
-      rate_trt=r1,rate_ctl=r0,rd=rd,nnt=nnt,stringsAsFactors=FALSE)}
+# ══════════════════════════════════════════════════════════════════
+# SECTION 1: SINGLE SUBGROUP ANALYSIS
+# ══════════════════════════════════════════════════════════════════
+cat("\n── Section 1: Single subgroup ORs ──\n")
+
+hte_results <- list(); ridx <- 0
+
+for (sg in subgroups) {
+  idx <- sg$idx
+  if (length(idx) < 30) next
+  for (oc in names(out_trt)) {
+    res <- run_or(out_trt[[oc]][idx], out_ctl[[oc]][idx])
+    res$subgroup <- sg$name
+    res$outcome <- oc
+    res$db <- db
+    ridx <- ridx + 1
+    hte_results[[ridx]] <- res
+  }
 }
 
-test_int <- function(df,iv,oc){if(!iv%in%names(df)||!oc%in%names(df))return(NA)
-  d<-df[!is.na(df[[iv]])&!is.na(df[[oc]]),];if(nrow(d)<60)return(NA)
-  fit<-tryCatch(lm(as.formula(sprintf("%s~treated*%s",oc,iv)),data=d),error=function(e)NULL)
-  if(is.null(fit))return(NA)
-  ct<-tryCatch(coeftest(fit,vcov.=vcovHC(fit,type="HC1")),error=function(e)NULL)
-  if(is.null(ct))return(NA);ir<-grep(paste0("treated:",iv),rownames(ct))
-  if(length(ir)==0)NA else ct[ir[1],4]}
+hte_df <- do.call(rbind, hte_results)
+hte_df$sig <- !is.na(hte_df$p) & hte_df$p < 0.05
 
-# ═══════════════════════════════════════════════════════════════════
-# eICU: post-T₀ secondary outcomes from raw diagnosis table
-# ═══════════════════════════════════════════════════════════════════
-extract_eicu_post_t0 <- function(pairs, all_pts) {
-  cat("  Loading eICU raw diagnosis table for post-T₀ outcomes...\n")
-  dx_path <- file.path(EICU_ROOT, "diagnosis.csv.gz")
-  if (!file.exists(dx_path)) dx_path <- file.path(EICU_ROOT, "diagnosis.csv")
-  if (!file.exists(dx_path)) { cat("    WARN: diagnosis table not found\n"); return(NULL) }
+# Print summary for key outcomes
+for (oc in c("aki_7d", "hosp_mortality")) {
+  cat(sprintf("\n  [%s]\n", oc))
+  sub <- hte_df[hte_df$outcome == oc, ]
+  for (i in seq_len(nrow(sub))) {
+    r <- sub[i, ]
+    if (is.na(r$or)) { cat(sprintf("    %-20s  n=%d (skip)\n", r$subgroup, r$n)); next }
+    sig <- if (r$sig) " *" else "  "
+    cat(sprintf("    %-20s  OR=%.3f [%.3f,%.3f]  P=%.4f%s  %.1f%% vs %.1f%%  n=%d\n",
+                r$subgroup, r$or, r$or_lo, r$or_hi, r$p, sig,
+                100 * r$rate_trt, 100 * r$rate_ctl, r$n))
+  }
+}
 
-  dx <- read.csv(dx_path, stringsAsFactors=FALSE)
-  dx$diagnosisstring <- tolower(dx$diagnosisstring)
-  all_pids <- unique(c(pairs$trt_pid, pairs$ctl_pid))
-  dx <- dx[dx$patientunitstayid %in% all_pids, ]
-  cat(sprintf("    Loaded %d diagnosis rows for %d patients\n", nrow(dx), length(all_pids)))
+# Save
+outpath <- file.path(RESULTS, sprintf("did_hte_%s.csv", tag))
+write.csv(hte_df, outpath, row.names = FALSE)
+cat(sprintf("\n  Saved: %s (%d rows)\n", outpath, nrow(hte_df)))
 
-  if ("prior_af" %in% names(all_pts)) {
-    prior_af_pids <- all_pts$pid[all_pts$prior_af == 1]
-  } else {
-    prior_af_pids <- character(0)
-    ph_path <- file.path(EICU_ROOT, "pastHistory.csv.gz")
-    if (!file.exists(ph_path)) ph_path <- file.path(EICU_ROOT, "pastHistory.csv")
-    if (file.exists(ph_path)) {
-      cat("    Loading pastHistory for prior AF...\n")
-      ph <- read.csv(ph_path, stringsAsFactors=FALSE)
-      ph <- ph[ph$patientunitstayid %in% all_pids, ]
-      if ("pasthistorypath" %in% names(ph)) {
-        prior_af_pids <- unique(ph$patientunitstayid[matches_any(ph$pasthistorypath, AF_PRIOR)])
-        cat(sprintf("    Prior AF: %d patients\n", length(prior_af_pids)))
-      }
-    }
+# ══════════════════════════════════════════════════════════════════
+# SECTION 2: PAIRWISE CROSSED PHENOTYPE SWEEP
+# ══════════════════════════════════════════════════════════════════
+cat("\n── Section 2: Crossed phenotype sweep (n_trt >= 30) ──\n")
+
+subvar_list <- list(
+  age_ge65     = which(!is.na(age_trt) & age_trt >= 65),
+  is_female    = which(female_trt == 1),
+  egfr_lt60    = which(!is.na(egfr_trt) & egfr_trt < 60),
+  mg_lt18      = which(!is.na(mg_trt) & mg_trt < 1.8),
+  surg_cabg    = which(cabg_trt == 1),
+  diabetes     = which(dm_trt == 1),
+  ckd          = which(ckd_trt == 1),
+  heart_failure = which(hf_trt == 1),
+  bmi_ge30     = which(!is.na(bmi_trt) & bmi_trt >= 30)
+)
+
+combos <- combn(names(subvar_list), 2, simplify = FALSE)
+crossed_results <- list(); cidx <- 0
+
+for (cb in combos) {
+  idx <- intersect(subvar_list[[cb[1]]], subvar_list[[cb[2]]])
+  if (length(idx) < 30) next
+  label <- paste(cb, collapse = " + ")
+  # Primary outcome: 7d AKI
+  res <- run_or(out_trt[["aki_7d"]][idx], out_ctl[["aki_7d"]][idx])
+  res$phenotype <- label
+  res$outcome <- "aki_7d"
+  res$db <- db
+  cidx <- cidx + 1
+  crossed_results[[cidx]] <- res
+}
+
+if (cidx > 0) {
+  crossed_df <- do.call(rbind, crossed_results)
+  crossed_df <- crossed_df[order(crossed_df$or), ]
+  crossed_df$bonferroni_sig <- !is.na(crossed_df$p) & crossed_df$p < (0.05 / 36)
+
+  cat(sprintf("\n  %-30s  %6s  %12s  %8s\n", "Phenotype", "OR", "95% CI", "P"))
+  cat(paste(rep("-", 70), collapse = ""), "\n")
+  for (i in seq_len(nrow(crossed_df))) {
+    r <- crossed_df[i, ]
+    if (is.na(r$or)) next
+    sig <- if (!is.na(r$p) && r$p < 0.05) " *" else "  "
+    bonf <- if (!is.na(r$bonferroni_sig) && r$bonferroni_sig) " **" else ""
+    cat(sprintf("  %-30s  %6.3f  [%.3f,%.3f]  %8.4f%s%s  n=%d\n",
+                r$phenotype, r$or, r$or_lo, r$or_hi, r$p, sig, bonf, r$n))
   }
 
-  disch_map <- setNames(all_pts$icu_discharge_h * 60, all_pts$pid)
-  n <- nrow(pairs)
-  poaf_trt <- poaf_ctl <- enc_trt <- enc_ctl <- va_trt <- va_ctl <- integer(n)
+  outpath2 <- file.path(RESULTS, sprintf("did_hte_crossed_%s.csv", tag))
+  write.csv(crossed_df, outpath2, row.names = FALSE)
+  cat(sprintf("\n  Saved: %s (%d rows)\n", outpath2, nrow(crossed_df)))
+}
 
-  for (i in seq_len(n)) {
-    tp <- pairs$trt_pid[i]; cp <- pairs$ctl_pid[i]
-    t0_min <- pairs$t_mg[i] * 60
-    end_trt <- min(t0_min + WINDOW_7D_MIN, disch_map[as.character(tp)], na.rm=TRUE)
-    end_ctl <- min(t0_min + WINDOW_7D_MIN, disch_map[as.character(cp)], na.rm=TRUE)
+# ══════════════════════════════════════════════════════════════════
+# SECTION 3: INTERACTION TESTS
+# ══════════════════════════════════════════════════════════════════
+cat("\n── Section 3: Interaction tests ──\n")
 
-    for (info in list(list(pid=tp,end=end_trt,side="trt"),
-                      list(pid=cp,end=end_ctl,side="ctl"))) {
-      pdx <- dx[dx$patientunitstayid == info$pid &
-                dx$diagnosisoffset > t0_min &
-                dx$diagnosisoffset <= info$end, ]
-      if (nrow(pdx) == 0) next
-      ds <- pdx$diagnosisstring
-      if (!info$pid %in% prior_af_pids && any(matches_any(ds, AF_PAT))) {
-        if (info$side=="trt") poaf_trt[i]<-1L else poaf_ctl[i]<-1L
-      }
-      if (any(matches_any(ds, ENC_PAT))) {
-        if (info$side=="trt") enc_trt[i]<-1L else enc_ctl[i]<-1L
-      }
-      if (any(matches_any(ds, VA_PAT))) {
-        if (info$side=="trt") va_trt[i]<-1L else va_ctl[i]<-1L
-      }
-    }
+# Build stacked data for interaction model (pair-preserving)
+# Each pair contributes two rows: treated + their matched control
+# The subgroup variable is the TREATED patient's value for BOTH rows
+# (because we're asking: does the treatment effect differ BY THIS CHARACTERISTIC?)
+
+interact_vars <- list(
+  "Age >= 65"  = as.integer(!is.na(age_trt) & age_trt >= 65),
+  "eGFR < 60"  = as.integer(!is.na(egfr_trt) & egfr_trt < 60),
+  "Mg < 1.8"   = as.integer(!is.na(mg_trt) & mg_trt < 1.8),
+  "CABG"        = as.integer(cabg_trt == 1),
+  "Diabetes"    = as.integer(dm_trt == 1),
+  "CKD"         = as.integer(ckd_trt == 1),
+  "Heart failure" = as.integer(hf_trt == 1),
+  "BMI >= 30"   = as.integer(!is.na(bmi_trt) & bmi_trt >= 30)
+)
+
+interact_results <- list(); iidx <- 0
+
+for (iv_name in names(interact_vars)) {
+  sg_val <- interact_vars[[iv_name]]  # length = n_pairs, from TREATED patient
+
+  for (oc in c("aki_7d", "aki_48h", "hosp_mortality")) {
+    if (!(oc %in% names(out_trt))) next
+    ot <- out_trt[[oc]]; oc_val <- out_ctl[[oc]]
+
+    # Stack: treated rows then control rows
+    valid <- !is.na(ot) & !is.na(oc_val) & !is.na(sg_val)
+    n_valid <- sum(valid)
+    if (n_valid < 50) next
+
+    idf <- data.frame(
+      outcome  = c(ot[valid], oc_val[valid]),
+      treated  = rep(c(1, 0), each = n_valid),
+      sg       = rep(sg_val[valid], 2)  # TREATED patient's value for BOTH rows
+    )
+
+    fit <- tryCatch(
+      glm(outcome ~ treated * sg, data = idf, family = quasibinomial()),
+      error = function(e) NULL)
+    if (is.null(fit)) next
+
+    ct <- tryCatch(coeftest(fit, vcov. = vcovHC(fit, type = "HC1")),
+                   error = function(e) tryCatch(coeftest(fit), error = function(e2) NULL))
+    if (is.null(ct) || !("treated:sg" %in% rownames(ct))) next
+
+    p_interact <- ct["treated:sg", ncol(ct)]
+    iidx <- iidx + 1
+    interact_results[[iidx]] <- data.frame(
+      variable = iv_name, outcome = oc,
+      p_interaction = round(p_interact, 4),
+      sig = p_interact < 0.05,
+      db = db)
+  }
+}
+
+if (iidx > 0) {
+  interact_df <- do.call(rbind, interact_results)
+
+  cat(sprintf("\n  %-18s  %-15s  %10s\n", "Variable", "Outcome", "P_interact"))
+  cat(paste(rep("-", 50), collapse = ""), "\n")
+  for (i in seq_len(nrow(interact_df))) {
+    r <- interact_df[i, ]
+    sig <- if (r$sig) " *" else "  "
+    cat(sprintf("  %-18s  %-15s  %10.4f%s\n", r$variable, r$outcome, r$p_interaction, sig))
   }
 
-  data.frame(pair_id = seq_len(n),
-    poaf_trt=poaf_trt, poaf_ctl=poaf_ctl,
-    enc_trt=enc_trt, enc_ctl=enc_ctl,
-    va_trt=va_trt, va_ctl=va_ctl)
+  outpath3 <- file.path(RESULTS, sprintf("did_hte_interact_%s.csv", tag))
+  write.csv(interact_df, outpath3, row.names = FALSE)
+  cat(sprintf("\n  Saved: %s (%d rows)\n", outpath3, nrow(interact_df)))
 }
 
-# ═══════════════════════════════════════════════════════════════════
-# MAIN
-# ═══════════════════════════════════════════════════════════════════
-args<-commandArgs(trailingOnly=TRUE)
-if(length(args)<1){cat("Usage: Rscript 03_hte.R <db>\n");quit(status=1)}
-db<-toupper(args[1]); tag<-tolower(db); is_eicu <- tag == "eicu"
-
-SEP<-paste(rep("=",70),collapse="")
-cat(sprintf("\n%s\n03_hte.R — HTE: %s (post-T0 outcomes)\n%s\n",SEP,db,SEP))
-
-pairs<-read.csv(file.path(RESULTS,sprintf("did_pairs_primary_yet_untreated_%s.csv",tag)),stringsAsFactors=FALSE)
-all_pts<-read.csv(file.path(RESULTS,sprintf("did_all_%s.csv",tag)),stringsAsFactors=FALSE)
-cr_all<-read.csv(file.path(RESULTS,sprintf("did_cr_all_%s.csv",tag)),stringsAsFactors=FALSE)
-cr_id<-if("patientunitstayid"%in%names(cr_all))"patientunitstayid" else "stay_id"
-cr_all$pid<-cr_all[[cr_id]]
-if(!"offset_h"%in%names(cr_all)) cr_all$offset_h<-cr_all$labresultoffset/60
-cr_all<-cr_all[order(cr_all$pid,cr_all$offset_h),]
-cr_list<-split(cr_all[,c("labresult","offset_h")],cr_all$pid)
-cat(sprintf("  Pairs: %d | Patients: %d\n",nrow(pairs),nrow(all_pts)))
-
-# LAST labs
-cat("  LAST labs...\n")
-labs_raw<-read.csv(file.path(RESULTS,sprintf("did_labs_all_%s.csv",tag)),stringsAsFactors=FALSE)
-pcl<-if("patientunitstayid"%in%names(labs_raw))"patientunitstayid" else "stay_id"
-if(pcl%in%names(labs_raw)) labs_raw$pid<-labs_raw[[pcl]]
-le<-labs_raw[labs_raw$lab_name%in%c("magnesium","potassium","calcium","lactate"),]
-lh<-labs_raw[labs_raw$lab_name=="heartrate",]
-if(nrow(lh)>500000){lh$hb<-floor(lh$offset_h);lh<-lh[order(lh$pid,lh$offset_h),]
-  lh<-lh[!duplicated(paste(lh$pid,lh$hb)),];lh$hb<-NULL}
-labs<-rbind(le,lh); rm(labs_raw,le,lh)
-for(ln in LAB_BASES){sub<-labs[labs$lab_name==ln,];if(nrow(sub)==0)next
-  sub$mg_offset_h<-all_pts$mg_offset_h[match(sub$pid,all_pts$pid)]
-  sub<-sub[sub$offset_h>=0&(is.na(sub$mg_offset_h)|sub$offset_h<sub$mg_offset_h),]
-  if(nrow(sub)==0)next;s<-sub[order(-sub$offset_h),];s<-s[!duplicated(s$pid),]
-  all_pts[[paste0("last_",ln)]]<-s$value[match(all_pts$pid,s$pid)]}
-
-# eICU: post-T₀ secondary outcomes
-eicu_sec <- NULL
-if (is_eicu) {
-  eicu_sec <- extract_eicu_post_t0(pairs, all_pts)
-  if (!is.null(eicu_sec))
-    cat(sprintf("    Post-T0 POAF: %d/%d trt, %d/%d ctl\n",
-                sum(eicu_sec$poaf_trt), nrow(eicu_sec),
-                sum(eicu_sec$poaf_ctl), nrow(eicu_sec)))
-}
-
-# Build outcome dataset
-cat("  Building outcomes...\n")
-rows<-vector("list",nrow(pairs)*2); ri<-0
-for(i in seq_len(nrow(pairs))){
-  tp<-as.character(pairs$trt_pid[i]);cp<-as.character(pairs$ctl_pid[i]);tmg<-pairs$t_mg[i]
-  cr_pre_t<-find_cr_pre(cr_list[[tp]],tmg);cr_pre_c<-find_cr_pre(cr_list[[cp]],tmg)
-  dcr48_t<-{v<-find_cr(cr_list[[tp]],tmg+48);if(!is.na(v)&&!is.na(cr_pre_t))v-cr_pre_t else NA}
-  dcr48_c<-{v<-find_cr(cr_list[[cp]],tmg+48);if(!is.na(v)&&!is.na(cr_pre_c))v-cr_pre_c else NA}
-  m48t<-max_cr_win(cr_list[[tp]],tmg,48);m48c<-max_cr_win(cr_list[[cp]],tmg,48)
-  m7t<-max_cr_win(cr_list[[tp]],tmg,168);m7c<-max_cr_win(cr_list[[cp]],tmg,168)
-  aki48_t<-as.integer(!is.na(m48t)&&!is.na(cr_pre_t)&&
-    ((m48t-cr_pre_t)>=0.3||(cr_pre_t>0&&m48t/cr_pre_t>=1.5)))
-  aki48_c<-as.integer(!is.na(m48c)&&!is.na(cr_pre_c)&&
-    ((m48c-cr_pre_c)>=0.3||(cr_pre_c>0&&m48c/cr_pre_c>=1.5)))
-  aki7_t<-as.integer(!is.na(cr_pre_t)&&cr_pre_t>0&&(
-    (!is.na(m48t)&&(m48t-cr_pre_t)>=0.3)||(!is.na(m7t)&&m7t/cr_pre_t>=1.5)))
-  aki7_c<-as.integer(!is.na(cr_pre_c)&&cr_pre_c>0&&(
-    (!is.na(m48c)&&(m48c-cr_pre_c)>=0.3)||(!is.na(m7c)&&m7c/cr_pre_c>=1.5)))
-  ti<-which(all_pts$pid==pairs$trt_pid[i])[1];ci<-which(all_pts$pid==pairs$ctl_pid[i])[1]
-  if(is.na(ti)||is.na(ci))next
-
-  if (!is.null(eicu_sec)) {
-    poaf_t<-eicu_sec$poaf_trt[i]; poaf_c<-eicu_sec$poaf_ctl[i]
-    enc_t<-eicu_sec$enc_trt[i];   enc_c<-eicu_sec$enc_ctl[i]
-    va_t<-eicu_sec$va_trt[i];     va_c<-eicu_sec$va_ctl[i]
-  } else {
-    poaf_t<-all_pts$poaf[ti];     poaf_c<-all_pts$poaf[ci]
-    enc_t<-all_pts$encephalopathy[ti]; enc_c<-all_pts$encephalopathy[ci]
-    va_t<-all_pts$vent_arrhythmia[ti]; va_c<-all_pts$vent_arrhythmia[ci]
-  }
-
-  covs<-c("age","is_female","bmi","egfr","surg_cabg","surg_valve","surg_combined",
-          "diabetes","ckd","heart_failure","hypertension","copd","pvd","stroke","liver_disease",
-          "last_magnesium","last_potassium","last_calcium","last_lactate",
-          "last_lactate_missing","last_heartrate")
-  mk<-function(idx,trt,dcr,a48,a7,crp,pf,enc,va){
-    r<-data.frame(pair_id=i,treated=trt,pid=all_pts$pid[idx],t_mg=tmg,
-      dcr_48h=dcr,aki_48h=a48,aki_7d=a7,cr_pre=crp,
-      hosp_mortality=all_pts$hosp_mortality[idx],
-      poaf=pf,encephalopathy=enc,vent_arrhythmia=va,stringsAsFactors=FALSE)
-    for(cv in covs) r[[cv]]<-if(cv%in%names(all_pts)) all_pts[[cv]][idx] else NA
-    r}
-  ri<-ri+1;rows[[ri]]<-mk(ti,1,dcr48_t,aki48_t,aki7_t,cr_pre_t,poaf_t,enc_t,va_t)
-  ri<-ri+1;rows[[ri]]<-mk(ci,0,dcr48_c,aki48_c,aki7_c,cr_pre_c,poaf_c,enc_c,va_c)
-}
-df<-do.call(rbind,rows[1:ri])
-cat(sprintf("  Dataset: %d rows (%d pairs)\n",nrow(df),nrow(df)/2))
-
-if (is_eicu && !is.null(eicu_sec))
-  cat("  NOTE: POAF/encephalopathy/vent_arrhythmia use post-T0 extraction (7d window)\n")
-if (is_eicu && is.null(eicu_sec))
-  cat("  WARN: eICU post-T0 extraction FAILED - using ICU-stay flags (BIASED)\n")
-if (!is_eicu)
-  cat("  NOTE: POAF/encephalopathy/vent_arrhythmia are hospitalization-level ICD (no T0 filter)\n")
-
-# Overall rates
-cat("\n  Overall:\n")
-for(oc in c("dcr_48h","aki_48h","aki_7d","hosp_mortality","poaf","encephalopathy","vent_arrhythmia")){
-  if(!oc%in%names(df))next;r1<-mean(df[[oc]][df$treated==1],na.rm=T);r0<-mean(df[[oc]][df$treated==0],na.rm=T)
-  if(oc=="dcr_48h") cat(sprintf("    %s: trt=%+.4f ctl=%+.4f DiD=%+.4f\n",oc,r1,r0,r1-r0))
-  else cat(sprintf("    %s: trt=%.1f%% ctl=%.1f%% RD=%+.1f%%\n",oc,100*r1,100*r0,100*(r1-r0)))}
-
-# ═══════════════════════════════════════════════════════════════════
-# SWEEP
-# ═══════════════════════════════════════════════════════════════════
-OC<-list(list(c="dcr_48h",t="continuous",l="dCr 48h"),
-  list(c="aki_48h",t="binary",l="48h AKI (KDIGO, both criteria)"),
-  list(c="aki_7d",t="binary",l="7d AKI (KDIGO consolidated)"),
-  list(c="hosp_mortality",t="binary",l="Mortality"),list(c="poaf",t="binary",l="POAF"),
-  list(c="encephalopathy",t="binary",l="Encephalopathy"),
-  list(c="vent_arrhythmia",t="binary",l="Vent arrhythmia"))
-
-hte_rows<-list()
-for(sg in SUBGROUPS) for(oc in OC){r<-test_sg(df,sg,oc$c,oc$t)
-  if(!is.null(r)) hte_rows[[length(hte_rows)+1]]<-r}
-hte<-do.call(rbind,hte_rows)
-
-for(oc in OC){cat(sprintf("\n  == %s ==\n",oc$l));sub<-hte[hte$outcome==oc$c,]
-  if(oc$t=="continuous"){
-    cat(sprintf("  %-20s %5s %5s %9s %8s\n","Subgroup","nT","nC","DiD","P"))
-    for(i in 1:nrow(sub)){r<-sub[i,];sig<-if(!is.na(r$p)&&r$p<0.05)" *" else "  "
-      cat(sprintf("  %-20s %5d %5d %+.4f  %.4f%s\n",r$subgroup,r$n_trt,r$n_ctl,
-                  ifelse(is.na(r$est),0,r$est),ifelse(is.na(r$p),1,r$p),sig))}
-  } else {
-    cat(sprintf("  %-20s %5s %5s %5s %5s %5s %5s %8s\n","Subgroup","nT","nC","T%","C%","RD%","OR","P"))
-    for(i in 1:nrow(sub)){r<-sub[i,];sig<-if(!is.na(r$p)&&r$p<0.05)" *" else "  "
-      cat(sprintf("  %-20s %5d %5d %5.1f %5.1f %+4.1f %5.2f  %.4f%s\n",r$subgroup,r$n_trt,r$n_ctl,
-                  100*ifelse(is.na(r$rate_trt),0,r$rate_trt),100*ifelse(is.na(r$rate_ctl),0,r$rate_ctl),
-                  100*ifelse(is.na(r$rd),0,r$rd),ifelse(is.na(r$est),1,r$est),
-                  ifelse(is.na(r$p),1,r$p),sig))}
-  }}
-
-# Interactions
-cat(sprintf("\n  == INTERACTIONS (dCr 48h) ==\n"))
-df$age_ge65<-as.integer(df$age>=65);df$egfr_lt60<-as.integer(df$egfr<60)
-df$mg_lt18<-as.integer(!is.na(df$last_magnesium)&df$last_magnesium<1.8)
-df$bmi_ge30<-as.integer(!is.na(df$bmi)&df$bmi>=30)
-for(iv in c("age_ge65","egfr_lt60","mg_lt18","surg_cabg","diabetes","ckd","heart_failure","bmi_ge30")){
-  p<-test_int(df,iv,"dcr_48h");sig<-if(!is.na(p)&&p<0.05)" *" else "  "
-  cat(sprintf("    treated x %-16s P=%.4f%s\n",iv,ifelse(is.na(p),NA,p),sig))}
-
-write.csv(hte,file.path(RESULTS,sprintf("did_hte_%s.csv",tag)),row.names=FALSE)
-write.csv(df,file.path(RESULTS,sprintf("did_hte_data_%s.csv",tag)),row.names=FALSE)
-cat(sprintf("\n%s\n03_hte.R — %s DONE (%d rows)\n%s\n",SEP,db,nrow(hte),SEP))
+# ══════════════════════════════════════════════════════════════════
+# SUMMARY
+# ══════════════════════════════════════════════════════════════════
+cat(sprintf("\n%s\n03_hte.R — %s DONE\n", SEP, db))
+cat(sprintf("  did_hte_%s.csv:         %d rows (single subgroups × outcomes)\n", tag, nrow(hte_df)))
+if (cidx > 0) cat(sprintf("  did_hte_crossed_%s.csv:  %d rows (crossed phenotypes)\n", tag, nrow(crossed_df)))
+if (iidx > 0) cat(sprintf("  did_hte_interact_%s.csv: %d rows (interaction tests)\n", tag, nrow(interact_df)))
+cat(sprintf("%s\n", SEP))
