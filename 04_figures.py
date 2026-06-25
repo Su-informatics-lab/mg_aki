@@ -1,29 +1,30 @@
 #!/usr/bin/env python3
 """
-04_figures.py — Publication figures (v4: fixed love plot)
+04_figures.py — Publication figures (v5: + precision medicine heatmap)
 
   fig1_primary     Fig 1: ΔCr bar + KM AKI incidence + AKI rates
   fig2_hte         Fig 2: HTE forest (7d AKI — primary outcome)
   fig3_benefit     Fig 3: Benefit-harm spectrum (7d AKI in Panel B)
+  fig4_precision   Fig 4: Mg-stratified forest + eGFR×Mg heatmap
   efig_timecourse  eFig: ΔCr time course
   efig_sensitivity eFig: Primary vs Sens A
   efig_hte_48h     eFig: 48h AKI HTE forest (supplement)
   efig_love        eFig: Love plot — ALL 19 PS covariates + supp Mg/K
 
-Changes from v3:
-  - efig_love: shows all 19 PS covariates (was 15, missing 4 labs)
-  - efig_love: sorted by matched SMD descending (violation at top)
-  - efig_love: adds Mg/K as supplementary vars below separator
+Changes from v4:
+  - fig4_precision: NEW — Mg-stratified forest (U-shape) + eGFR×Mg
+    OR heatmap (precision medicine figure, requested by Dr. Su)
 
 Usage:
   python 04_figures.py                # all
-  python 04_figures.py efig_love      # just the love plot
+  python 04_figures.py fig4_precision # just the new heatmap
 """
 
 import os
 import sys
 
 import matplotlib as mpl
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
@@ -1094,10 +1095,239 @@ def efig_love():
 
 
 # ====================================================================
+# FIGURE 4: PRECISION MEDICINE — Mg forest + eGFR×Mg heatmap
+# ====================================================================
+def fig4_precision():
+    print("\n── Fig 4: Precision medicine (Mg strat + eGFR×Mg heatmap) ──")
+
+    # Load cross-stratification results from 03c_mg_strat.R
+    dfs = {}
+    for tag in DBS:
+        p = os.path.join(RESULTS, f"mg_strat_{tag}.csv")
+        if not os.path.exists(p):
+            print(f"  SKIP {tag}: {p} not found (run 03c_mg_strat.R first)")
+            return
+        dfs[tag] = pd.read_csv(p)
+
+    fig = plt.figure(figsize=(7.205, 4.0))  # double-column
+    gs = fig.add_gridspec(1, 2, width_ratios=[1.0, 1.4], wspace=0.35)
+
+    # ── Panel A: Mg-stratified AKI forest (5 bins) ──────────────
+    ax = fig.add_subplot(gs[0])
+    ax.axvline(1, color="#ddd", lw=0.6, zorder=0)
+
+    mg_order = ["Mg<1.6", "Mg_1.6-1.8", "Mg_1.8-2.0", "Mg_2.0-2.3", "Mg>=2.3"]
+    mg_labels = [
+        "<1.6\n(severe)",
+        "1.6\u20131.8\n(mild)",
+        "1.8\u20132.0\n(low-normal)",
+        "2.0\u20132.3\n(normal)",
+        "\u22652.3\n(high-normal)",
+    ]
+
+    for di, tag in enumerate(DBS):
+        df = dfs[tag]
+        aki = df[(df.outcome == "aki_7d") & (df.egfr_strat == "All")]
+        for yi, mg_s in enumerate(mg_order):
+            row = aki[aki.mg_strat == mg_s]
+            if len(row) == 0 or pd.isna(row.iloc[0]["or"]):
+                continue
+            r = row.iloc[0]
+            offset = 0.15 * (1 - 2 * di)
+            est, lo, hi = r["or"], r["or_lo"], r["or_hi"]
+            sig = not pd.isna(r["p"]) and r["p"] < 0.05
+            ax.errorbar(
+                est,
+                yi + offset,
+                xerr=[[max(est - lo, 0.001)], [max(hi - est, 0.001)]],
+                fmt=MKR[tag],
+                color=CLR[tag],
+                ms=6 if sig else 4,
+                markerfacecolor=CLR[tag] if sig else "white",
+                markeredgecolor=CLR[tag],
+                markeredgewidth=0.8,
+                capsize=2,
+                capthick=0.5,
+                lw=0.6,
+                zorder=3,
+            )
+
+    ax.set_yticks(range(len(mg_order)))
+    ax.set_yticklabels(mg_labels, fontsize=6)
+    ax.set_xlabel("Odds ratio for 7-day AKI (95% CI)")
+    ax.set_xscale("log")
+    ax.set_xlim(0.35, 3.0)
+    ax.set_xticks([0.5, 0.75, 1.0, 1.5, 2.0])
+    ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
+    ax.set_ylabel("Baseline serum Mg (mg/dL)")
+    ax.invert_yaxis()
+
+    # Subtle shading: sweet spot (1.6–2.0)
+    ax.axhspan(-0.5, 0.5, alpha=0.04, color=VERMIL)
+    ax.axhspan(0.5, 2.5, alpha=0.06, color=BLUE)
+    ax.axhspan(3.5, 4.5, alpha=0.04, color=VERMIL)
+
+    for tag in DBS:
+        ax.plot(
+            [],
+            [],
+            MKR[tag],
+            color=CLR[tag],
+            markerfacecolor=CLR[tag],
+            ms=5,
+            label=LBL[tag],
+        )
+    ax.legend(loc="lower right", fontsize=5.5)
+    ax.text(
+        0.02,
+        -0.06,
+        "\u2190 Favors IV Mg",
+        transform=ax.transAxes,
+        fontsize=5,
+        color=GRAY,
+    )
+    ax.text(
+        0.98,
+        -0.06,
+        "Favors control \u2192",
+        transform=ax.transAxes,
+        fontsize=5,
+        color=GRAY,
+        ha="right",
+    )
+    ax.text(
+        -0.28,
+        1.05,
+        "a",
+        transform=ax.transAxes,
+        fontsize=11,
+        fontweight="bold",
+        va="top",
+    )
+
+    # ── Panel B: eGFR × Mg heatmaps (2 outcomes × 2 databases) ─
+    gs_right = gs[1].subgridspec(2, 2, height_ratios=[1, 1], hspace=0.4, wspace=0.15)
+
+    egfr_order = ["eGFR>=90", "eGFR_60-89", "eGFR_45-59", "eGFR<45"]
+    egfr_labels = ["\u226590", "60\u201389", "45\u201359", "<45"]
+    mg_coarse = ["Mg<1.8", "Mg>=1.8"]
+    mg_coarse_labels = ["Mg<1.8", "Mg\u22651.8"]
+    outcomes = [("aki_7d", "AKI"), ("mortality", "Mortality")]
+
+    # Diverging colormap: blue (protective) → white (null) → red (harmful)
+    vmin, vmax = np.log(0.25), np.log(4.0)
+    cmap = plt.get_cmap("RdBu_r")
+    norm = mcolors.TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
+
+    for oi, (outcome, outcome_lbl) in enumerate(outcomes):
+        for di, tag in enumerate(DBS):
+            ax_hm = fig.add_subplot(gs_right[oi, di])
+            df = dfs[tag]
+            cross = df[
+                (df.outcome == outcome)
+                & df.mg_strat.isin(mg_coarse)
+                & df.egfr_strat.isin(egfr_order)
+            ]
+
+            n_egfr, n_mg = len(egfr_order), len(mg_coarse)
+            or_mat = np.full((n_egfr, n_mg), np.nan)
+            p_mat = np.full((n_egfr, n_mg), np.nan)
+            n_mat = np.full((n_egfr, n_mg), 0)
+
+            for ei, eg in enumerate(egfr_order):
+                for mi, mg in enumerate(mg_coarse):
+                    row = cross[(cross.egfr_strat == eg) & (cross.mg_strat == mg)]
+                    if len(row) > 0 and not pd.isna(row.iloc[0]["or"]):
+                        or_mat[ei, mi] = row.iloc[0]["or"]
+                        p_mat[ei, mi] = row.iloc[0]["p"]
+                        n_mat[ei, mi] = int(row.iloc[0]["n"])
+
+            log_or = np.log(np.where(np.isnan(or_mat), 1, or_mat))
+            ax_hm.imshow(log_or, cmap=cmap, norm=norm, aspect="auto")
+
+            for ei in range(n_egfr):
+                for mi in range(n_mg):
+                    if np.isnan(or_mat[ei, mi]):
+                        ax_hm.text(
+                            mi,
+                            ei,
+                            "\u2014",
+                            ha="center",
+                            va="center",
+                            fontsize=6,
+                            color=GRAY,
+                        )
+                        continue
+                    orv, pv, nv = or_mat[ei, mi], p_mat[ei, mi], n_mat[ei, mi]
+                    sig = "*" if (not np.isnan(pv) and pv < 0.05) else ""
+                    bg = norm(np.log(orv))
+                    tc = "white" if (bg < 0.25 or bg > 0.75) else "black"
+                    ax_hm.text(
+                        mi,
+                        ei,
+                        f"{orv:.2f}{sig}",
+                        ha="center",
+                        va="center",
+                        fontsize=6.5,
+                        fontweight="bold",
+                        color=tc,
+                    )
+                    ax_hm.text(
+                        mi,
+                        ei + 0.32,
+                        f"n={nv}",
+                        ha="center",
+                        va="center",
+                        fontsize=4.5,
+                        color=tc,
+                        alpha=0.7,
+                    )
+
+            ax_hm.set_xticks(range(n_mg))
+            ax_hm.set_xticklabels(mg_coarse_labels, fontsize=6)
+            ax_hm.set_yticks(range(n_egfr))
+            ax_hm.set_yticklabels(egfr_labels if di == 0 else [], fontsize=6)
+            if di == 0:
+                ax_hm.set_ylabel("eGFR (mL/min/1.73m\u00b2)", fontsize=6)
+            ax_hm.set_title(f"{LBL[tag]} \u2014 {outcome_lbl}", fontsize=6.5, pad=3)
+            for spine in ax_hm.spines.values():
+                spine.set_visible(True)
+                spine.set_linewidth(0.3)
+                spine.set_color("#999")
+
+    # Panel B label
+    fig.text(0.44, 0.97, "b", fontsize=11, fontweight="bold", va="top")
+
+    # Colorbar
+    cbar_ax = fig.add_axes([0.92, 0.15, 0.015, 0.7])
+    sm = mpl.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, cax=cbar_ax)
+    cbar.set_ticks([np.log(0.25), np.log(0.5), 0, np.log(2), np.log(4)])
+    cbar.set_ticklabels(["0.25", "0.5", "1.0", "2.0", "4.0"])
+    cbar.ax.tick_params(labelsize=5.5, width=0.3, length=2)
+    cbar.ax.set_ylabel("Odds ratio", fontsize=6, rotation=270, labelpad=8)
+    cbar.outline.set_linewidth(0.3)
+
+    fig.text(
+        0.5,
+        -0.02,
+        "* P < 0.05  |  Blue = protective  |  Red = harmful  |  "
+        "Baseline Mg from last pre-treatment serum value",
+        ha="center",
+        fontsize=5,
+        color="#666",
+        style="italic",
+    )
+    save(fig, "fig4_precision")
+
+
+# ====================================================================
 FIGURES = {
     "fig1_primary": fig1_primary,
     "fig2_hte": fig2_hte,
     "fig3_benefit": fig3_benefit,
+    "fig4_precision": fig4_precision,
     "efig_timecourse": efig_timecourse,
     "efig_sensitivity": efig_sensitivity,
     "efig_hte_48h": efig_hte_48h,
