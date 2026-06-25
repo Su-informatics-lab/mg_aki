@@ -11,6 +11,9 @@
 #
 # Pair-preserving: subsets by TREATED patient's baseline Mg/eGFR.
 #
+# Baseline Mg = first serum Mg measurement before IV Mg time (treated)
+#               from did_labs_all_{db}.csv (lab_name == "magnesium").
+#
 # Outputs:
 #   results/mg_strat_{db}.csv          — all results
 #
@@ -34,6 +37,11 @@ all_pts <- read.csv(file.path(RESULTS, sprintf("did_all_%s.csv", tag)), stringsA
 pairs   <- read.csv(file.path(RESULTS, sprintf("did_pairs_primary_yet_untreated_%s.csv", tag)),
                      stringsAsFactors = FALSE)
 cr_all  <- read.csv(file.path(RESULTS, sprintf("did_cr_all_%s.csv", tag)), stringsAsFactors = FALSE)
+labs_all <- read.csv(file.path(RESULTS, sprintf("did_labs_all_%s.csv", tag)), stringsAsFactors = FALSE)
+
+# Identify pid column in labs_all (patientunitstayid for eICU, stay_id for MIMIC)
+labs_pid_col <- if ("patientunitstayid" %in% names(labs_all)) "patientunitstayid" else "stay_id"
+labs_all$pid <- labs_all[[labs_pid_col]]
 
 cr_id <- if ("patientunitstayid" %in% names(cr_all)) "patientunitstayid" else "stay_id"
 cr_all$pid <- cr_all[[cr_id]]
@@ -46,6 +54,38 @@ ctl_rows <- match(pairs$ctl_pid, all_pts$pid)
 n_pairs  <- nrow(pairs)
 
 cat(sprintf("  Pairs: %d\n", n_pairs))
+
+# ── Compute baseline Mg from did_labs_all ─────────────────────────
+# Baseline Mg = first serum Mg before IV Mg time (t_mg) for treated patients
+cat("  Computing baseline Mg from did_labs_all...\n")
+mg_labs <- labs_all[labs_all$lab_name == "magnesium" & !is.na(labs_all$value), ]
+mg_labs <- mg_labs[order(mg_labs$pid, mg_labs$offset_h), ]
+mg_list <- split(mg_labs[, c("value", "offset_h")], mg_labs$pid)
+
+cat(sprintf("  Mg measurements in labs_all: %d across %d patients\n",
+            nrow(mg_labs), length(unique(mg_labs$pid))))
+
+mg_trt <- rep(NA_real_, n_pairs)
+for (i in seq_len(n_pairs)) {
+  pid <- as.character(pairs$trt_pid[i])
+  t_mg <- pairs$t_mg[i]  # IV Mg onset in hours
+  mg_i <- mg_list[[pid]]
+  if (is.null(mg_i) || nrow(mg_i) == 0) next
+  # Baseline = last Mg measurement before IV Mg time
+  pre <- mg_i[mg_i$offset_h < t_mg, , drop = FALSE]
+  if (nrow(pre) == 0) next
+  mg_trt[i] <- pre$value[nrow(pre)]  # last pre-treatment value
+}
+
+mg_avail <- sum(!is.na(mg_trt))
+cat(sprintf("  Mg available: %d/%d (%.1f%%)\n", mg_avail, n_pairs, 100*mg_avail/n_pairs))
+if (mg_avail > 0) {
+  cat(sprintf("  Mg distribution: mean=%.2f, median=%.2f, IQR=[%.2f,%.2f]\n",
+              mean(mg_trt, na.rm=TRUE), median(mg_trt, na.rm=TRUE),
+              quantile(mg_trt, 0.25, na.rm=TRUE), quantile(mg_trt, 0.75, na.rm=TRUE)))
+} else {
+  cat("  WARNING: No baseline Mg found — check did_labs_all for magnesium rows\n")
+}
 
 # ── OR helper ─────────────────────────────────────────────────────
 run_or <- function(ot, oc) {
@@ -106,22 +146,6 @@ mort_ctl <- all_pts$hosp_mortality[ctl_rows]
 # ── Treated patient covariates ────────────────────────────────────
 egfr_trt <- all_pts$egfr[trt_rows]
 
-# Get baseline Mg (try multiple column names)
-mg_trt <- rep(NA, n_pairs)
-for (mc in c("last_magnesium", "first_mg_value", "first_magnesium")) {
-  if (mc %in% names(all_pts)) {
-    mg_trt <- all_pts[[mc]][trt_rows]
-    cat(sprintf("  Using Mg column: %s\n", mc))
-    break
-  }
-}
-
-mg_avail <- sum(!is.na(mg_trt))
-cat(sprintf("  Mg available: %d/%d (%.1f%%)\n", mg_avail, n_pairs, 100*mg_avail/n_pairs))
-cat(sprintf("  Mg distribution: mean=%.2f, median=%.2f, IQR=[%.2f,%.2f]\n",
-            mean(mg_trt, na.rm=T), median(mg_trt, na.rm=T),
-            quantile(mg_trt, 0.25, na.rm=T), quantile(mg_trt, 0.75, na.rm=T)))
-
 # ── Define strata ─────────────────────────────────────────────────
 mg_strat <- rep(NA_character_, n_pairs)
 mg_strat[!is.na(mg_trt) & mg_trt < 1.6]                    <- "Mg<1.6"
@@ -162,10 +186,6 @@ for (stg in mg_order) {
   cat(sprintf("  %-15s  AKI: OR=%.3f [%.3f,%.3f] P=%.4f%s  %.1f%% vs %.1f%%  n=%d\n",
               stg, res_aki$or, res_aki$or_lo, res_aki$or_hi, res_aki$p, sig,
               100*res_aki$rate_trt, 100*res_aki$rate_ctl, res_aki$n))
-
-  res_mort <- run_or(mort_trt[idx], mort_ctl[idx])
-  res_mort$outcome <- "mortality"; res_mort$mg_strat <- stg; res_mort$egfr_strat <- "All"; res_mort$db <- db
-  ridx <- ridx+1; results[[ridx]] <- res_mort
 }
 
 # ══════════════════════════════════════════════════════════════════
@@ -179,6 +199,8 @@ for (stg in mg_order) {
   else idx <- which(mg_strat == stg)
   if (length(idx) < 30) next
   res <- run_or(mort_trt[idx], mort_ctl[idx])
+  res$outcome <- "mortality"; res$mg_strat <- stg; res$egfr_strat <- "All"; res$db <- db
+  ridx <- ridx+1; results[[ridx]] <- res
   if (is.na(res$or)) next
   sig <- if(!is.na(res$p) && res$p < 0.05) " *" else "  "
   cat(sprintf("  %-15s  Mort: OR=%.3f [%.3f,%.3f] P=%.4f%s  %.1f%% vs %.1f%%  n=%d\n",
@@ -201,6 +223,9 @@ mg_coarse <- c("Mg<1.8","Mg>=1.8")
 mg_coarse_strat <- rep(NA_character_, n_pairs)
 mg_coarse_strat[!is.na(mg_trt) & mg_trt < 1.8]  <- "Mg<1.8"
 mg_coarse_strat[!is.na(mg_trt) & mg_trt >= 1.8] <- "Mg>=1.8"
+
+cat(sprintf("\n  Mg coarse: %s\n",
+            paste(names(table(mg_coarse_strat)), table(mg_coarse_strat), sep="=", collapse=", ")))
 
 cat(sprintf("\n  %15s | %15s | %15s | %15s | %15s\n",
             "", "eGFR>=90", "eGFR 60-89", "eGFR 45-59", "eGFR<45"))
@@ -253,10 +278,64 @@ for (mg_s in mg_coarse) {
   cat(row_str, "\n")
 }
 
+# ── Interaction test: Mg stratum × treatment ──────────────────────
+cat(sprintf("\n%s\nSECTION 4: Interaction P-values\n%s\n",
+            paste(rep("-",50),collapse=""), paste(rep("-",50),collapse="")))
+
+# Mg × treatment interaction (continuous)
+valid_mg <- !is.na(mg_trt) & !is.na(aki_trt) & !is.na(aki_ctl)
+if (sum(valid_mg) >= 100) {
+  df_int <- data.frame(
+    outcome = c(aki_trt[valid_mg], aki_ctl[valid_mg]),
+    treated = rep(c(1,0), each = sum(valid_mg)),
+    mg_bl   = rep(mg_trt[valid_mg], 2)
+  )
+  fit_int <- tryCatch(
+    glm(outcome ~ treated * mg_bl, data=df_int, family=quasibinomial()),
+    error = function(e) NULL
+  )
+  if (!is.null(fit_int)) {
+    ct_int <- tryCatch(coeftest(fit_int, vcov.=vcovHC(fit_int, type="HC1")),
+                       error = function(e) coeftest(fit_int))
+    int_row <- grep("treated:mg_bl", rownames(ct_int))
+    if (length(int_row) > 0) {
+      cat(sprintf("  Mg × treatment interaction (continuous): P=%.4f\n",
+                  ct_int[int_row, ncol(ct_int)]))
+    }
+  }
+}
+
+# eGFR × treatment interaction (continuous) — for reference
+valid_eg <- !is.na(egfr_trt) & !is.na(aki_trt) & !is.na(aki_ctl)
+if (sum(valid_eg) >= 100) {
+  df_int2 <- data.frame(
+    outcome = c(aki_trt[valid_eg], aki_ctl[valid_eg]),
+    treated = rep(c(1,0), each = sum(valid_eg)),
+    egfr    = rep(egfr_trt[valid_eg], 2)
+  )
+  fit_int2 <- tryCatch(
+    glm(outcome ~ treated * egfr, data=df_int2, family=quasibinomial()),
+    error = function(e) NULL
+  )
+  if (!is.null(fit_int2)) {
+    ct_int2 <- tryCatch(coeftest(fit_int2, vcov.=vcovHC(fit_int2, type="HC1")),
+                        error = function(e) coeftest(fit_int2))
+    int_row2 <- grep("treated:egfr", rownames(ct_int2))
+    if (length(int_row2) > 0) {
+      cat(sprintf("  eGFR × treatment interaction (continuous): P=%.4f\n",
+                  ct_int2[int_row2, ncol(ct_int2)]))
+    }
+  }
+}
+
 # ── Save ──────────────────────────────────────────────────────────
-res_df <- do.call(rbind, results)
-outpath <- file.path(RESULTS, sprintf("mg_strat_%s.csv", tag))
-write.csv(res_df, outpath, row.names = FALSE)
-cat(sprintf("\n  Saved: %s (%d rows)\n", outpath, nrow(res_df)))
+if (ridx > 0) {
+  res_df <- do.call(rbind, results)
+  outpath <- file.path(RESULTS, sprintf("mg_strat_%s.csv", tag))
+  write.csv(res_df, outpath, row.names = FALSE)
+  cat(sprintf("\n  Saved: %s (%d rows)\n", outpath, nrow(res_df)))
+} else {
+  cat("\n  WARNING: No results to save\n")
+}
 
 cat(sprintf("\n%s\n03c_mg_strat.R — %s DONE\n%s\n", SEP, db, SEP))
