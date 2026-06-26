@@ -79,6 +79,7 @@ for (i in seq_len(n_pairs)) {
 
   pre_t <- find_cr_pre(cr_list[[tp]], t_mg_i)
   pre_c <- find_cr_pre(cr_list[[cp]], t_mg_i)
+  cr_t <- cr_list[[tp]]; cr_c <- cr_list[[cp]]
 
   # Max ΔCr within 0–36h (matches revised DiD estimand)
   if (!is.na(pre_t) && !is.null(cr_t)) {
@@ -91,7 +92,6 @@ for (i in seq_len(n_pairs)) {
   }
 
   # Max ΔCr over 7d (AKI-relevant)
-  cr_t <- cr_list[[tp]]; cr_c <- cr_list[[cp]]
   if (!is.na(pre_t) && !is.null(cr_t)) {
     post <- cr_t[cr_t$offset_h >= t_mg_i & cr_t$offset_h <= (t_mg_i + 168), ]
     if (nrow(post) > 0) max_dcr_7d_trt[i] <- max(post$labresult - pre_t, na.rm = TRUE)
