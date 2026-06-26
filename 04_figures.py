@@ -1163,7 +1163,7 @@ def fig4_precision():
     ax.set_yticks(range(len(mg_order)))
     ax.set_yticklabels(mg_labels, fontsize=6)
     ax.set_xlabel("DiD: \u0394Cr at 36h (mg/dL, 95% CI)")
-    ax.set_xlim(-0.08, 0.06)
+    ax.set_xlim(-0.15, 0.15)
     ax.set_ylabel("Baseline serum Mg (mg/dL)")
     ax.invert_yaxis()
 
