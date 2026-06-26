@@ -723,31 +723,31 @@ def fig3_benefit():
 # eFIGURE: TIME COURSE
 # ====================================================================
 def efig_timecourse():
-    print("\n\u2500\u2500 eFig: \u0394Cr time course \u2500\u2500")
-    avail = [(t, load_rs(t)) for t in DBS if load_rs(t) is not None]
-    n = len(avail)
+    print("\n\u2500\u2500 eFig: \u0394Cr time course (max-Cr DiD) \u2500\u2500")
     fig, axes = plt.subplots(
-        1, n, figsize=(3.5 * n, 2.8), sharey=True, constrained_layout=True
+        1, 2, figsize=(7.0, 2.8), sharey=True, constrained_layout=True
     )
-    if n == 1:
-        axes = [axes]
-    for i, (tag, df) in enumerate(avail):
+    plotted = 0
+    for i, tag in enumerate(DBS):
+        p = os.path.join(RESULTS, f"mg_did_{tag}.csv")
+        if not os.path.exists(p):
+            print(f"  SKIP {tag}: {p} not found")
+            continue
         ax = axes[i]
         ax.axhline(0, color="#aaa", lw=0.5)
         ax.axvspan(34, 38, color="#f0f0f0", zorder=0)
+        ax.axvline(53, color="#ccc", lw=0.4, ls=":")  # break mark
+
+        df = pd.read_csv(p)
         sub = (
-            df[
-                (df.spec == "primary")
-                & (df.pool == "yet_untreated")
-                & (df.method == "psm_dr")
-            ]
-            .sort_values("target_h")
-            .dropna(subset=["did"])
+            df[df.mg_strat == "Overall"].sort_values("target_h").dropna(subset=["did"])
         )
         if len(sub) == 0:
             continue
-        h, d = sub.target_h.values, sub.did.values
-        lo, hi, pv = sub.ci_lo.values, sub.ci_hi.values, sub.p.values
+        h = sub.target_h.values.copy()
+        h = np.where(h == 168, 58, h)  # remap 7d
+        d, lo, hi, pv = sub.did.values, sub.ci_lo.values, sub.ci_hi.values, sub.p.values
+
         ax.fill_between(h, lo, hi, alpha=0.15, color=BLUE)
         ax.plot(
             h,
@@ -764,11 +764,13 @@ def efig_timecourse():
         for j in range(len(h)):
             if not np.isnan(pv[j]) and pv[j] < 0.05:
                 ax.plot(h[j], d[j], "o", ms=5, color=BLUE, zorder=5)
-        ax.set_xticks([6, 12, 18, 24, 30, 36, 42, 48])
-        ax.set_xlim(3, 51)
+
+        ax.set_xticks([6, 12, 18, 24, 30, 36, 42, 48, 58])
+        ax.set_xticklabels(["6", "12", "18", "24", "30", "36", "42", "48", "7d"])
+        ax.set_xlim(3, 63)
         ax.set_xlabel("Hours from T\u2080")
         if i == 0:
-            ax.set_ylabel("DiD: \u0394Cr (mg/dL)")
+            ax.set_ylabel("DiD: max \u0394Cr (mg/dL)")
         ax.text(
             -0.14,
             1.06,
@@ -779,10 +781,16 @@ def efig_timecourse():
             va="top",
         )
         ax.set_title(LBL.get(tag, tag), fontsize=8, pad=5)
+        plotted += 1
+
+    if plotted == 0:
+        plt.close(fig)
+        return
     fig.text(
         0.5,
         -0.03,
-        "Primary (19 var), PSM+DR  |  \u25cf = P<0.05  |  Gray = 36h primary  |  DiD<0 = renoprotective",
+        "Post-Cr = max Cr within [T\u2080, T\u2080+h]  |  "
+        "\u25cf = P<0.05  |  Gray = 36h primary  |  DiD<0 = renoprotective",
         ha="center",
         fontsize=5.5,
         color="#666",
@@ -1499,8 +1507,8 @@ def efig_did_spaghetti():
     for di, tag in enumerate(DBS):
         ax = axes[di]
         ax.axhline(0, color="#ccc", lw=0.6, zorder=0)
-        ax.fill_between([4, 50], 0, 0.15, alpha=0.03, color="#d62728")
-        ax.fill_between([4, 50], -0.15, 0, alpha=0.03, color="#1f77b4")
+        ax.fill_between([4, 62], 0, 0.15, alpha=0.03, color="#d62728")
+        ax.fill_between([4, 62], -0.15, 0, alpha=0.03, color="#1f77b4")
 
         p = os.path.join(RESULTS, f"mg_did_{tag}.csv")
         if not os.path.exists(p):
@@ -1512,8 +1520,10 @@ def efig_did_spaghetti():
         ov = df[df.mg_strat == "Overall"].sort_values("target_h")
         ov_valid = ov.dropna(subset=["did"])
         if len(ov_valid) > 0:
+            ov_h = ov_valid.target_h.values.copy()
+            ov_h = np.where(ov_h == 168, 58, ov_h)
             ax.plot(
-                ov_valid.target_h,
+                ov_h,
                 ov_valid.did,
                 color="#aaa",
                 lw=1.5,
@@ -1528,10 +1538,15 @@ def efig_did_spaghetti():
             sub_valid = sub.dropna(subset=["did"])
             if len(sub_valid) < 2:
                 continue
-            h = sub_valid.target_h.values
+            h = sub_valid.target_h.values.copy()
+            h = np.where(h == 168, 58, h)  # remap 7d to visual position
             d = sub_valid.did.values
+            lo = sub_valid.ci_lo.values
+            hi = sub_valid.ci_hi.values
             p_vals = sub_valid.p.values
 
+            # CI band (thin, semi-transparent)
+            ax.fill_between(h, lo, hi, alpha=0.08, color=mg_colors[mg_s])
             ax.plot(h, d, color=mg_colors[mg_s], lw=1.2, alpha=0.8, zorder=2)
 
             for j in range(len(h)):
@@ -1549,8 +1564,11 @@ def efig_did_spaghetti():
                 )
 
         ax.set_xlabel("Hours from T\u2080")
-        ax.set_xlim(4, 50)
-        ax.set_xticks([6, 12, 18, 24, 30, 36, 42, 48])
+        ax.set_xlim(4, 62)
+        ax.set_xticks([6, 12, 18, 24, 30, 36, 42, 48, 58])
+        ax.set_xticklabels(["6", "12", "18", "24", "30", "36", "42", "48", "7d"])
+        # Break mark between 48h and 7d
+        ax.axvline(53, color="#ccc", lw=0.4, ls=":")
         ax.set_title(LBL[tag], fontsize=8)
         ax.tick_params(labelsize=6)
         ax.spines["top"].set_visible(False)
