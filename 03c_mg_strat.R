@@ -278,6 +278,53 @@ for (mg_s in mg_coarse) {
   cat(row_str, "\n")
 }
 
+# ══════════════════════════════════════════════════════════════════
+# SECTION 3b: eGFR × Mg 3-BIN cross-stratification
+#   Mg<1.6 (severe) | Mg 1.6-2.0 (sweet spot) | Mg≥2.0 (normal+high)
+# ══════════════════════════════════════════════════════════════════
+cat(sprintf("\n%s\nSECTION 3b: eGFR × Mg 3-bin cross-stratification\n%s\n",
+            paste(rep("=",60),collapse=""), paste(rep("=",60),collapse="")))
+
+mg3_names <- c("Mg<1.6", "Mg_1.6-2.0", "Mg>=2.0")
+mg3_strat <- rep(NA_character_, n_pairs)
+mg3_strat[!is.na(mg_trt) & mg_trt < 1.6]                 <- "Mg<1.6"
+mg3_strat[!is.na(mg_trt) & mg_trt >= 1.6 & mg_trt < 2.0] <- "Mg_1.6-2.0"
+mg3_strat[!is.na(mg_trt) & mg_trt >= 2.0]                 <- "Mg>=2.0"
+
+cat(sprintf("  Mg 3-bin: %s\n",
+            paste(names(table(mg3_strat)), table(mg3_strat), sep="=", collapse=", ")))
+
+for (outcome_pair in list(
+  list(label="AKI", ot=aki_trt, oc=aki_ctl, oname="aki_7d"),
+  list(label="MORTALITY", ot=mort_trt, oc=mort_ctl, oname="mortality")
+)) {
+  cat(sprintf("\n  %10s | %15s | %15s | %15s | %15s\n",
+              outcome_pair$label, "eGFR>=90", "eGFR 60-89", "eGFR 45-59", "eGFR<45"))
+  cat(paste(rep("-", 80), collapse=""), "\n")
+
+  for (mg_s in mg3_names) {
+    row_str <- sprintf("  %10s |", mg_s)
+    for (eg_s in egfr_order) {
+      idx <- which(mg3_strat == mg_s & egfr_strat == eg_s)
+      if (length(idx) < 30) {
+        row_str <- paste0(row_str, sprintf(" %15s |", sprintf("n=%d", length(idx))))
+        next
+      }
+      res <- run_or(outcome_pair$ot[idx], outcome_pair$oc[idx])
+      res$outcome <- outcome_pair$oname; res$mg_strat <- mg_s
+      res$egfr_strat <- eg_s; res$db <- db
+      ridx <- ridx+1; results[[ridx]] <- res
+      if (is.na(res$or)) {
+        row_str <- paste0(row_str, sprintf(" %15s |", "NA"))
+      } else {
+        sig <- if(!is.na(res$p) && res$p < 0.05) "*" else " "
+        row_str <- paste0(row_str, sprintf(" OR=%.2f P=%.3f%s|", res$or, res$p, sig))
+      }
+    }
+    cat(row_str, "\n")
+  }
+}
+
 # ── Interaction test: Mg stratum × treatment ──────────────────────
 cat(sprintf("\n%s\nSECTION 4: Interaction P-values\n%s\n",
             paste(rep("-",50),collapse=""), paste(rep("-",50),collapse="")))

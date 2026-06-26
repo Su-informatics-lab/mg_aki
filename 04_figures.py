@@ -1117,8 +1117,8 @@ def fig4_precision():
             return
         dfs[tag] = pd.read_csv(p)
 
-    fig = plt.figure(figsize=(7.205, 4.0))  # double-column
-    gs = fig.add_gridspec(1, 2, width_ratios=[1.0, 1.4], wspace=0.35)
+    fig = plt.figure(figsize=(7.205, 4.5))  # slightly taller for CKD labels
+    gs = fig.add_gridspec(1, 2, width_ratios=[0.9, 1.6], wspace=0.30)
 
     # ── Panel A: Mg-stratified DiD on continuous ΔCr (36h) ────────
     ax = fig.add_subplot(gs[0])
@@ -1222,9 +1222,18 @@ def fig4_precision():
     gs_right = gs[1].subgridspec(2, 2, height_ratios=[1, 1], hspace=0.4, wspace=0.15)
 
     egfr_order = ["eGFR>=90", "eGFR_60-89", "eGFR_45-59", "eGFR<45"]
-    egfr_labels = ["\u226590", "60\u201389", "45\u201359", "<45"]
-    mg_coarse = ["Mg<1.8", "Mg>=1.8"]
-    mg_coarse_labels = ["Mg<1.8", "Mg\u22651.8"]
+    egfr_labels = [
+        "\u226590\n(G1)",
+        "60\u201389\n(G2)",
+        "45\u201359\n(G3a)",
+        "<45\n(G3b\u2013G5)",
+    ]
+    mg_coarse = ["Mg<1.6", "Mg_1.6-2.0", "Mg>=2.0"]
+    mg_coarse_labels = [
+        "<1.6\n(low)",
+        "1.6\u20132.0\n(optimal)",
+        "\u22652.0\n(normal+)",
+    ]
     outcomes = [("aki_7d", "AKI"), ("mortality", "Mortality")]
 
     # Diverging colormap: blue (protective) → white (null) → red (harmful)
@@ -1301,7 +1310,7 @@ def fig4_precision():
             ax_hm.set_yticks(range(n_egfr))
             ax_hm.set_yticklabels(egfr_labels if di == 0 else [], fontsize=6)
             if di == 0:
-                ax_hm.set_ylabel("eGFR (mL/min/1.73m\u00b2)", fontsize=6)
+                ax_hm.set_ylabel("eGFR (mL/min/1.73m\u00b2)\n& CKD stage", fontsize=6)
             ax_hm.set_title(f"{LBL[tag]} \u2014 {outcome_lbl}", fontsize=6.5, pad=3)
             for spine in ax_hm.spines.values():
                 spine.set_visible(True)
