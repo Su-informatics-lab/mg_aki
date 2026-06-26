@@ -1,14 +1,9 @@
 #!/usr/bin/env Rscript
 # ============================================================================
-# 03d_mg_did.R — Mg-stratified DiD on continuous ΔCr (max-Cr version)
+# 03d_mg_did.R — Mg-stratified DiD using max-Cr within [T₀, T₀+h]
 #
-# KEY CHANGE: post-treatment Cr = MAX Cr within [t_mg, t_mg + target_h],
-# not the closest Cr to target_h ± 12h. This matches how AKI is defined
-# (peak rise triggers KDIGO), making DiD and AKI comparable on the same
-# scale. (Dr. Su's suggestion: "如果用0-36的最高CRT呢？")
-#
-# Uses existing primary pairs — no new matching.
-# Baseline Mg from did_labs_all (same source as 03c_mg_strat.R).
+# Post-treatment Cr = MAX Cr within [T₀, T₀+h] at 9 horizons:
+#   6, 12, 18, 24, 30, 36, 42, 48h, and 7d (168h)
 #
 # Outputs:
 #   results/mg_did_{db}.csv — DiD by Mg stratum × time point
@@ -19,15 +14,15 @@
 
 suppressPackageStartupMessages({ library(sandwich); library(lmtest) })
 
-RESULTS   <- path.expand("~/mg_aki/results")
-TARGETS   <- c(6, 12, 18, 24, 30, 36, 42, 48)
+RESULTS <- path.expand("~/mg_aki/results")
+TARGETS <- c(6, 12, 18, 24, 30, 36, 42, 48, 168)
 
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 1) { cat("Usage: Rscript 03d_mg_did.R <db>\n"); quit(status = 1) }
 tag <- tolower(args[1]); db <- toupper(tag)
 
 SEP <- paste(rep("=", 60), collapse = "")
-cat(sprintf("\n%s\n03d_mg_did.R — %s\n  Mg-stratified DiD on continuous ΔCr\n%s\n", SEP, db, SEP))
+cat(sprintf("\n%s\n03d_mg_did.R — %s\n  Mg-stratified DiD (max-Cr, AKI-matched windows)\n%s\n", SEP, db, SEP))
 
 # ── Load ──────────────────────────────────────────────────────────
 all_pts  <- read.csv(file.path(RESULTS, sprintf("did_all_%s.csv", tag)), stringsAsFactors = FALSE)
@@ -49,23 +44,21 @@ trt_rows <- match(pairs$trt_pid, all_pts$pid)
 n_pairs  <- nrow(pairs)
 cat(sprintf("  Pairs: %d\n", n_pairs))
 
-# ── Cr helpers (exact 02_psm.R logic) ─────────────────────────────
+# ── Cr helper ─────────────────────────────────────────────────────
 find_cr_pre <- function(cr_pt, t_h) {
   if (is.null(cr_pt) || nrow(cr_pt) == 0) return(NA)
   cand <- cr_pt[cr_pt$offset_h >= 0 & cr_pt$offset_h < t_h, ]
   if (nrow(cand) == 0) return(NA)
   cand$labresult[which.max(cand$offset_h)]
 }
-
-find_cr_post_max <- function(cr_pt, t_mg, target_h) {
-  # MAX Cr from t_mg to t_mg + target_h (matches AKI scan logic)
+find_max_cr <- function(cr_pt, t_start, t_end) {
   if (is.null(cr_pt) || nrow(cr_pt) == 0) return(NA)
-  cand <- cr_pt[cr_pt$offset_h >= t_mg & cr_pt$offset_h <= (t_mg + target_h), ]
+  cand <- cr_pt[cr_pt$offset_h >= t_start & cr_pt$offset_h <= t_end, ]
   if (nrow(cand) == 0) return(NA)
   max(cand$labresult, na.rm = TRUE)
 }
 
-# ── Baseline Mg from did_labs_all (same as 03c) ──────────────────
+# ── Baseline Mg ───────────────────────────────────────────────────
 cat("  Computing baseline Mg...\n")
 mg_labs <- labs_all[labs_all$lab_name == "magnesium" & !is.na(labs_all$value), ]
 mg_labs <- mg_labs[order(mg_labs$pid, mg_labs$offset_h), ]
@@ -96,8 +89,8 @@ mg_strat[!is.na(mg_trt) & mg_trt >= 2.3]                  <- "Mg>=2.3"
 cat(sprintf("  Mg strata: %s\n",
             paste(names(table(mg_strat)), table(mg_strat), sep="=", collapse=", ")))
 
-# ── Compute pair-level ΔCr at each time point ─────────────────────
-cat("  Computing pair-level ΔCr at 8 time points...\n")
+# ── Compute pair-level max ΔCr at 9 horizons ──────────────────────
+cat("  Computing pair-level max ΔCr (9 horizons incl. 7d)...\n")
 
 dcr_trt <- dcr_ctl <- matrix(NA_real_, nrow = n_pairs, ncol = length(TARGETS))
 colnames(dcr_trt) <- colnames(dcr_ctl) <- paste0("h", TARGETS)
@@ -110,17 +103,18 @@ for (i in seq_len(n_pairs)) {
   pre_c <- find_cr_pre(cr_list[[cp]], t_mg_i)
   if (is.na(pre_t) || is.na(pre_c)) next
   for (j in seq_along(TARGETS)) {
-    post_t <- find_cr_post_max(cr_list[[tp]], t_mg_i, TARGETS[j])
-    post_c <- find_cr_post_max(cr_list[[cp]], t_mg_i, TARGETS[j])
-    if (!is.na(post_t)) dcr_trt[i, j] <- post_t - pre_t
-    if (!is.na(post_c)) dcr_ctl[i, j] <- post_c - pre_c
+    max_t <- find_max_cr(cr_list[[tp]], t_mg_i, t_mg_i + TARGETS[j])
+    max_c <- find_max_cr(cr_list[[cp]], t_mg_i, t_mg_i + TARGETS[j])
+    if (!is.na(max_t)) dcr_trt[i, j] <- max_t - pre_t
+    if (!is.na(max_c)) dcr_ctl[i, j] <- max_c - pre_c
   }
 }
 
 # ── DiD within each stratum × time point ──────────────────────────
+tlabels <- ifelse(TARGETS < 168, paste0(TARGETS, "h"), "7d")
 cat(sprintf("\n  %-15s  ", "Stratum"))
-for (h in TARGETS) cat(sprintf(" %6dh", h))
-cat("\n", paste(rep("-", 80), collapse = ""), "\n")
+for (tl in tlabels) cat(sprintf(" %7s", tl))
+cat("\n", paste(rep("-", 90), collapse = ""), "\n")
 
 mg_order <- c("Overall", "Mg<1.6", "Mg_1.6-1.8", "Mg_1.8-2.0", "Mg_2.0-2.3", "Mg>=2.3")
 results <- list()
@@ -136,7 +130,7 @@ for (stg in mg_order) {
       results[[length(results) + 1]] <- data.frame(
         db = db, mg_strat = stg, target_h = TARGETS[j],
         did = NA, se = NA, p = NA, ci_lo = NA, ci_hi = NA, n = length(v))
-      row_str <- paste0(row_str, "     -- ")
+      row_str <- paste0(row_str, "      -- ")
       next
     }
     df <- data.frame(
@@ -158,7 +152,7 @@ for (stg in mg_order) {
       n = length(v))
 
     sig <- if (!is.na(p) && p < 0.05) "*" else " "
-    row_str <- paste0(row_str, sprintf(" %+.3f%s", est, sig))
+    row_str <- paste0(row_str, sprintf(" %+.4f%s", est, sig))
   }
   cat(row_str, "\n")
 }

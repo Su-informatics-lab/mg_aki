@@ -1125,7 +1125,7 @@ def fig4_precision():
         "\u22652.3\n(high-normal)",
     ]
 
-    TARGET_H = 36  # matches fig1 Panel A
+    TARGET_H = 168  # 7d window, directly comparable to 7d AKI
 
     for di, tag in enumerate(DBS):
         p = os.path.join(RESULTS, f"mg_did_{tag}.csv")
@@ -1162,7 +1162,7 @@ def fig4_precision():
 
     ax.set_yticks(range(len(mg_order)))
     ax.set_yticklabels(mg_labels, fontsize=6)
-    ax.set_xlabel("DiD: \u0394Cr at 36h (mg/dL, 95% CI)")
+    ax.set_xlabel("DiD: max \u0394Cr within 0\u20137d (mg/dL, 95% CI)")
     ax.set_xlim(-0.15, 0.15)
     ax.set_ylabel("Baseline serum Mg (mg/dL)")
     ax.invert_yaxis()
