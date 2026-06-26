@@ -146,8 +146,8 @@ for (s in c("eGFR>=90 (G1)", "eGFR 60-89 (G2)", "eGFR 45-59 (G3a)", "eGFR<45 (G3
   if (length(idx) >= 30) print_block(s, idx)
 }
 
-cat("── eGFR × Mg (key cells) ──\n")
-for (eg in c("eGFR>=90 (G1)", "eGFR<45 (G3b-5)")) {
+cat("── eGFR × Mg (all 12 cells) ──\n")
+for (eg in c("eGFR>=90 (G1)", "eGFR 60-89 (G2)", "eGFR 45-59 (G3a)", "eGFR<45 (G3b-5)")) {
   for (mg in c("Mg<1.6", "Mg 1.6-2.0", "Mg>=2.0")) {
     idx <- which(egfr_s == eg & mg3 == mg)
     if (length(idx) >= 20) print_block(sprintf("%s × %s", eg, mg), idx)
@@ -180,6 +180,11 @@ for (s in c("Mg<1.6", "Mg 1.6-2.0", "Mg>=2.0"))
   if (sum(mg3 == s, na.rm = TRUE) >= 30) add_row(s, which(mg3 == s))
 for (s in c("eGFR>=90 (G1)", "eGFR 60-89 (G2)", "eGFR 45-59 (G3a)", "eGFR<45 (G3b-5)"))
   if (sum(egfr_s == s, na.rm = TRUE) >= 30) add_row(s, which(egfr_s == s))
+for (eg in c("eGFR>=90 (G1)", "eGFR 60-89 (G2)", "eGFR 45-59 (G3a)", "eGFR<45 (G3b-5)"))
+  for (mg in c("Mg<1.6", "Mg 1.6-2.0", "Mg>=2.0")) {
+    idx <- which(egfr_s == eg & mg3 == mg)
+    if (length(idx) >= 20) add_row(sprintf("%s × %s", eg, mg), idx)
+  }
 
 outpath <- file.path(RESULTS, sprintf("mortality_table_%s.csv", tag))
 write.csv(do.call(rbind, rows), outpath, row.names = FALSE)

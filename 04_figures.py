@@ -1794,6 +1794,141 @@ def efig_mortality():
 
 
 # ====================================================================
+# eFig: MORTALITY HEATMAP — eGFR × Mg cross-strat (12 cells)
+# ====================================================================
+def efig_mortality_grid():
+    print("\n── eFig: Mortality heatmap (12 cells) ──")
+
+    egfr_strata = [
+        "eGFR>=90 (G1)",
+        "eGFR 60-89 (G2)",
+        "eGFR 45-59 (G3a)",
+        "eGFR<45 (G3b-5)",
+    ]
+    egfr_labels = [
+        "\u226590 (G1)",
+        "60\u201389 (G2)",
+        "45\u201359 (G3a)",
+        "<45 (G3b\u20135)",
+    ]
+    mg_strata = ["Mg<1.6", "Mg 1.6-2.0", "Mg>=2.0"]
+    mg_labels = ["<1.6\n(low)", "1.6\u20132.0\n(optimal)", "\u22652.0\n(normal+)"]
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.205, 3.2))
+    fig.subplots_adjust(wspace=0.25)
+
+    cmap = plt.get_cmap("RdBu_r")
+    norm = mcolors.TwoSlopeNorm(vmin=-10, vcenter=0, vmax=15)
+
+    for di, tag in enumerate(DBS):
+        ax = axes[di]
+        p = os.path.join(RESULTS, f"mortality_table_{tag}.csv")
+        if not os.path.exists(p):
+            print(f"  SKIP {tag}")
+            return
+        df = pd.read_csv(p)
+
+        diff_mat = np.full((4, 3), np.nan)
+
+        for ei, eg in enumerate(egfr_strata):
+            for mi, mg in enumerate(mg_strata):
+                key = f"{eg} \u00d7 {mg}"
+                row = df[df.stratum == key]
+                if len(row) == 0:
+                    continue
+                r = row.iloc[0]
+                rt, rc = r["mort_trt_pct"], r["mort_ctl_pct"]
+                n = int(r["n"])
+                diff_mat[ei, mi] = rt - rc
+
+                bg = norm(rt - rc)
+                tc = "white" if (bg < 0.25 or bg > 0.75) else "black"
+
+                ax.text(
+                    mi,
+                    ei - 0.12,
+                    f"{rt:.1f}% vs {rc:.1f}%",
+                    ha="center",
+                    va="center",
+                    fontsize=6,
+                    fontweight="bold",
+                    color=tc,
+                )
+                ax.text(
+                    mi,
+                    ei + 0.22,
+                    f"n={n}",
+                    ha="center",
+                    va="center",
+                    fontsize=4.5,
+                    color=tc,
+                    alpha=0.7,
+                )
+
+        im = ax.imshow(diff_mat, cmap=cmap, norm=norm, aspect="auto")
+        ax.set_xticks(range(3))
+        ax.set_xticklabels(mg_labels, fontsize=6)
+        ax.set_yticks(range(4))
+        ax.set_yticklabels(egfr_labels if di == 0 else [], fontsize=6)
+        if di == 0:
+            ax.set_ylabel("eGFR & CKD stage", fontsize=6)
+        ax.set_title(
+            f"{LBL[tag]} \u2014 Mortality (treated% vs control%)", fontsize=7, pad=4
+        )
+        for spine in ax.spines.values():
+            spine.set_visible(True)
+            spine.set_linewidth(0.3)
+            spine.set_color("#999")
+
+    # Panel labels
+    axes[0].text(
+        -0.15,
+        1.05,
+        "a",
+        transform=axes[0].transAxes,
+        fontsize=10,
+        fontweight="bold",
+        va="top",
+    )
+    axes[1].text(
+        -0.05,
+        1.05,
+        "b",
+        transform=axes[1].transAxes,
+        fontsize=10,
+        fontweight="bold",
+        va="top",
+    )
+
+    # Colorbar
+    cbar_ax = fig.add_axes([0.93, 0.15, 0.015, 0.7])
+    sm = mpl.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, cax=cbar_ax)
+    cbar.set_ticks([-10, -5, 0, 5, 10, 15])
+    cbar.set_ticklabels(["-10", "-5", "0", "+5", "+10", "+15"])
+    cbar.ax.tick_params(labelsize=5, width=0.3, length=2)
+    cbar.ax.set_ylabel(
+        "Mortality difference (pp)\nTreated \u2212 Control",
+        fontsize=5.5,
+        rotation=270,
+        labelpad=10,
+    )
+    cbar.outline.set_linewidth(0.3)
+
+    fig.text(
+        0.5,
+        -0.02,
+        "Blue = IV Mg lowers mortality  |  Red = IV Mg increases mortality",
+        ha="center",
+        fontsize=5,
+        color="#666",
+        style="italic",
+    )
+    save(fig, "efig_mortality_grid")
+
+
+# ====================================================================
 FIGURES = {
     "fig1_primary": fig1_primary,
     "fig2_hte": fig2_hte,
@@ -1806,6 +1941,7 @@ FIGURES = {
     "efig_dcr_dist": efig_dcr_dist,
     "efig_did_spaghetti": efig_did_spaghetti,
     "efig_mortality": efig_mortality,
+    "efig_mortality_grid": efig_mortality_grid,
 }
 
 if __name__ == "__main__":
