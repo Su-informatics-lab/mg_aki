@@ -1328,6 +1328,294 @@ def fig4_precision():
 
 
 # ====================================================================
+# eFig: ΔCr DISTRIBUTIONS BY Mg STRATUM (validates DiD)
+# ====================================================================
+def efig_dcr_dist():
+    print("\n── eFig: ΔCr distributions by Mg stratum ──")
+
+    mg_order = ["Mg<1.6", "Mg_1.6-1.8", "Mg_1.8-2.0", "Mg_2.0-2.3", "Mg>=2.3"]
+    mg_labels = {
+        "Mg<1.6": "Mg < 1.6 (severe)",
+        "Mg_1.6-1.8": "Mg 1.6\u20131.8 (mild)",
+        "Mg_1.8-2.0": "Mg 1.8\u20132.0 (low-normal)",
+        "Mg_2.0-2.3": "Mg 2.0\u20132.3 (normal)",
+        "Mg>=2.3": "Mg \u2265 2.3 (high-normal)",
+    }
+
+    fig, axes = plt.subplots(5, 2, figsize=(7.205, 8.0), sharex="col")
+    fig.subplots_adjust(hspace=0.45, wspace=0.25)
+
+    col_labels = ["\u0394Cr at 36h (DiD estimand)", "Max \u0394Cr over 7d (AKI scan)"]
+
+    for di, tag in enumerate(DBS):
+        p = os.path.join(RESULTS, f"pair_dcr_{tag}.csv")
+        if not os.path.exists(p):
+            print(f"  SKIP {tag}: {p} not found (run 03e_pair_dcr.R)")
+            return
+        pdf = pd.read_csv(p)
+
+        for ri, mg_s in enumerate(mg_order):
+            sub = pdf[pdf.mg_strat == mg_s]
+            for ci, (col_t, col_c, thresh) in enumerate(
+                [
+                    ("dcr_36h_trt", "dcr_36h_ctl", None),
+                    ("max_dcr_7d_trt", "max_dcr_7d_ctl", 0.3),
+                ]
+            ):
+                ax = axes[ri, ci]
+                vt = sub[col_t].dropna().values
+                vc = sub[col_c].dropna().values
+                if len(vt) < 20 or len(vc) < 20:
+                    continue
+
+                bins = np.linspace(
+                    min(np.percentile(vt, 1), np.percentile(vc, 1)),
+                    max(np.percentile(vt, 99), np.percentile(vc, 99)),
+                    40,
+                )
+                alpha = 0.35 if di == 0 else 0.25
+                ax.hist(
+                    vc,
+                    bins=bins,
+                    density=True,
+                    alpha=alpha,
+                    color=CLR[tag],
+                    linestyle="--",
+                    histtype="stepfilled",
+                    label=f"{LBL[tag]} Control" if ri == 0 else None,
+                )
+                ax.hist(
+                    vt,
+                    bins=bins,
+                    density=True,
+                    alpha=alpha + 0.15,
+                    color=CLR[tag],
+                    histtype="stepfilled",
+                    label=f"{LBL[tag]} IV Mg" if ri == 0 else None,
+                )
+
+                # Mean lines
+                ax.axvline(np.mean(vt), color=CLR[tag], ls="-", lw=1.0, alpha=0.8)
+                ax.axvline(np.mean(vc), color=CLR[tag], ls="--", lw=1.0, alpha=0.8)
+
+                if thresh is not None:
+                    ax.axvline(thresh, color="#333", ls=":", lw=0.8, alpha=0.5)
+                    if ri == 0 and di == 0:
+                        ax.text(
+                            thresh + 0.02,
+                            ax.get_ylim()[1] * 0.9,
+                            "KDIGO\n0.3",
+                            fontsize=5,
+                            color="#333",
+                        )
+
+                ax.axvline(0, color="#ccc", lw=0.4)
+
+            # Row label (left side)
+            axes[ri, 0].set_ylabel(mg_labels[mg_s], fontsize=6)
+
+    # Column titles
+    for ci, lbl in enumerate(col_labels):
+        axes[0, ci].set_title(lbl, fontsize=7, pad=6)
+
+    # X labels on bottom row
+    axes[-1, 0].set_xlabel("\u0394Cr (mg/dL)", fontsize=6)
+    axes[-1, 1].set_xlabel("\u0394Cr (mg/dL)", fontsize=6)
+
+    # Legend on top row
+    axes[0, 0].legend(fontsize=5, loc="upper left", ncol=2)
+
+    # DiD annotation: show mean difference per stratum per db
+    for di, tag in enumerate(DBS):
+        pdf = pd.read_csv(os.path.join(RESULTS, f"pair_dcr_{tag}.csv"))
+        for ri, mg_s in enumerate(mg_order):
+            sub = pdf[pdf.mg_strat == mg_s]
+            v36t = sub["dcr_36h_trt"].dropna()
+            v36c = sub["dcr_36h_ctl"].dropna()
+            if len(v36t) > 20 and len(v36c) > 20:
+                did = v36t.mean() - v36c.mean()
+                y_pos = 0.92 - di * 0.12
+                axes[ri, 0].text(
+                    0.97,
+                    y_pos,
+                    f"{LBL[tag]} DiD={did:+.3f}",
+                    transform=axes[ri, 0].transAxes,
+                    fontsize=5,
+                    ha="right",
+                    color=CLR[tag],
+                    fontweight="bold",
+                )
+
+    for ax in axes.flat:
+        ax.tick_params(labelsize=5)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+    fig.text(
+        0.01,
+        0.99,
+        "Solid line = treated mean  |  Dashed = control mean",
+        fontsize=5,
+        color="#666",
+        style="italic",
+        va="top",
+    )
+    save(fig, "efig_dcr_distribution")
+
+
+# ====================================================================
+# eFig: DiD TIME COURSE BY Mg STRATUM (spaghetti plot)
+# ====================================================================
+def efig_did_spaghetti():
+    print("\n── eFig: DiD spaghetti by Mg stratum ──")
+
+    mg_order = ["Mg<1.6", "Mg_1.6-1.8", "Mg_1.8-2.0", "Mg_2.0-2.3", "Mg>=2.3"]
+    mg_labels = {
+        "Mg<1.6": "<1.6 (severe)",
+        "Mg_1.6-1.8": "1.6\u20131.8 (mild)",
+        "Mg_1.8-2.0": "1.8\u20132.0 (low-norm)",
+        "Mg_2.0-2.3": "2.0\u20132.3 (normal)",
+        "Mg>=2.3": "\u22652.3 (high-norm)",
+    }
+    # 5 distinct colors for Mg strata
+    mg_colors = {
+        "Mg<1.6": "#d62728",  # red — harm
+        "Mg_1.6-1.8": "#2ca02c",  # green — sweet spot
+        "Mg_1.8-2.0": "#1f77b4",  # blue — protective
+        "Mg_2.0-2.3": "#9467bd",  # purple — mild protective
+        "Mg>=2.3": "#ff7f0e",  # orange — harm
+    }
+    mg_markers = {
+        "Mg<1.6": "v",
+        "Mg_1.6-1.8": "o",
+        "Mg_1.8-2.0": "s",
+        "Mg_2.0-2.3": "D",
+        "Mg>=2.3": "^",
+    }
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.205, 3.5), sharey=True)
+    fig.subplots_adjust(wspace=0.08)
+
+    for di, tag in enumerate(DBS):
+        ax = axes[di]
+        ax.axhline(0, color="#ccc", lw=0.6, zorder=0)
+        ax.fill_between([4, 50], 0, 0.15, alpha=0.03, color="#d62728")
+        ax.fill_between([4, 50], -0.15, 0, alpha=0.03, color="#1f77b4")
+
+        p = os.path.join(RESULTS, f"mg_did_{tag}.csv")
+        if not os.path.exists(p):
+            print(f"  SKIP {tag}: {p} not found")
+            return
+        df = pd.read_csv(p)
+
+        # Overall as gray reference
+        ov = df[df.mg_strat == "Overall"].sort_values("target_h")
+        ov_valid = ov.dropna(subset=["did"])
+        if len(ov_valid) > 0:
+            ax.plot(
+                ov_valid.target_h,
+                ov_valid.did,
+                color="#aaa",
+                lw=1.5,
+                ls="--",
+                alpha=0.6,
+                label="Overall",
+                zorder=1,
+            )
+
+        for mg_s in mg_order:
+            sub = df[df.mg_strat == mg_s].sort_values("target_h")
+            sub_valid = sub.dropna(subset=["did"])
+            if len(sub_valid) < 2:
+                continue
+            h = sub_valid.target_h.values
+            d = sub_valid.did.values
+            p_vals = sub_valid.p.values
+
+            ax.plot(h, d, color=mg_colors[mg_s], lw=1.2, alpha=0.8, zorder=2)
+
+            for j in range(len(h)):
+                sig = not np.isnan(p_vals[j]) and p_vals[j] < 0.05
+                ax.plot(
+                    h[j],
+                    d[j],
+                    mg_markers[mg_s],
+                    color=mg_colors[mg_s],
+                    ms=5 if sig else 3,
+                    markerfacecolor=mg_colors[mg_s] if sig else "white",
+                    markeredgecolor=mg_colors[mg_s],
+                    markeredgewidth=0.7,
+                    zorder=3,
+                )
+
+        ax.set_xlabel("Hours from T\u2080")
+        ax.set_xlim(4, 50)
+        ax.set_xticks([6, 12, 18, 24, 30, 36, 42, 48])
+        ax.set_title(LBL[tag], fontsize=8)
+        ax.tick_params(labelsize=6)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+    axes[0].set_ylabel(
+        "DiD: max \u0394Cr (mg/dL)\n\u2190 Favors IV Mg | Favors control \u2192",
+        fontsize=6,
+    )
+
+    # Legend
+    from matplotlib.lines import Line2D
+
+    handles = [Line2D([0], [0], color="#aaa", ls="--", lw=1.2, label="Overall")]
+    for mg_s in mg_order:
+        handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=mg_colors[mg_s],
+                marker=mg_markers[mg_s],
+                ms=5,
+                lw=1.2,
+                label=mg_labels[mg_s],
+            )
+        )
+    axes[1].legend(
+        handles=handles, fontsize=5, loc="upper left", framealpha=0.9, edgecolor="#ddd"
+    )
+
+    # Panel labels
+    axes[0].text(
+        -0.12,
+        1.05,
+        "a",
+        transform=axes[0].transAxes,
+        fontsize=11,
+        fontweight="bold",
+        va="top",
+    )
+    axes[1].text(
+        -0.05,
+        1.05,
+        "b",
+        transform=axes[1].transAxes,
+        fontsize=11,
+        fontweight="bold",
+        va="top",
+    )
+
+    fig.text(
+        0.5,
+        -0.02,
+        "Filled marker = P < 0.05  |  Open marker = P \u2265 0.05  |  "
+        "Post-Cr = max Cr within [T\u2080, T\u2080+h]",
+        ha="center",
+        fontsize=5,
+        color="#666",
+        style="italic",
+    )
+
+    save(fig, "efig_did_spaghetti")
+
+
+# ====================================================================
 FIGURES = {
     "fig1_primary": fig1_primary,
     "fig2_hte": fig2_hte,
@@ -1337,6 +1625,8 @@ FIGURES = {
     "efig_sensitivity": efig_sensitivity,
     "efig_hte_48h": efig_hte_48h,
     "efig_love": efig_love,
+    "efig_dcr_dist": efig_dcr_dist,
+    "efig_did_spaghetti": efig_did_spaghetti,
 }
 
 if __name__ == "__main__":
