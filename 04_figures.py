@@ -1643,6 +1643,203 @@ def efig_did_spaghetti():
 
 
 # ====================================================================
+# eFig: MORTALITY RATES — treated vs control by Mg and eGFR strata
+# ====================================================================
+def efig_mortality():
+    print("\n── eFig: Mortality rates by stratum ──")
+
+    fig, axes = plt.subplots(2, 2, figsize=(7.205, 5.0))
+    fig.subplots_adjust(hspace=0.45, wspace=0.30)
+
+    mg3_order = ["Mg<1.6", "Mg_1.6-2.0", "Mg>=2.0"]
+    mg3_labels = ["<1.6\n(low)", "1.6\u20132.0\n(optimal)", "\u22652.0\n(normal+)"]
+    egfr_order = ["eGFR>=90", "eGFR_60-89", "eGFR_45-59", "eGFR<45"]
+    egfr_labels = [
+        "\u226590\n(G1)",
+        "60\u201389\n(G2)",
+        "45\u201359\n(G3a)",
+        "<45\n(G3b\u20135)",
+    ]
+
+    for di, tag in enumerate(DBS):
+        p = os.path.join(RESULTS, f"mg_strat_{tag}.csv")
+        if not os.path.exists(p):
+            print(f"  SKIP {tag}")
+            return
+        df = pd.read_csv(p)
+
+        # ── Top row: Mortality by Mg stratum ──
+        ax = axes[0, di]
+        mort_mg = df[
+            (df.outcome == "mortality")
+            & (df.egfr_strat == "All")
+            & df.mg_strat.isin(mg3_order)
+        ]
+        width = 0.30
+        for yi, mg_s in enumerate(mg3_order):
+            row = mort_mg[mort_mg.mg_strat == mg_s]
+            if len(row) == 0 or pd.isna(row.iloc[0]["rate_trt"]):
+                continue
+            r = row.iloc[0]
+            rt, rc = 100 * r["rate_trt"], 100 * r["rate_ctl"]
+            ax.bar(yi - width / 2, rt, width, color=CLR[tag], alpha=0.9, zorder=2)
+            ax.bar(
+                yi + width / 2,
+                rc,
+                width,
+                color=CLR[tag],
+                alpha=0.35,
+                edgecolor=CLR[tag],
+                linewidth=0.5,
+                zorder=2,
+            )
+            ax.text(
+                yi - width / 2,
+                rt + 0.3,
+                f"{rt:.1f}%",
+                ha="center",
+                fontsize=5,
+                fontweight="bold",
+                color=CLR[tag],
+            )
+            ax.text(
+                yi + width / 2,
+                rc + 0.3,
+                f"{rc:.1f}%",
+                ha="center",
+                fontsize=5,
+                color=CLR[tag],
+                alpha=0.7,
+            )
+            sig = not pd.isna(r["p"]) and r["p"] < 0.05
+            if sig:
+                ax.text(
+                    yi,
+                    max(rt, rc) + 1.5,
+                    "*",
+                    ha="center",
+                    fontsize=8,
+                    color=CLR[tag],
+                    fontweight="bold",
+                )
+
+        ax.set_xticks(range(len(mg3_order)))
+        ax.set_xticklabels(mg3_labels, fontsize=6)
+        ax.set_ylabel("Mortality (%)" if di == 0 else "")
+        ax.set_title(f"{LBL[tag]} \u2014 by Mg stratum", fontsize=7)
+
+        # ── Bottom row: Mortality by eGFR stratum ──
+        ax2 = axes[1, di]
+        mort_eg = df[
+            (df.outcome == "mortality")
+            & (df.mg_strat == "Overall")
+            & df.egfr_strat.isin(egfr_order)
+        ]
+        # If "Overall" mg_strat doesn't have eGFR-stratified mortality,
+        # try loading from egfr_aki_stages CSV
+        if len(mort_eg) == 0:
+            ep = os.path.join(RESULTS, f"egfr_aki_stages_{tag}.csv")
+            if os.path.exists(ep):
+                edf = pd.read_csv(ep)
+                mort_eg = edf[edf.outcome == "mortality"]
+
+        for yi, eg_s in enumerate(egfr_order):
+            row = (
+                mort_eg[mort_eg.egfr_strat == eg_s]
+                if "egfr_strat" in mort_eg.columns
+                else pd.DataFrame()
+            )
+            if len(row) == 0:
+                continue
+            r = row.iloc[0]
+            rt_col = "rate_trt" if "rate_trt" in r.index else "rate_treated"
+            rc_col = "rate_ctl" if "rate_ctl" in r.index else "rate_control"
+            if pd.isna(r.get(rt_col, np.nan)):
+                continue
+            rt, rc = 100 * r[rt_col], 100 * r[rc_col]
+            ax2.bar(yi - width / 2, rt, width, color=CLR[tag], alpha=0.9, zorder=2)
+            ax2.bar(
+                yi + width / 2,
+                rc,
+                width,
+                color=CLR[tag],
+                alpha=0.35,
+                edgecolor=CLR[tag],
+                linewidth=0.5,
+                zorder=2,
+            )
+            ax2.text(
+                yi - width / 2,
+                rt + 0.3,
+                f"{rt:.1f}%",
+                ha="center",
+                fontsize=5,
+                fontweight="bold",
+                color=CLR[tag],
+            )
+            ax2.text(
+                yi + width / 2,
+                rc + 0.3,
+                f"{rc:.1f}%",
+                ha="center",
+                fontsize=5,
+                color=CLR[tag],
+                alpha=0.7,
+            )
+            p_col = "p" if "p" in r.index else "p_value"
+            sig = not pd.isna(r.get(p_col, np.nan)) and r.get(p_col, 1) < 0.05
+            if sig:
+                ax2.text(
+                    yi,
+                    max(rt, rc) + 1.5,
+                    "*",
+                    ha="center",
+                    fontsize=8,
+                    color=CLR[tag],
+                    fontweight="bold",
+                )
+
+        ax2.set_xticks(range(len(egfr_order)))
+        ax2.set_xticklabels(egfr_labels, fontsize=6)
+        ax2.set_ylabel("Mortality (%)" if di == 0 else "")
+        ax2.set_title(f"{LBL[tag]} \u2014 by eGFR (CKD stage)", fontsize=7)
+
+    for ax in axes.flat:
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.tick_params(labelsize=6)
+        ax.set_ylim(bottom=0)
+
+    # Panel labels
+    for i, lbl in enumerate(["a", "b", "c", "d"]):
+        axes.flat[i].text(
+            -0.12,
+            1.08,
+            lbl,
+            transform=axes.flat[i].transAxes,
+            fontsize=10,
+            fontweight="bold",
+            va="top",
+        )
+
+    from matplotlib.patches import Patch
+
+    fig.legend(
+        handles=[
+            Patch(color="#555", alpha=0.9, label="IV Mg (treated)"),
+            Patch(color="#555", alpha=0.35, edgecolor="#555", label="Control"),
+        ],
+        loc="lower center",
+        ncol=2,
+        fontsize=6,
+        frameon=False,
+        bbox_to_anchor=(0.5, -0.02),
+    )
+
+    save(fig, "efig_mortality")
+
+
+# ====================================================================
 FIGURES = {
     "fig1_primary": fig1_primary,
     "fig2_hte": fig2_hte,
@@ -1654,6 +1851,7 @@ FIGURES = {
     "efig_love": efig_love,
     "efig_dcr_dist": efig_dcr_dist,
     "efig_did_spaghetti": efig_did_spaghetti,
+    "efig_mortality": efig_mortality,
 }
 
 if __name__ == "__main__":
