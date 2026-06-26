@@ -1112,9 +1112,9 @@ def fig4_precision():
     fig = plt.figure(figsize=(7.205, 4.0))  # double-column
     gs = fig.add_gridspec(1, 2, width_ratios=[1.0, 1.4], wspace=0.35)
 
-    # ── Panel A: Mg-stratified AKI forest (5 bins) ──────────────
+    # ── Panel A: Mg-stratified DiD on continuous ΔCr (36h) ────────
     ax = fig.add_subplot(gs[0])
-    ax.axvline(1, color="#ddd", lw=0.6, zorder=0)
+    ax.axvline(0, color="#ddd", lw=0.6, zorder=0)
 
     mg_order = ["Mg<1.6", "Mg_1.6-1.8", "Mg_1.8-2.0", "Mg_2.0-2.3", "Mg>=2.3"]
     mg_labels = [
@@ -1125,17 +1125,25 @@ def fig4_precision():
         "\u22652.3\n(high-normal)",
     ]
 
+    TARGET_H = 36  # matches fig1 Panel A
+
     for di, tag in enumerate(DBS):
-        df = dfs[tag]
-        aki = df[(df.outcome == "aki_7d") & (df.egfr_strat == "All")]
+        p = os.path.join(RESULTS, f"mg_did_{tag}.csv")
+        if not os.path.exists(p):
+            print(f"  SKIP {tag}: {p} not found (run 03d_mg_did.R first)")
+            return
+        did_df = pd.read_csv(p)
+        sub = did_df[did_df.target_h == TARGET_H]
+
         for yi, mg_s in enumerate(mg_order):
-            row = aki[aki.mg_strat == mg_s]
-            if len(row) == 0 or pd.isna(row.iloc[0]["or"]):
+            row = sub[sub.mg_strat == mg_s]
+            if len(row) == 0 or pd.isna(row.iloc[0]["did"]):
                 continue
             r = row.iloc[0]
             offset = 0.15 * (1 - 2 * di)
-            est, lo, hi = r["or"], r["or_lo"], r["or_hi"]
+            est, lo, hi = r["did"], r["ci_lo"], r["ci_hi"]
             sig = not pd.isna(r["p"]) and r["p"] < 0.05
+
             ax.errorbar(
                 est,
                 yi + offset,
@@ -1154,11 +1162,8 @@ def fig4_precision():
 
     ax.set_yticks(range(len(mg_order)))
     ax.set_yticklabels(mg_labels, fontsize=6)
-    ax.set_xlabel("Odds ratio for 7-day AKI (95% CI)")
-    ax.set_xscale("log")
-    ax.set_xlim(0.35, 3.0)
-    ax.set_xticks([0.5, 0.75, 1.0, 1.5, 2.0])
-    ax.set_xticklabels(["0.50", "0.75", "1.00", "1.50", "2.00"])
+    ax.set_xlabel("DiD: \u0394Cr at 36h (mg/dL, 95% CI)")
+    ax.set_xlim(-0.08, 0.06)
     ax.set_ylabel("Baseline serum Mg (mg/dL)")
     ax.invert_yaxis()
 
@@ -1177,7 +1182,7 @@ def fig4_precision():
             ms=5,
             label=LBL[tag],
         )
-    ax.legend(loc="lower right", fontsize=5.5)
+    ax.legend(loc="upper right", fontsize=5.5)
     ax.text(
         0.02,
         -0.06,
