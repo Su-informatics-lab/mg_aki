@@ -1,9 +1,11 @@
 #!/usr/bin/env Rscript
 # ============================================================================
-# 03d_mg_did.R — Mg-stratified DiD on continuous ΔCr
+# 03d_mg_did.R — Mg-stratified DiD on continuous ΔCr (max-Cr version)
 #
-# Replicates exact 02_psm.R DiD computation (find_cr_pre + find_cr with
-# ±CR_WINDOW) within each baseline Mg stratum.
+# KEY CHANGE: post-treatment Cr = MAX Cr within [t_mg, t_mg + target_h],
+# not the closest Cr to target_h ± 12h. This matches how AKI is defined
+# (peak rise triggers KDIGO), making DiD and AKI comparable on the same
+# scale. (Dr. Su's suggestion: "如果用0-36的最高CRT呢？")
 #
 # Uses existing primary pairs — no new matching.
 # Baseline Mg from did_labs_all (same source as 03c_mg_strat.R).
@@ -18,7 +20,6 @@
 suppressPackageStartupMessages({ library(sandwich); library(lmtest) })
 
 RESULTS   <- path.expand("~/mg_aki/results")
-CR_WINDOW <- 12
 TARGETS   <- c(6, 12, 18, 24, 30, 36, 42, 48)
 
 args <- commandArgs(trailingOnly = TRUE)
@@ -56,11 +57,12 @@ find_cr_pre <- function(cr_pt, t_h) {
   cand$labresult[which.max(cand$offset_h)]
 }
 
-find_cr_post <- function(cr_pt, target_h, window = CR_WINDOW) {
+find_cr_post_max <- function(cr_pt, t_mg, target_h) {
+  # MAX Cr from t_mg to t_mg + target_h (matches AKI scan logic)
   if (is.null(cr_pt) || nrow(cr_pt) == 0) return(NA)
-  cand <- cr_pt[cr_pt$offset_h >= (target_h - window) & cr_pt$offset_h <= (target_h + window), ]
+  cand <- cr_pt[cr_pt$offset_h >= t_mg & cr_pt$offset_h <= (t_mg + target_h), ]
   if (nrow(cand) == 0) return(NA)
-  cand$labresult[which.min(abs(cand$offset_h - target_h))]
+  max(cand$labresult, na.rm = TRUE)
 }
 
 # ── Baseline Mg from did_labs_all (same as 03c) ──────────────────
@@ -108,8 +110,8 @@ for (i in seq_len(n_pairs)) {
   pre_c <- find_cr_pre(cr_list[[cp]], t_mg_i)
   if (is.na(pre_t) || is.na(pre_c)) next
   for (j in seq_along(TARGETS)) {
-    post_t <- find_cr_post(cr_list[[tp]], t_mg_i + TARGETS[j])
-    post_c <- find_cr_post(cr_list[[cp]], t_mg_i + TARGETS[j])
+    post_t <- find_cr_post_max(cr_list[[tp]], t_mg_i, TARGETS[j])
+    post_c <- find_cr_post_max(cr_list[[cp]], t_mg_i, TARGETS[j])
     if (!is.na(post_t)) dcr_trt[i, j] <- post_t - pre_t
     if (!is.na(post_c)) dcr_ctl[i, j] <- post_c - pre_c
   }
