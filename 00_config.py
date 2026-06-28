@@ -268,6 +268,7 @@ EICU_LAB_PATTERNS = {
 # Output column names for did_all_{db}.csv
 ALL_PATIENTS_COLS = [
     "pid",
+    "hadm_id",
     "treated",
     "mg_offset_h",
     "mg_offset_min",
@@ -286,6 +287,10 @@ ALL_PATIENTS_COLS = [
     *CHRONIC_DRUG_CLASSES.keys(),
     "hosp_mortality",
     "poaf",
-    "encephalopathy",
+    "encephalopathy_delirium",
+    "transfusion",
+    "reintubation",
+    "poaf_icd",
+    "encephalopathy_icd",
     "vent_arrhythmia",
 ]

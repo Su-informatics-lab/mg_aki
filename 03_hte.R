@@ -97,7 +97,9 @@ for (i in seq_len(n_pairs)) {
 
 # ── Pre-computed binary outcomes (from did_all) ───────────────────
 outcome_names <- c("aki_48h", "aki_7d", "aki_stage2", "aki_stage3",
-                    "hosp_mortality", "encephalopathy", "vent_arrhythmia", "poaf")
+                    "hosp_mortality", "poaf", "encephalopathy_delirium",
+                    "transfusion", "reintubation", "vent_arrhythmia",
+                    "poaf_icd", "encephalopathy_icd")
 
 # Build outcome matrices: trt and ctl vectors, indexed by pair
 out_trt <- list(); out_ctl <- list()
@@ -105,7 +107,9 @@ for (j in 1:4) {
   out_trt[[colnames(aki_trt)[j]]] <- aki_trt[, j]
   out_ctl[[colnames(aki_ctl)[j]]] <- aki_ctl[, j]
 }
-for (oc in c("hosp_mortality", "encephalopathy", "vent_arrhythmia", "poaf")) {
+for (oc in c("hosp_mortality", "poaf", "encephalopathy_delirium",
+             "transfusion", "reintubation", "vent_arrhythmia",
+             "poaf_icd", "encephalopathy_icd")) {
   if (oc %in% names(all_pts)) {
     out_trt[[oc]] <- all_pts[[oc]][trt_rows]
     out_ctl[[oc]] <- all_pts[[oc]][ctl_rows]

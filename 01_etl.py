@@ -571,7 +571,7 @@ def run_eicu():
         ].patientunitstayid
     )
     for df in [treated, control]:
-        df["encephalopathy"] = df.patientunitstayid.isin(enc).astype(int)
+        df["encephalopathy_delirium"] = df.patientunitstayid.isin(enc).astype(int)
     varr = set(
         diag[
             diag.patientunitstayid.isin(all_p)
@@ -581,6 +581,13 @@ def run_eicu():
     )
     for df in [treated, control]:
         df["vent_arrhythmia"] = df.patientunitstayid.isin(varr).astype(int)
+
+    # eICU: duplicate structured → ICD sensitivity columns (single source)
+    for df in [treated, control]:
+        df["poaf_icd"] = df["poaf"]
+        df["encephalopathy_icd"] = df["encephalopathy_delirium"]
+        df["transfusion"] = 0  # not available from eICU structured data
+        df["reintubation"] = 0  # not available from eICU structured data
 
     # Export
     save_all_patients(treated, control, "eicu")
@@ -1003,6 +1010,74 @@ def run_mimic():
     varr_hadms = matches_icd(dx, all_hadms, {9: VARR_ICD9, 10: VARR_ICD10})
     for df in [treated, control]:
         df["vent_arrhythmia"] = df.hadm_id.isin(varr_hadms).astype(int)
+
+    # ── LLM-extracted endpoints (ATLAS v2) ────────────────────────
+    # Supersede ICD: poaf, encephalopathy_delirium, transfusion, reintubation
+    llm_path = os.path.expanduser("~/mg_aki/llm_extract/llm_endpoints_v2.csv")
+    if os.path.exists(llm_path):
+        print("\n  Merging LLM-extracted endpoints...")
+        llm = pd.read_csv(llm_path, dtype={"hadm_id": int})
+        llm_cols = ["poaf", "encephalopathy_delirium", "transfusion", "reintubation"]
+        llm = llm[["hadm_id"] + [c for c in llm_cols if c in llm.columns]]
+        for c in llm_cols:
+            if c in llm.columns:
+                llm[c] = llm[c].fillna(0).astype(int)
+        print(f"    LLM file: {len(llm):,} rows, cols={list(llm.columns)}")
+
+        for df_label, df in [("treated", treated), ("control", control)]:
+            # Rename ICD columns for sensitivity analysis
+            df.rename(
+                columns={"poaf": "poaf_icd", "encephalopathy": "encephalopathy_icd"},
+                inplace=True,
+            )
+            # Merge LLM
+            pre_n = len(df)
+            merged = df.merge(llm, on="hadm_id", how="left")
+            assert (
+                len(merged) == pre_n
+            ), f"{df_label}: row count changed {pre_n}→{len(merged)}"
+            for c in llm_cols:
+                if c in merged.columns:
+                    n_na = merged[c].isna().sum()
+                    merged[c] = merged[c].fillna(0).astype(int)
+                    if n_na > 0:
+                        print(f"      {df_label}.{c}: {n_na} no-note pts filled with 0")
+            if df_label == "treated":
+                treated = merged
+            else:
+                control = merged
+
+        for c in llm_cols:
+            if c in treated.columns:
+                nt = treated[c].sum()
+                nc = control[c].sum()
+                print(f"    {c}: trt={nt}, ctl={nc}")
+
+        # ICD vs LLM concordance
+        for icd_c, llm_c in [
+            ("poaf_icd", "poaf"),
+            ("encephalopathy_icd", "encephalopathy_delirium"),
+        ]:
+            if icd_c in treated.columns and llm_c in treated.columns:
+                all_df = pd.concat([treated, control], ignore_index=True)
+                both = ((all_df[icd_c] == 1) & (all_df[llm_c] == 1)).sum()
+                icd_only = ((all_df[icd_c] == 1) & (all_df[llm_c] == 0)).sum()
+                llm_only = ((all_df[icd_c] == 0) & (all_df[llm_c] == 1)).sum()
+                print(
+                    f"    {icd_c} vs {llm_c}: both={both}, icd_only={icd_only}, llm_only={llm_only}"
+                )
+    else:
+        print(f"\n  WARN: LLM file not found: {llm_path}")
+        print(
+            "    Run: cp ~/atlas/results/mimic/llm_endpoints_v2.csv ~/mg_aki/llm_extract/"
+        )
+        for df in [treated, control]:
+            df.rename(
+                columns={"poaf": "poaf_icd", "encephalopathy": "encephalopathy_icd"},
+                inplace=True,
+            )
+            for c in ["poaf", "encephalopathy_delirium", "transfusion", "reintubation"]:
+                df[c] = 0
 
     # Export
     save_all_patients(treated, control, "mimic")
