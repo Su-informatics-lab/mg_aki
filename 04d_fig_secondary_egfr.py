@@ -262,20 +262,6 @@ def make_heatmap(ax, df):
                 color=tc,
             )
 
-    # n per row — right margin
-    for si in range(n_egfr):
-        n = n_mat[si, 0]
-        ax.text(
-            n_ep - 0.5 + 0.35,
-            si,
-            f"n={n:,}",
-            fontsize=5,
-            color=GRAY,
-            va="center",
-            ha="left",
-            clip_on=False,
-        )
-
     # Column labels on top, colored by endpoint
     ep_short = ["AKI", "Mort.", "POAF", "Enceph", "Transfus.", "Reintub."]
     ax.set_xticks(range(n_ep))
@@ -286,10 +272,16 @@ def make_heatmap(ax, df):
         ax.get_xticklabels()[ei].set_color(EP_COLORS[oc])
         ax.get_xticklabels()[ei].set_fontweight("bold")
 
-    # Row labels
-    egfr_labels = ["≥90 (G1)", "60–89 (G2)", "45–59 (G3a)", "30–44 (G3b)", "<30 (G4–5)"]
+    # Row labels — n embedded to avoid colorbar collision
+    egfr_labels = [
+        f"≥90 (G1)  n={n_mat[0,0]:,}",
+        f"60–89 (G2)  n={n_mat[1,0]:,}",
+        f"45–59 (G3a)  n={n_mat[2,0]:,}",
+        f"30–44 (G3b)  n={n_mat[3,0]:,}",
+        f"<30 (G4–5)  n={n_mat[4,0]:,}",
+    ]
     ax.set_yticks(range(n_egfr))
-    ax.set_yticklabels(egfr_labels, fontsize=6.5)
+    ax.set_yticklabels(egfr_labels, fontsize=5.5)
     ax.set_ylabel("eGFR (mL/min/1.73m²)", fontsize=7)
 
     # White grid lines
