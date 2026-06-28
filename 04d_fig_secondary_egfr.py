@@ -5,7 +5,7 @@
 Shows the cross-organ eGFR gradient: eGFR≥90 = safe (AKI/mort protective,
 rest null), eGFR<45 = multi-organ harm zone.
 
-  Panel A: Forest plot — 6 endpoints × 5 eGFR strata
+  Panel A: Forest plot — 6 endpoints × 5 eGFR strata, grouped by endpoint
   Panel B: Heatmap    — OR colored blue/white/red, significance overlay
 
 Run:  python 04d_fig_secondary_egfr.py
@@ -17,6 +17,7 @@ import sys
 import matplotlib as mpl
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 
@@ -52,27 +53,26 @@ ENDPOINTS = [
     ("aki_7d", "7-day AKI"),
     ("hosp_mortality", "Mortality"),
     ("poaf", "POAF (LLM)"),
-    ("encephalopathy_delirium", "Enceph/delirium"),
+    ("encephalopathy_delirium", "Enceph / delirium"),
     ("transfusion", "Transfusion"),
     ("reintubation", "Reintubation"),
 ]
 
 EGFR_STRATA = [
-    ("eGFR >= 90", "≥90 (G1)"),
-    ("eGFR 60-89", "60–89 (G2)"),
-    ("eGFR 45-59", "45–59 (G3a)"),
-    ("eGFR 30-44", "30–44 (G3b)"),
-    ("eGFR < 30", "<30 (G4–5)"),
+    ("eGFR >= 90", "≥90"),
+    ("eGFR 60-89", "60–89"),
+    ("eGFR 45-59", "45–59"),
+    ("eGFR 30-44", "30–44"),
+    ("eGFR < 30", "<30"),
 ]
 
-# Organ-system colors
 EP_COLORS = {
-    "aki_7d": "#2166AC",  # renal — blue
-    "hosp_mortality": "#333333",  # overall — dark
-    "poaf": "#D6604D",  # cardiac — red
-    "encephalopathy_delirium": "#8856A7",  # neuro — purple
-    "transfusion": "#E08214",  # hemato — orange
-    "reintubation": "#35978F",  # pulmonary — teal
+    "aki_7d": "#2166AC",
+    "hosp_mortality": "#333333",
+    "poaf": "#D6604D",
+    "encephalopathy_delirium": "#8856A7",
+    "transfusion": "#E08214",
+    "reintubation": "#35978F",
 }
 
 
@@ -93,82 +93,49 @@ def load_hte():
 
 def get_row(df, oc, sg):
     r = df[(df.outcome == oc) & (df.subgroup == sg)]
-    if len(r) == 0:
-        return None
-    return r.iloc[0]
+    return r.iloc[0] if len(r) > 0 else None
 
 
 # ====================================================================
 # PANEL A: FOREST PLOT
 # ====================================================================
 def make_forest(ax, df):
-    """Multi-endpoint eGFR-stratified forest plot."""
     ax.axvline(1, color="#ddd", lw=0.6, zorder=0)
+    ax.axvspan(1, 12, alpha=0.02, color="#d62728", zorder=0)
 
     y = 0
     yticks, ylabels = [], []
-    n_ep = len(ENDPOINTS)
+    group_spans = []
 
     for ei, (oc, oc_lbl) in enumerate(reversed(ENDPOINTS)):
         color = EP_COLORS[oc]
+        y_start = y
 
         for si, (sg, sg_lbl) in enumerate(reversed(EGFR_STRATA)):
             r = get_row(df, oc, sg)
-            if r is None or pd.isna(r["or"]) or r["or"] > 20:
-                yticks.append(y)
-                ylabels.append(sg_lbl if ei == n_ep - 1 else "")
-                y += 1
-                continue
-
-            est = r["or"]
-            lo, hi = r["or_lo"], r["or_hi"]
-            sig = not pd.isna(r["p"]) and r["p"] < 0.05
-
-            ax.errorbar(
-                est,
-                y,
-                xerr=[[max(est - lo, 0.001)], [max(hi - est, 0.001)]],
-                fmt="o",
-                color=color,
-                ms=5 if sig else 3.5,
-                markerfacecolor=color if sig else "white",
-                markeredgecolor=color,
-                markeredgewidth=0.7,
-                capsize=1.5,
-                capthick=0.4,
-                lw=0.5,
-                zorder=3,
-            )
-            # n label
-            ax.text(
-                0.055,
-                y,
-                f"n={int(r['n'])}",
-                fontsize=4.5,
-                color=GRAY,
-                va="center",
-                transform=mpl.transforms.blended_transform_factory(
-                    ax.transAxes, ax.transData
-                ),
-            )
+            if r is not None and not pd.isna(r["or"]) and r["or"] <= 20:
+                est, lo, hi = r["or"], r["or_lo"], r["or_hi"]
+                sig = not pd.isna(r["p"]) and r["p"] < 0.05
+                ax.errorbar(
+                    est,
+                    y,
+                    xerr=[[max(est - lo, 0.001)], [max(hi - est, 0.001)]],
+                    fmt="o",
+                    color=color,
+                    ms=5 if sig else 3.5,
+                    markerfacecolor=color if sig else "white",
+                    markeredgecolor=color,
+                    markeredgewidth=0.7,
+                    capsize=1.5,
+                    capthick=0.4,
+                    lw=0.5,
+                    zorder=3,
+                )
             yticks.append(y)
-            ylabels.append(sg_lbl if ei == n_ep - 1 else "")
+            ylabels.append(sg_lbl)
             y += 1
 
-        # Endpoint label (right side)
-        mid_y = y - len(EGFR_STRATA) / 2 - 0.5
-        ax.text(
-            15,
-            mid_y,
-            oc_lbl,
-            fontsize=6.5,
-            fontweight="bold",
-            color=color,
-            va="center",
-            ha="left",
-        )
-
-        # Overall
+        # Overall diamond
         r_ov = get_row(df, oc, "Overall")
         if r_ov is not None and not pd.isna(r_ov["or"]):
             sig_ov = not pd.isna(r_ov["p"]) and r_ov["p"] < 0.05
@@ -190,26 +157,56 @@ def make_forest(ax, df):
                 lw=0.6,
                 zorder=3,
             )
-            yticks.append(y)
-            ylabels.append("Overall" if ei == n_ep - 1 else "")
-            y += 1
+        yticks.append(y)
+        ylabels.append("Overall")
+        y_end = y
 
-        # Gap between endpoints
-        y += 0.8
+        group_spans.append((y_start, y_end, oc_lbl, color))
+        y += 1.5
 
     ax.set_yticks(yticks)
     ax.set_yticklabels(ylabels, fontsize=5.5)
     ax.set_xscale("log")
     ax.set_xlim(0.15, 12)
     ax.set_xticks([0.25, 0.5, 1, 2, 4, 8])
-    ax.xaxis.set_major_formatter(mpl.ticker.ScalarFormatter())
+    ax.xaxis.set_major_formatter(mticker.ScalarFormatter())
     ax.set_xlabel("Odds Ratio (95% CI)")
 
+    # Bracket + endpoint labels on right
+    for y_start, y_end, lbl, color in group_spans:
+        mid = (y_start + y_end) / 2
+        x_b = 0.97
+        ax.plot(
+            [x_b, x_b],
+            [y_start - 0.3, y_end + 0.3],
+            transform=mpl.transforms.blended_transform_factory(
+                ax.transAxes, ax.transData
+            ),
+            color=color,
+            lw=1.5,
+            clip_on=False,
+            solid_capstyle="round",
+        )
+        ax.text(
+            1.01,
+            mid,
+            lbl,
+            fontsize=6.5,
+            fontweight="bold",
+            color=color,
+            va="center",
+            ha="left",
+            transform=mpl.transforms.blended_transform_factory(
+                ax.transAxes, ax.transData
+            ),
+            clip_on=False,
+        )
+
     ax.text(
-        0.01, -0.04, "← Favors IV Mg", transform=ax.transAxes, fontsize=5, color=GRAY
+        0.02, -0.04, "← Favors IV Mg", transform=ax.transAxes, fontsize=5, color=GRAY
     )
     ax.text(
-        0.99,
+        0.90,
         -0.04,
         "Favors control →",
         transform=ax.transAxes,
@@ -223,7 +220,6 @@ def make_forest(ax, df):
 # PANEL B: HEATMAP
 # ====================================================================
 def make_heatmap(ax, df):
-    """eGFR × Endpoint OR heatmap."""
     n_egfr = len(EGFR_STRATA)
     n_ep = len(ENDPOINTS)
     or_mat = np.full((n_egfr, n_ep), np.nan)
@@ -252,7 +248,6 @@ def make_heatmap(ax, df):
                 continue
             orv = or_mat[si, ei]
             pv = p_mat[si, ei]
-            nv = n_mat[si, ei]
             sig = "*" if (not np.isnan(pv) and pv < 0.05) else ""
             bg = norm(np.log(orv))
             tc = "white" if (bg < 0.25 or bg > 0.75) else "black"
@@ -266,72 +261,96 @@ def make_heatmap(ax, df):
                 fontweight="bold",
                 color=tc,
             )
-            ax.text(
-                ei,
-                si + 0.35,
-                f"n={nv}",
-                ha="center",
-                va="center",
-                fontsize=4.5,
-                color=tc,
-                alpha=0.7,
-            )
 
+    # n per row — right margin
+    for si in range(n_egfr):
+        n = n_mat[si, 0]
+        ax.text(
+            n_ep - 0.5 + 0.35,
+            si,
+            f"n={n:,}",
+            fontsize=5,
+            color=GRAY,
+            va="center",
+            ha="left",
+            clip_on=False,
+        )
+
+    # Column labels on top, colored by endpoint
+    ep_short = ["AKI", "Mort.", "POAF", "Enceph", "Transfus.", "Reintub."]
     ax.set_xticks(range(n_ep))
-    ax.set_xticklabels(
-        [lbl for _, lbl in ENDPOINTS], fontsize=6, rotation=30, ha="right"
-    )
+    ax.set_xticklabels(ep_short, fontsize=6)
+    ax.xaxis.tick_top()
+    ax.xaxis.set_label_position("top")
+    for ei, (oc, _) in enumerate(ENDPOINTS):
+        ax.get_xticklabels()[ei].set_color(EP_COLORS[oc])
+        ax.get_xticklabels()[ei].set_fontweight("bold")
+
+    # Row labels
+    egfr_labels = ["≥90 (G1)", "60–89 (G2)", "45–59 (G3a)", "30–44 (G3b)", "<30 (G4–5)"]
     ax.set_yticks(range(n_egfr))
-    ax.set_yticklabels([lbl for _, lbl in EGFR_STRATA], fontsize=6.5)
-    ax.set_ylabel("eGFR (mL/min/1.73m²)")
+    ax.set_yticklabels(egfr_labels, fontsize=6.5)
+    ax.set_ylabel("eGFR (mL/min/1.73m²)", fontsize=7)
+
+    # White grid lines
+    for i in range(1, n_egfr):
+        ax.axhline(i - 0.5, color="white", lw=0.8)
+    for i in range(1, n_ep):
+        ax.axvline(i - 0.5, color="white", lw=0.8)
 
     for spine in ax.spines.values():
         spine.set_visible(True)
-        spine.set_linewidth(0.3)
-        spine.set_color("#999")
+        spine.set_linewidth(0.5)
+        spine.set_color("#666")
 
     return norm, cmap
 
 
 # ====================================================================
-# MAIN FIGURE
+# MAIN
 # ====================================================================
 def main():
     print("\n── eFig: Secondary endpoints × eGFR strata ──")
     df = load_hte()
 
-    fig = plt.figure(figsize=(7.205, 5.5))
-    gs = fig.add_gridspec(1, 2, width_ratios=[1.3, 1], wspace=0.35)
+    fig = plt.figure(figsize=(7.205, 6.5), constrained_layout=False)
+    gs = fig.add_gridspec(
+        1,
+        2,
+        width_ratios=[1.1, 1],
+        wspace=0.55,
+        left=0.08,
+        right=0.88,
+        top=0.93,
+        bottom=0.07,
+    )
 
-    # Panel A: Forest
     ax_forest = fig.add_subplot(gs[0])
     make_forest(ax_forest, df)
     ax_forest.text(
-        -0.15,
-        1.02,
+        -0.12,
+        1.03,
         "a",
         transform=ax_forest.transAxes,
         fontsize=11,
         fontweight="bold",
         va="top",
     )
+    ax_forest.set_title("eGFR-stratified ORs by endpoint", fontsize=7.5, pad=10)
 
-    # Panel B: Heatmap
     ax_hm = fig.add_subplot(gs[1])
     norm, cmap = make_heatmap(ax_hm, df)
     ax_hm.text(
-        -0.22,
-        1.02,
+        -0.28,
+        1.03,
         "b",
         transform=ax_hm.transAxes,
         fontsize=11,
         fontweight="bold",
         va="top",
     )
-    ax_hm.set_title("MIMIC-IV: OR by eGFR × Endpoint", fontsize=7, pad=8)
 
-    # Colorbar
-    cbar_ax = fig.add_axes([0.93, 0.15, 0.015, 0.7])
+    cbar_ax = fig.add_axes([0.90, 0.15, 0.015, 0.65])
     sm = mpl.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, cax=cbar_ax)
@@ -341,12 +360,12 @@ def main():
     cbar.ax.set_ylabel("Odds Ratio", fontsize=6, rotation=270, labelpad=8)
     cbar.outline.set_linewidth(0.3)
 
-    # Footnote
     fig.text(
         0.5,
-        -0.02,
-        "● P < 0.05  ○ P ≥ 0.05  ◆ Overall  |  "
-        "Blue = protective  Red = harmful  |  MIMIC-IV, n = 6,354 pairs",
+        0.01,
+        "● P < 0.05   ○ P ≥ 0.05   ◆ Overall   |   "
+        "Blue = protective   Red = harmful   |   "
+        "MIMIC-IV, 6,354 matched pairs   |   * P < 0.05 in heatmap",
         ha="center",
         fontsize=5,
         color="#666",
