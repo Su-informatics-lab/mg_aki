@@ -179,6 +179,10 @@ def merge_labs(trt, ctl, tag):
         trt = trt.merge(last_val, on="pid", how="left")
         ctl = ctl.merge(last_val, on="pid", how="left")
 
+    # Lactate missing indicator (matches 02_psm.R extract_labs logic)
+    trt["last_lactate_missing"] = trt["last_lactate"].isna().astype(int)
+    ctl["last_lactate_missing"] = ctl["last_lactate"].isna().astype(int)
+
     # 2. Descriptive labs: first postop value with range filter
     for lab_name in ["hemoglobin", "wbc", "platelets", "albumin"]:
         sub = labs_all[labs_all.lab_name == lab_name].copy()
