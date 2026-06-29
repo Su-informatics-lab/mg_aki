@@ -330,8 +330,7 @@ if (!is.null(pri_pairs) && nrow(pri_pairs) > 0) {
   npairs <- nrow(pri_pairs)
   cat(sprintf("  Pairs: %d\n", npairs))
 
-  # Pre-index Cr data and patient info
-  base_cr_map <- setNames(all_pts$first_cr, as.character(all_pts$pid))
+  # Pre-index patient info (NOT Cr — baseline must be computed per-pair from T0)
   rrt_map <- if ("rrt_offset_h" %in% names(all_pts))
     setNames(all_pts$rrt_offset_h, as.character(all_pts$pid)) else NULL
   death_map <- if ("death_offset_h" %in% names(all_pts))
@@ -344,7 +343,10 @@ if (!is.null(pri_pairs) && nrow(pri_pairs) > 0) {
     tp <- as.character(pri_pairs$trt_pid[k])
     cp <- as.character(pri_pairs$ctl_pid[k])
     t0 <- pri_pairs$t_mg[k]
-    bl_t <- base_cr_map[tp]; bl_c <- base_cr_map[cp]
+
+    # Correct baseline: last Cr before T0 (same as DiD and 03_hte.R)
+    bl_t <- find_cr_pre(cr_list[[tp]], t0)[1]
+    bl_c <- find_cr_pre(cr_list[[cp]], t0)[1]
 
     cr_t <- cr_list[[tp]]; cr_c <- cr_list[[cp]]
     cr_t48 <- if (!is.null(cr_t)) cr_t[cr_t$offset_h > t0 & cr_t$offset_h <= t0 + 48, ] else data.frame()
