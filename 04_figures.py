@@ -181,7 +181,14 @@ def fig3_egfr_forest():
         "eGFR_30-44",
         "eGFR<30",
     ]
-    strata_labels = ["Overall", "≥90", "60–89", "45–59", "30–44", "<30"]
+    strata_labels = [
+        "Overall",
+        "eGFR ≥90",
+        "eGFR 60–89",
+        "eGFR 45–59",
+        "eGFR 30–44",
+        "eGFR <30",
+    ]
     n_strata = len(strata_order)
 
     fig, axes = plt.subplots(1, 4, figsize=(W_DOUBLE, W_DOUBLE * 0.55), sharey=True)
@@ -275,10 +282,10 @@ def fig4_timecourse():
         ].sort_values("target_h")
         if len(sub) == 0:
             continue
-        x = sub.target_h.values
-        y = sub.did.values * 1000  # convert to ×10⁻³ mg/dL for readability
-        lo = sub.ci_lo.values * 1000
-        hi = sub.ci_hi.values * 1000
+        x = np.concatenate([[0], sub.target_h.values])
+        y = np.concatenate([[0], sub.did.values * 1000])
+        lo = np.concatenate([[0], sub.ci_lo.values * 1000])
+        hi = np.concatenate([[0], sub.ci_hi.values * 1000])
 
         ax.plot(
             x,
@@ -307,19 +314,9 @@ def fig4_timecourse():
     ax.axhline(0, color=BLACK, linewidth=0.5, linestyle="--")
     ax.set_xlabel("Hours from T₀")
     ax.set_ylabel("ΔCr DiD (×10⁻³ mg/dL)")
-    ax.set_xticks([6, 12, 18, 24, 30, 36, 42, 48])
+    ax.set_xticks([0, 6, 12, 18, 24, 30, 36, 42, 48])
+    ax.set_xlim(0, 50)
     ax.legend(loc="lower left")
-
-    # PK annotation
-    ax.annotate(
-        "Mg PK\nwindow",
-        xy=(9, 0),
-        xytext=(9, max(ax.get_ylim()) * 0.7),
-        fontsize=5,
-        color=GRAY,
-        ha="center",
-        arrowprops=dict(arrowstyle="->", color=GRAY, lw=0.5),
-    )
 
     save(fig, "fig4_timecourse")
 
@@ -387,14 +384,22 @@ def fig5_egfr_mg_heatmap():
 
             mat = np.full((len(mg_bins), len(egfr_bins)), np.nan)
             pmat = np.full_like(mat, np.nan)
+            nmat = np.full((len(mg_bins), len(egfr_bins)), 0)
+            rmat_t = np.full_like(mat, np.nan)  # rate_trt
+            rmat_c = np.full_like(mat, np.nan)  # rate_ctl
             for mi, mg in enumerate(mg_bins):
                 for ei, eg in enumerate(egfr_bins):
                     row = sub[(sub.mg_strat == mg) & (sub.egfr_strat == eg)]
                     if len(row) > 0:
-                        mat[mi, ei] = row.iloc[0]["or"]
-                        pmat[mi, ei] = row.iloc[0]["p"]
+                        r = row.iloc[0]
+                        mat[mi, ei] = r["or"]
+                        pmat[mi, ei] = r["p"]
+                        nmat[mi, ei] = int(r["n"])
+                        rmat_t[mi, ei] = r["rate_trt"]
+                        rmat_c[mi, ei] = r["rate_ctl"]
 
             import matplotlib.colors as mcolors
+            from matplotlib.patches import Rectangle
 
             norm = mcolors.TwoSlopeNorm(vmin=0.1, vcenter=1.0, vmax=8.0)
             im = ax.imshow(mat, cmap="RdBu_r", norm=norm, aspect="auto")
@@ -402,17 +407,35 @@ def fig5_egfr_mg_heatmap():
                 for ei in range(len(egfr_bins)):
                     v = mat[mi, ei]
                     p = pmat[mi, ei]
+                    n = nmat[mi, ei]
+                    rt = rmat_t[mi, ei]
+                    rc = rmat_c[mi, ei]
                     if pd.isna(v):
                         continue
+                    # Hatch if fewer than 20 events in either arm
+                    events_trt = n * rt if not pd.isna(rt) else 0
+                    events_ctl = n * rc if not pd.isna(rc) else 0
+                    if min(events_trt, events_ctl) < 20:
+                        rect = Rectangle(
+                            (ei - 0.5, mi - 0.5),
+                            1,
+                            1,
+                            fill=False,
+                            hatch="///",
+                            linewidth=0,
+                            edgecolor="gray",
+                            alpha=0.5,
+                        )
+                        ax.add_patch(rect)
                     sig = "*" if not pd.isna(p) and p < 0.05 else ""
                     txt_color = "white" if (v < 0.3 or v > 4.0) else "black"
                     ax.text(
                         ei,
                         mi,
-                        f"{v:.2f}{sig}",
+                        f"{v:.2f}{sig}\nn={n}",
                         ha="center",
                         va="center",
-                        fontsize=5,
+                        fontsize=4.5,
                         color=txt_color,
                         fontweight="bold",
                     )
@@ -444,16 +467,101 @@ def fig5_egfr_mg_heatmap():
 # ═══════════════════════════════════════════════════════════════════
 def efig1_love():
     """Love plots: 3 separate panels for primary/sens_a/sens_b."""
+    # Per-spec variable lists matching 02_psm.R SPECS
+    PS_BASE = [
+        "age",
+        "is_female",
+        "bmi",
+        "surg_cabg",
+        "surg_valve",
+        "surg_combined",
+        "heart_failure",
+        "hypertension",
+        "diabetes",
+        "ckd",
+        "copd",
+        "pvd",
+        "stroke",
+        "liver_disease",
+        "egfr",
+    ]
+    SPEC_VARS = {
+        "primary_yet_untreated": PS_BASE
+        + ["last_calcium", "last_lactate", "last_lactate_missing", "last_heartrate"],
+        "sens_a_yet_untreated": PS_BASE
+        + [
+            "last_magnesium",
+            "last_potassium",
+            "last_calcium",
+            "last_lactate",
+            "last_lactate_missing",
+            "last_heartrate",
+        ],
+        "sens_b_yet_untreated": PS_BASE
+        + [
+            "first_calcium",
+            "first_lactate",
+            "first_lactate_missing",
+            "first_heartrate",
+        ],
+    }
     specs = [
         ("primary_yet_untreated", "Primary (19 var, no K⁺/Mg)"),
         ("sens_a_yet_untreated", "Sensitivity A (21 var, +K⁺/Mg)"),
         ("sens_b_yet_untreated", "Sensitivity B (19 var, FIRST labs)"),
     ]
-    # Only do MIMIC for love plot (primary database)
     db = "mimic"
     all_pts = pd.read_csv(os.path.join(RESULTS, f"did_all_{db}.csv"))
+    all_pts["_pid_str"] = all_pts.pid.astype(str)
 
-    fig, axes = plt.subplots(1, 3, figsize=(W_DOUBLE, W_DOUBLE * 0.55), sharey=True)
+    # Compute time-varying labs from did_labs_all
+    labs_path = os.path.join(RESULTS, f"did_labs_all_{db}.csv")
+    pid_col_l = "stay_id"
+    if os.path.exists(labs_path):
+        labs_raw = pd.read_csv(labs_path)
+        if "patientunitstayid" in labs_raw.columns:
+            pid_col_l = "patientunitstayid"
+        labs_raw["pid"] = labs_raw[pid_col_l].astype(str)
+        lab_names = ["magnesium", "potassium", "calcium", "lactate", "heartrate"]
+        # For each patient, compute last and first values before T0
+        mg_map = all_pts.set_index("_pid_str")["mg_offset_h"].to_dict()
+        for prefix, ascending in [("last", False), ("first", True)]:
+            for ln in lab_names:
+                sub = labs_raw[labs_raw.lab_name == ln].copy()
+                if len(sub) == 0:
+                    continue
+                sub["mg_h"] = sub.pid.map(mg_map)
+                # Keep only measurements before T0 (or all for controls)
+                sub = sub[
+                    (sub.offset_h >= 0) & (sub.mg_h.isna() | (sub.offset_h < sub.mg_h))
+                ]
+                if ascending:
+                    sub = sub.sort_values("offset_h").groupby("pid").first()
+                else:
+                    sub = (
+                        sub.sort_values("offset_h", ascending=False)
+                        .groupby("pid")
+                        .first()
+                    )
+                col = f"{prefix}_{ln}"
+                val_map = sub["value"].to_dict()
+                all_pts[col] = all_pts._pid_str.map(val_map)
+        # Lactate missing indicator
+        for prefix in ["last", "first"]:
+            col = f"{prefix}_lactate"
+            miss_col = f"{prefix}_lactate_missing"
+            all_pts[miss_col] = all_pts[col].isna().astype(float)
+        print("    Time-varying labs computed from did_labs_all")
+
+    fig, axes = plt.subplots(1, 3, figsize=(W_DOUBLE, W_DOUBLE * 0.65), sharey=False)
+
+    def compute_smd(x1, x0):
+        m1, m0 = x1.mean(), x0.mean()
+        sp = np.sqrt((x1.var() + x0.var()) / 2)
+        return abs(m1 - m0) / sp if sp > 1e-10 else 0
+
+    raw_trt = all_pts[all_pts.treated == 1]
+    raw_ctl = all_pts[all_pts.treated == 0]
 
     for si, (spec_tag, spec_label) in enumerate(specs):
         ax = axes[si]
@@ -466,41 +574,13 @@ def efig1_love():
         pairs = pd.read_csv(pairs_path)
         trt_pids = set(pairs.trt_pid.astype(str))
         ctl_pids = set(pairs.ctl_pid.astype(str))
-        all_pts["_pid_str"] = all_pts.pid.astype(str)
         trt = all_pts[all_pts._pid_str.isin(trt_pids)]
         ctl = all_pts[all_pts._pid_str.isin(ctl_pids)]
 
-        # Also compute raw (unmatched) SMDs
-        raw_trt = all_pts[all_pts.treated == 1]
-        raw_ctl = all_pts[all_pts.treated == 0]
-
-        # PS covariates
-        ps_vars = [
-            "age",
-            "is_female",
-            "bmi",
-            "surg_cabg",
-            "surg_valve",
-            "surg_combined",
-            "heart_failure",
-            "hypertension",
-            "diabetes",
-            "ckd",
-            "copd",
-            "pvd",
-            "stroke",
-            "liver_disease",
-            "egfr",
-        ]
-
-        def compute_smd(x1, x0):
-            m1, m0 = x1.mean(), x0.mean()
-            sp = np.sqrt((x1.var() + x0.var()) / 2)
-            return abs(m1 - m0) / sp if sp > 1e-10 else 0
-
+        ps_vars = SPEC_VARS.get(spec_tag, PS_BASE)
         smds_raw, smds_matched, labels = [], [], []
         for v in ps_vars:
-            if v not in trt.columns:
+            if v not in all_pts.columns:
                 continue
             sr = compute_smd(
                 raw_trt[v].dropna().astype(float), raw_ctl[v].dropna().astype(float)
@@ -512,7 +592,6 @@ def efig1_love():
             smds_matched.append(sm)
             labels.append(v)
 
-        # Sort by matched SMD descending
         idx = np.argsort(smds_matched)[::-1]
         y_pos = range(len(labels))
 
@@ -539,7 +618,7 @@ def efig1_love():
         ax.set_yticklabels([labels[i] for i in idx], fontsize=5)
         ax.set_xlabel("|SMD|", fontsize=6)
         ax.set_title(spec_label, fontsize=6)
-        ax.set_xlim(-0.02, max(max(smds_raw), 0.5) + 0.05)
+        ax.set_xlim(-0.02, max(max(smds_raw) if smds_raw else 0.5, 0.5) + 0.05)
 
         n_viol = sum(1 for s in smds_matched if s > 0.1)
         ax.text(
@@ -614,14 +693,15 @@ def efig4_hte_forest():
         ("Overall", "Overall"),
         ("Age < 65", "Age <65"),
         ("Age >= 65", "Age ≥65"),
-        ("eGFR >= 60", "eGFR ≥60"),
-        ("eGFR < 60", "eGFR <60"),
+        ("eGFR >= 90", "eGFR ≥90 (G1)"),
+        ("eGFR 60-89", "eGFR 60–89 (G2)"),
+        ("eGFR 45-59", "eGFR 45–59 (G3a)"),
+        ("eGFR 30-44", "eGFR 30–44 (G3b)"),
+        ("eGFR < 30", "eGFR <30 (G4–5)"),
         ("CABG", "CABG"),
         ("Non-CABG", "Non-CABG"),
         ("Diabetes", "Diabetes"),
         ("No diabetes", "No diabetes"),
-        ("CKD", "CKD"),
-        ("No CKD", "No CKD"),
         ("Heart failure", "Heart failure"),
         ("No HF", "No HF"),
         ("BMI >= 30", "BMI ≥30"),
