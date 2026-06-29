@@ -250,6 +250,25 @@ def get_rrt_mimic(stay_ids, icu_root, cardiac_df):
             print(f"    RRT inputevents (CRRT): {len(df):,} rows")
         finally:
             con.close()
+    # 3. chartevents: Hemodialysis Output (adds ~988 patients)
+    ce_path = _resolve(icu_root, "chartevents")
+    if ce_path and hasattr(cfg, "RRT_CHART_ITEMS_MIMIC") and cfg.RRT_CHART_ITEMS_MIMIC:
+        con = duckdb.connect()
+        try:
+            pid_df = pd.DataFrame({"_pid": pd.array(list(stay_ids), dtype="int64")})
+            con.register("_pf", pid_df)
+            items = ",".join(str(i) for i in RRT_CHART_ITEMS_MIMIC)
+            df = con.execute(
+                f"SELECT stay_id, charttime AS starttime FROM read_csv_auto('{ce_path}', "
+                f"header=true, ignore_errors=true) "
+                f"WHERE stay_id IN (SELECT _pid FROM _pf) AND itemid IN ({items})"
+            ).df()
+            df.columns = df.columns.str.lower()
+            if len(df) > 0:
+                frames.append(df[["stay_id", "starttime"]])
+            print(f"    RRT chartevents (HD Output): {len(df):,} rows")
+        finally:
+            con.close()
     if not frames:
         return pd.DataFrame(columns=["stay_id", "rrt_offset_h"])
     rrt = pd.concat(frames).drop_duplicates()

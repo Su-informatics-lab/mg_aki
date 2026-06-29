@@ -56,11 +56,19 @@ RRT_PROCEDURE_ITEMS_MIMIC = [
 ]
 # MIMIC inputevents: CRRT replacement/dialysate items
 # (presence = CRRT running)
+# VERIFIED via probe_schema.py 2026-06-29:
+#   227711 (Drain Removed) and 225183 (Current Goal) were WRONG — removed
+#   230044 (Heparin Sodium CRRT-Prefilter) added as genuine CRRT marker
 RRT_INPUT_ITEMS_MIMIC = [
-    227536,  # KCl (CRRT)
-    227525,  # Calcium Gluconate (CRRT)
-    227711,  # CRRT Filter Change
-    225183,  # Potassium Chloride (CRRT)
+    227536,  # KCl (CRRT) — 72,419 rows
+    227525,  # Calcium Gluconate (CRRT) — 47,378 rows
+    230044,  # Heparin Sodium (CRRT-Prefilter)
+]
+
+# MIMIC chartevents: Hemodialysis Output (presence = HD running)
+# VERIFIED: adds 988 patients missed by procedureevents+inputevents
+RRT_CHART_ITEMS_MIMIC = [
+    226499,  # Hemodialysis Output
 ]
 
 # All lab items needed for DuckDB filtering
