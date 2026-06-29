@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-05_replicate_xiong_koh.py — Replicate prior Mg-AKI associations
+06_replicate_xiong_koh.py — Replicate prior Mg-AKI associations
 
 Purpose:
   Show that Xiong 2023 (higher post-op Mg → more AKI) and Koh 2022
@@ -8,8 +8,9 @@ Purpose:
   AND that eGFR stratification resolves the apparent contradiction.
 
 Reads (patient-level, never committed):
-  results/did_all_{db}.csv         — full cohort with covariates
-  results/did_labs_all_{db}.csv    — individual lab measurements (optional)
+  results/did_all_{db}.csv       — demographics, comorbidities, first_cr, egfr
+  results/did_cr_all_{db}.csv    — creatinine measurements (for AKI computation)
+  results/did_labs_all_{db}.csv  — Mg measurements
 
 Outputs (aggregate only, safe to commit):
   results/replication_mg_quartile_{db}.csv  — AKI rate by Mg quartile × eGFR
@@ -35,205 +36,262 @@ RESULTS = os.path.expanduser("~/mg_aki/results")
 DBS = ["mimic", "eicu"]
 
 
-def load_cohort(db):
-    """Load full cohort with covariates and outcomes."""
-    path = os.path.join(RESULTS, f"did_all_{db}.csv")
-    if not os.path.exists(path):
-        print(f"  ✗ {path} not found — skipping {db}")
-        return None
-    df = pd.read_csv(path)
-    print(
-        f"  Loaded {db}: {len(df):,} patients, "
-        f"{df.columns.tolist()[:5]}... ({len(df.columns)} cols)"
+# ═══════════════════════════════════════════════════════════════════
+#  COMPUTE AKI FROM CREATININE
+# ═══════════════════════════════════════════════════════════════════
+def compute_aki(did_all, did_cr, db):
+    """
+    Compute 7-day AKI (KDIGO ≥1) for each patient from creatinine
+    trajectories. Uses first_cr from did_all as baseline.
+
+    KDIGO criteria:
+      - Absolute: any Cr ≥ baseline + 0.3 within 48h of ICU admission
+      - Relative: any Cr ≥ 1.5 × baseline within 168h (7d) of admission
+
+    Returns: Series indexed by pid with 0/1 AKI flag.
+    """
+    pid_col = "stay_id" if "stay_id" in did_cr.columns else "pid"
+    if pid_col == "stay_id":
+        did_cr = did_cr.rename(columns={"stay_id": "pid"})
+    if "patientunitstayid" in did_cr.columns:
+        did_cr = did_cr.rename(columns={"patientunitstayid": "pid"})
+
+    # Map baseline creatinine
+    baseline = did_all.set_index("pid")["first_cr"].to_dict()
+
+    # Filter: only first 7 days (168h)
+    cr = did_cr[did_cr.offset_h.between(0, 168)].copy()
+    cr["baseline"] = cr.pid.map(baseline)
+    cr = cr.dropna(subset=["baseline", "labresult"])
+
+    # Absolute criterion: ΔCr ≥ 0.3 within 48h
+    cr_48 = cr[cr.offset_h <= 48]
+    abs_hit = cr_48.groupby("pid").apply(
+        lambda g: int((g.labresult >= g.baseline + 0.3).any())
     )
-    return df
+
+    # Relative criterion: Cr ≥ 1.5× baseline within 168h
+    rel_hit = cr.groupby("pid").apply(
+        lambda g: int((g.labresult >= g.baseline * 1.5).any())
+    )
+
+    # Combine
+    aki = (
+        abs_hit.reindex(did_all.pid, fill_value=0)
+        | rel_hit.reindex(did_all.pid, fill_value=0)
+    ).astype(int)
+    aki.name = "aki_7d"
+
+    n_aki = aki.sum()
+    rate = n_aki / len(aki)
+    print(f"  AKI computed: {n_aki:,}/{len(aki):,} = {rate:.3f}")
+    return aki
 
 
-def compute_first_mg(db, cohort):
+# ═══════════════════════════════════════════════════════════════════
+#  EXTRACT Mg VALUES FROM LABS
+# ═══════════════════════════════════════════════════════════════════
+def extract_mg(did_all, labs_path, db):
     """
-    Compute first post-admission Mg from did_labs_all if available.
-    Falls back to last_magnesium from cohort if labs file missing.
+    Extract first and last post-admission Mg measurement per patient.
+    Returns DataFrame with pid, first_mg, last_mg.
     """
-    labs_path = os.path.join(RESULTS, f"did_labs_all_{db}.csv")
     if not os.path.exists(labs_path):
-        print(f"  did_labs_all not found — using last_magnesium only")
+        print(f"  ✗ Labs file not found: {labs_path}")
         return None
 
     labs = pd.read_csv(labs_path)
-    pid_col = "patientunitstayid" if "patientunitstayid" in labs.columns else "stay_id"
-    mg_labs = labs[labs.lab_name == "magnesium"].copy()
-    if len(mg_labs) == 0:
-        print(f"  No magnesium measurements in labs — using last_magnesium")
+    pid_col = (
+        "patientunitstayid"
+        if "patientunitstayid" in labs.columns
+        else "stay_id" if "stay_id" in labs.columns else "pid"
+    )
+
+    mg = labs[labs.lab_name == "magnesium"].copy()
+    if len(mg) == 0:
+        print("  ✗ No magnesium measurements in labs")
         return None
 
-    # First Mg measurement after ICU admission (offset_h ≥ 0)
-    mg_labs = mg_labs[mg_labs.offset_h >= 0].sort_values("offset_h")
-    first_mg = mg_labs.groupby(pid_col).first().reset_index()
-    first_mg = first_mg[[pid_col, "value"]].rename(
-        columns={pid_col: "pid", "value": "first_magnesium"}
+    mg = mg.rename(columns={pid_col: "pid"})
+    mg = mg[mg.offset_h >= 0].sort_values("offset_h")
+
+    # First Mg (closest to Koh's "pre-op" — earliest ICU measurement)
+    first_mg = (
+        mg.groupby("pid").first()[["value"]].rename(columns={"value": "first_mg"})
     )
-    print(f"  Computed first_magnesium for {len(first_mg):,} patients")
-    return first_mg
+
+    # Last Mg (closest to treatment decision — Xiong-like)
+    last_mg = mg.groupby("pid").last()[["value"]].rename(columns={"value": "last_mg"})
+
+    result = first_mg.join(last_mg, how="outer")
+    print(
+        f"  Mg extracted: first={result.first_mg.notna().sum():,}, "
+        f"last={result.last_mg.notna().sum():,}"
+    )
+    return result
 
 
-def assign_quartiles(series, prefix="Q"):
-    """Assign quartile labels. Returns (labels, cut_points)."""
+# ═══════════════════════════════════════════════════════════════════
+#  CROSS-TAB: AKI BY MG QUARTILE × eGFR
+# ═══════════════════════════════════════════════════════════════════
+def crosstab(df, mg_col, outcome="aki_7d"):
+    """AKI rate by Mg quartile × eGFR stratum."""
+    sub = df.dropna(subset=[mg_col, outcome, "egfr"]).copy()
+    if len(sub) < 100:
+        print(f"    Skipping {mg_col}: only {len(sub)} complete cases")
+        return pd.DataFrame()
+
     try:
-        labels, bins = pd.qcut(series, 4, labels=False, retbins=True)
-        q_labels = []
-        for i in range(4):
-            lo = f"{bins[i]:.2f}"
-            hi = f"{bins[i+1]:.2f}"
-            q_labels.append(f"{prefix}{i+1} [{lo}-{hi}]")
-        return labels.map(lambda x: q_labels[int(x)] if pd.notna(x) else np.nan), bins
-    except Exception as e:
-        print(f"    Quartile computation failed: {e}")
-        return pd.Series([np.nan] * len(series)), None
+        sub["mg_q"], bins = pd.qcut(
+            sub[mg_col], 4, labels=["Q1", "Q2", "Q3", "Q4"], retbins=True
+        )
+    except ValueError:
+        sub["mg_q"], bins = pd.qcut(
+            sub[mg_col].rank(method="first"),
+            4,
+            labels=["Q1", "Q2", "Q3", "Q4"],
+            retbins=True,
+        )
 
+    egfr_cuts = {
+        "Overall": sub.index,
+        "eGFR>=60": sub[sub.egfr >= 60].index,
+        "eGFR_45-59": sub[sub.egfr.between(45, 59.999)].index,
+        "eGFR<45": sub[sub.egfr < 45].index,
+    }
 
-def crosstab_rates(df, mg_col, outcome, egfr_strata):
-    """
-    Compute AKI rates by Mg quartile × eGFR stratum.
-    Returns a DataFrame with one row per (quartile, eGFR_stratum).
-    """
     rows = []
-    df = df.dropna(subset=[mg_col, outcome])
-    q_labels, bins = assign_quartiles(df[mg_col])
-    df = df.copy()
-    df["mg_quartile"] = q_labels
-
-    for stratum_name, mask in egfr_strata.items():
-        sub = df[mask(df)] if callable(mask) else df
-        for q in sorted(df["mg_quartile"].dropna().unique()):
-            qsub = sub[sub.mg_quartile == q]
-            n = len(qsub)
-            events = qsub[outcome].sum() if n > 0 else 0
+    for stratum, idx in egfr_cuts.items():
+        s = sub.loc[idx]
+        for q in ["Q1", "Q2", "Q3", "Q4"]:
+            qs = s[s.mg_q == q]
+            n = len(qs)
+            events = int(qs[outcome].sum()) if n > 0 else 0
             rate = events / n if n > 0 else np.nan
+            # Get Mg range for this quartile
+            qvals = sub[sub.mg_q == q][mg_col]
+            mg_range = f"{qvals.min():.2f}-{qvals.max():.2f}" if len(qvals) > 0 else ""
             rows.append(
                 {
                     "mg_quartile": q,
-                    "egfr_stratum": stratum_name,
+                    "mg_range": mg_range,
+                    "egfr_stratum": stratum,
                     "n": n,
-                    "events": int(events),
-                    "rate": round(rate, 4) if pd.notna(rate) else np.nan,
+                    "events": events,
+                    "rate": round(rate, 4),
                 }
             )
 
     return pd.DataFrame(rows)
 
 
-def logistic_regression(df, mg_col, outcome, covariates, label=""):
-    """
-    Multivariable logistic regression: outcome ~ mg_col + covariates.
-    Returns a dict with OR, CI, P for the Mg coefficient.
-    """
+# ═══════════════════════════════════════════════════════════════════
+#  LOGISTIC REGRESSION
+# ═══════════════════════════════════════════════════════════════════
+def run_logistic(df, mg_col, outcome, covariates, label):
+    """Multivariable logistic: outcome ~ mg + covariates. Returns dict."""
     try:
         import statsmodels.api as sm
     except ImportError:
-        print("  statsmodels not available — skipping regression")
+        print("  ✗ statsmodels not available")
         return None
 
-    sub = df.dropna(subset=[mg_col, outcome] + covariates).copy()
+    cols = [mg_col, outcome] + covariates
+    sub = df.dropna(subset=cols).copy()
     if len(sub) < 100:
         return {
             "label": label,
             "n": len(sub),
             "or": np.nan,
-            "ci_lo": np.nan,
-            "ci_hi": np.nan,
             "p": np.nan,
-            "note": "insufficient data",
+            "note": f"n={len(sub)} too small",
         }
 
-    X = sub[[mg_col] + covariates].astype(float)
-    X = sm.add_constant(X)
+    X = sm.add_constant(sub[[mg_col] + covariates].astype(float))
     y = sub[outcome].astype(float)
 
     try:
-        model = sm.Logit(y, X).fit(disp=0, maxiter=100)
-        coef = model.params[mg_col]
-        se = model.bse[mg_col]
-        p = model.pvalues[mg_col]
-        or_val = np.exp(coef)
-        ci_lo = np.exp(coef - 1.96 * se)
-        ci_hi = np.exp(coef + 1.96 * se)
+        fit = sm.Logit(y, X).fit(disp=0, maxiter=100)
+        b = fit.params[mg_col]
+        se = fit.bse[mg_col]
         return {
             "label": label,
             "n": len(sub),
-            "or": round(or_val, 4),
-            "ci_lo": round(ci_lo, 4),
-            "ci_hi": round(ci_hi, 4),
-            "p": round(p, 6),
+            "or": round(np.exp(b), 4),
+            "ci_lo": round(np.exp(b - 1.96 * se), 4),
+            "ci_hi": round(np.exp(b + 1.96 * se), 4),
+            "p": round(fit.pvalues[mg_col], 6),
         }
     except Exception as e:
         return {
             "label": label,
             "n": len(sub),
             "or": np.nan,
-            "ci_lo": np.nan,
-            "ci_hi": np.nan,
             "p": np.nan,
-            "note": str(e),
+            "note": str(e)[:80],
         }
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  MAIN PER-DB
+# ═══════════════════════════════════════════════════════════════════
 def run_db(db):
-    """Run full replication for one database."""
-    print(f"\n{'=' * 60}")
-    print(f"  {db.upper()}")
-    print(f"{'=' * 60}")
+    print(f"\n{'=' * 60}\n  {db.upper()}\n{'=' * 60}")
 
-    df = load_cohort(db)
-    if df is None:
-        return
+    # ── Load data ──
+    all_path = os.path.join(RESULTS, f"did_all_{db}.csv")
+    cr_path = os.path.join(RESULTS, f"did_cr_all_{db}.csv")
+    labs_path = os.path.join(RESULTS, f"did_labs_all_{db}.csv")
 
-    # Identify pid column
-    pid_col = (
-        "pid"
-        if "pid" in df.columns
-        else ("patientunitstayid" if "patientunitstayid" in df.columns else "stay_id")
-    )
+    for p, name in [(all_path, "did_all"), (cr_path, "did_cr_all")]:
+        if not os.path.exists(p):
+            print(f"  ✗ {name} not found at {p}")
+            return
 
-    # ── Mg variables ──
-    # last_magnesium: closest to T0 (Xiong-like: post-op, close to treatment)
-    mg_cols = {}
-    if "last_magnesium" in df.columns:
-        mg_cols["last_magnesium"] = "Post-op Mg (closest to T0)"
-        n_avail = df["last_magnesium"].notna().sum()
-        print(f"  last_magnesium available: {n_avail:,}/{len(df):,}")
+    did_all = pd.read_csv(all_path)
+    did_cr = pd.read_csv(cr_path)
+    print(f"  did_all: {len(did_all):,} patients")
+    print(f"  did_cr:  {len(did_cr):,} measurements")
 
-    # Try to compute first_magnesium from labs
-    first_mg = compute_first_mg(db, df)
-    if first_mg is not None:
-        df["_pid_merge"] = df[pid_col].astype(str)
-        first_mg["pid"] = first_mg["pid"].astype(str)
-        df = df.merge(
-            first_mg,
-            left_on="_pid_merge",
-            right_on="pid",
-            how="left",
-            suffixes=("", "_fm"),
-        )
-        mg_cols["first_magnesium"] = "First post-admission Mg (Koh-like)"
-        n_avail = df["first_magnesium"].notna().sum()
-        print(f"  first_magnesium available: {n_avail:,}/{len(df):,}")
+    # Normalise cr column name
+    if "labresult" not in did_cr.columns:
+        for alt in ["value", "creatinine", "cr"]:
+            if alt in did_cr.columns:
+                did_cr = did_cr.rename(columns={alt: "labresult"})
+                break
+
+    # ── Compute AKI ──
+    aki = compute_aki(did_all, did_cr, db)
+    did_all = did_all.set_index("pid")
+    did_all["aki_7d"] = aki
+    did_all = did_all.reset_index()
+
+    # ── Extract Mg ──
+    mg_df = extract_mg(did_all, labs_path, db)
+    if mg_df is not None:
+        did_all = did_all.set_index("pid").join(mg_df, how="left").reset_index()
+
+    # Determine which Mg columns are available
+    mg_cols = []
+    for c, label in [
+        ("first_mg", "First post-admission Mg"),
+        ("last_mg", "Last Mg before discharge/treatment"),
+    ]:
+        if c in did_all.columns and did_all[c].notna().sum() > 100:
+            mg_cols.append((c, label))
+            desc = did_all[c].describe()
+            print(
+                f"  {label}: median={desc['50%']:.2f}, "
+                f"IQR=[{desc['25%']:.2f}-{desc['75%']:.2f}], "
+                f"n={int(desc['count']):,}"
+            )
 
     if not mg_cols:
-        print("  ✗ No Mg variable available — skipping")
+        print("  ✗ No Mg variable available")
         return
 
-    # ── AKI outcome ──
-    outcome = "aki1_7d"
-    if outcome not in df.columns:
-        # Try alternative names
-        for alt in ["aki_7d", "aki1_7d", "kdigo1_7d"]:
-            if alt in df.columns:
-                outcome = alt
-                break
-    print(f"  Outcome: {outcome} (rate = {df[outcome].mean():.3f})")
-
-    # ── Covariates for regression (Xiong-style) ──
-    covar_candidates = [
+    # ── Covariates ──
+    covar_pool = [
         "age",
         "is_female",
         "bmi",
@@ -250,141 +308,108 @@ def run_db(db):
         "surg_valve",
         "surg_combined",
     ]
-    covariates = [c for c in covar_candidates if c in df.columns]
-    print(f"  Covariates for regression: {len(covariates)}")
-
-    # ── eGFR strata for cross-tabulation ──
-    egfr_strata = {
-        "Overall": lambda d: pd.Series([True] * len(d), index=d.index),
-        "eGFR >= 60": lambda d: d["egfr"] >= 60,
-        "eGFR 45-59": lambda d: (d["egfr"] >= 45) & (d["egfr"] < 60),
-        "eGFR < 45": lambda d: d["egfr"] < 45,
-    }
+    covariates = [c for c in covar_pool if c in did_all.columns]
 
     # ═══════════════════════════════════════════════════════════
-    # 1. CROSS-TABULATION: AKI rate by Mg quartile × eGFR
+    #  1. CROSS-TABS
     # ═══════════════════════════════════════════════════════════
     all_xtab = []
-    for mg_col, mg_label in mg_cols.items():
-        print(f"\n  Cross-tab: {mg_label}")
-        xtab = crosstab_rates(df, mg_col, outcome, egfr_strata)
-        xtab["mg_variable"] = mg_label
-        xtab["db"] = db.upper()
-        all_xtab.append(xtab)
-        # Print summary
-        overall = xtab[xtab.egfr_stratum == "Overall"]
-        for _, row in overall.iterrows():
-            print(
-                f"    {row.mg_quartile}: n={row.n:,}, "
-                f"AKI={row.events}, rate={row.rate:.3f}"
-            )
-
-    xtab_df = pd.concat(all_xtab, ignore_index=True)
-    out_path = os.path.join(RESULTS, f"replication_mg_quartile_{db}.csv")
-    xtab_df.to_csv(out_path, index=False)
-    print(f"\n  ✓ Saved {out_path}")
-
-    # ═══════════════════════════════════════════════════════════
-    # 2. LOGISTIC REGRESSIONS
-    # ═══════════════════════════════════════════════════════════
-    reg_rows = []
-    for mg_col, mg_label in mg_cols.items():
-        print(f"\n  Regression: {mg_label}")
-
-        # 2a. Overall (Xiong-style): AKI ~ Mg + covariates
-        res = logistic_regression(
-            df, mg_col, outcome, covariates, label=f"{mg_label} — Overall"
-        )
-        if res:
-            res["db"] = db.upper()
-            res["mg_variable"] = mg_label
-            res["stratum"] = "Overall"
-            reg_rows.append(res)
-            print(
-                f"    Overall: OR {res['or']} "
-                f"({res['ci_lo']}-{res['ci_hi']}), P={res['p']}"
-            )
-
-        # 2b. Stratified by eGFR
-        for sname, smask in egfr_strata.items():
-            if sname == "Overall":
-                continue
-            sub = df[smask(df)]
-            if len(sub) < 50:
-                continue
-            res = logistic_regression(
-                sub, mg_col, outcome, covariates, label=f"{mg_label} — {sname}"
-            )
-            if res:
-                res["db"] = db.upper()
-                res["mg_variable"] = mg_label
-                res["stratum"] = sname
-                reg_rows.append(res)
+    for mg_col, mg_label in mg_cols:
+        print(f"\n  --- Cross-tab: {mg_label} ---")
+        xt = crosstab(did_all, mg_col)
+        if len(xt) > 0:
+            xt["mg_variable"] = mg_label
+            xt["db"] = db.upper()
+            all_xtab.append(xt)
+            # Print overall quartile rates
+            ov = xt[xt.egfr_stratum == "Overall"]
+            for _, r in ov.iterrows():
                 print(
-                    f"    {sname}: OR {res['or']} "
-                    f"({res['ci_lo']}-{res['ci_hi']}), P={res['p']}"
+                    f"    {r.mg_quartile} ({r.mg_range}): "
+                    f"n={r.n:,}, AKI={r.events}, rate={r.rate:.3f}"
                 )
 
-        # 2c. Interaction model: AKI ~ Mg + Mg×eGFR_low + covariates
-        sub = df.dropna(subset=[mg_col, outcome, "egfr"] + covariates).copy()
-        sub["egfr_below_60"] = (sub["egfr"] < 60).astype(float)
-        sub["mg_x_egfr_low"] = sub[mg_col] * sub["egfr_below_60"]
-        interaction_covars = covariates + ["egfr_below_60", "mg_x_egfr_low"]
-        # Remove egfr from covariates to avoid collinearity with binary
-        interaction_covars_clean = [c for c in interaction_covars if c != "egfr"]
-        res = logistic_regression(
-            sub,
-            mg_col,
-            outcome,
-            interaction_covars_clean,
-            label=f"{mg_label} — Mg main effect " f"(interaction model)",
-        )
-        if res:
-            res["db"] = db.upper()
-            res["mg_variable"] = mg_label
-            res["stratum"] = "Interaction (Mg main)"
-            reg_rows.append(res)
+    if all_xtab:
+        out = pd.concat(all_xtab, ignore_index=True)
+        path = os.path.join(RESULTS, f"replication_mg_quartile_{db}.csv")
+        out.to_csv(path, index=False)
+        print(f"\n  ✓ {path}")
 
-        # Get the interaction term OR
-        res_int = logistic_regression(
-            sub,
-            "mg_x_egfr_low",
-            outcome,
-            [mg_col] + [c for c in interaction_covars_clean if c != "mg_x_egfr_low"],
-            label=f"{mg_label} — Mg×eGFR<60 interaction",
-        )
-        if res_int:
-            res_int["db"] = db.upper()
-            res_int["mg_variable"] = mg_label
-            res_int["stratum"] = "Interaction (Mg × eGFR<60)"
-            reg_rows.append(res_int)
+    # ═══════════════════════════════════════════════════════════
+    #  2. REGRESSIONS
+    # ═══════════════════════════════════════════════════════════
+    reg_rows = []
+    for mg_col, mg_label in mg_cols:
+        print(f"\n  --- Regression: {mg_label} ---")
+
+        # Overall (Xiong-style)
+        r = run_logistic(did_all, mg_col, "aki_7d", covariates, f"{mg_label} | Overall")
+        if r:
+            r.update({"db": db.upper(), "mg_variable": mg_label, "stratum": "Overall"})
+            reg_rows.append(r)
             print(
-                f"    Interaction Mg×eGFR<60: OR {res_int['or']} "
-                f"({res_int['ci_lo']}-{res_int['ci_hi']}), P={res_int['p']}"
+                f"    Overall: OR={r['or']} ({r.get('ci_lo', '')}-"
+                f"{r.get('ci_hi', '')}), P={r['p']}"
             )
 
-    reg_df = pd.DataFrame(reg_rows)
-    out_path = os.path.join(RESULTS, f"replication_regression_{db}.csv")
-    reg_df.to_csv(out_path, index=False)
-    print(f"  ✓ Saved {out_path}")
+        # By eGFR stratum
+        for sname, mask in [
+            ("eGFR>=60", did_all.egfr >= 60),
+            ("eGFR_45-59", did_all.egfr.between(45, 59.999)),
+            ("eGFR<45", did_all.egfr < 45),
+        ]:
+            sub = did_all[mask]
+            r = run_logistic(sub, mg_col, "aki_7d", covariates, f"{mg_label} | {sname}")
+            if r:
+                r.update({"db": db.upper(), "mg_variable": mg_label, "stratum": sname})
+                reg_rows.append(r)
+                print(
+                    f"    {sname}: OR={r['or']} ({r.get('ci_lo', '')}-"
+                    f"{r.get('ci_hi', '')}), P={r['p']}"
+                )
+
+        # Interaction: Mg × eGFR<60
+        sub = did_all.dropna(subset=[mg_col, "aki_7d", "egfr"] + covariates).copy()
+        sub["egfr_low"] = (sub.egfr < 60).astype(float)
+        sub["mg_x_egfr_low"] = sub[mg_col] * sub["egfr_low"]
+        int_covars = [c for c in covariates if c != "egfr"] + ["egfr_low"]
+        r = run_logistic(
+            sub,
+            "mg_x_egfr_low",
+            "aki_7d",
+            [mg_col] + int_covars,
+            f"{mg_label} | Interaction Mg×eGFR<60",
+        )
+        if r:
+            r.update(
+                {
+                    "db": db.upper(),
+                    "mg_variable": mg_label,
+                    "stratum": "Interaction Mg×eGFR<60",
+                }
+            )
+            reg_rows.append(r)
+            print(f"    Interaction Mg×eGFR<60: OR={r['or']}, P={r['p']}")
+
+    if reg_rows:
+        out = pd.DataFrame(reg_rows)
+        path = os.path.join(RESULTS, f"replication_regression_{db}.csv")
+        out.to_csv(path, index=False)
+        print(f"\n  ✓ {path}")
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  MAIN
 # ═══════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("=" * 60)
     print("05_replicate_xiong_koh.py")
-    print("Replicating Xiong 2023 (Ren Fail) and Koh 2022 (AJKD)")
+    print("Replicating Xiong 2023 (Ren Fail) & Koh 2022 (AJKD)")
     print("=" * 60)
 
-    targets = sys.argv[1:] if len(sys.argv) > 1 else DBS
+    targets = [a.lower() for a in sys.argv[1:]] or DBS
     for db in targets:
-        if db.lower() in DBS:
-            run_db(db.lower())
-        else:
-            print(f"Unknown db: {db}. Use 'mimic' or 'eicu'.")
+        if db in DBS:
+            run_db(db)
 
     print(f"\n{'=' * 60}")
     print("DONE — outputs are aggregate only, safe to commit.")
-    print(f"{'=' * 60}")
+    print("=" * 60)
