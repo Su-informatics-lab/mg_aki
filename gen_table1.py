@@ -262,7 +262,12 @@ def build_table1(db_tag):
                 print(f"  ERROR: could not load any data for {tag}")
                 return None
 
-    # ── Merge Table 1 descriptive labs from did_labs_all ──
+    # ── Merge labs from did_labs_all ──
+    # Two kinds:
+    #   1. PS-model labs (Ca, lactate, HR, Mg, K): T0-relative, same logic as 02_psm.R
+    #      Treated: last value where offset_h < mg_offset_h
+    #      Control: last value overall (mg_offset_h is NA → all qualify)
+    #   2. Descriptive labs (Hb, WBC, plt, albumin): first postop value, with range filter
     labs_path = os.path.join(RESULTS, f"did_labs_all_{tag}.csv")
     if os.path.exists(labs_path):
         labs_all = pd.read_csv(labs_path)
@@ -272,11 +277,70 @@ def build_table1(db_tag):
             else "stay_id"
         )
         labs_all["pid"] = labs_all[pid_col_labs].astype(str)
+
+        # Get mg_offset_h for T0-relative computation
+        all_path_t = os.path.join(RESULTS, f"did_all_{tag}.csv")
+        if os.path.exists(all_path_t):
+            _da = pd.read_csv(all_path_t)
+            _da["pid"] = _da["pid"].astype(str)
+            mg_off_map = _da.set_index("pid")["mg_offset_h"].to_dict()
+        else:
+            mg_off_map = {}
+
+        # Plausible ranges for outlier filtering
+        LAB_RANGES = {
+            "magnesium": (0.5, 10.0),
+            "potassium": (1.0, 12.0),
+            "calcium": (4.0, 16.0),
+            "lactate": (0.1, 30.0),
+            "heartrate": (20, 250),
+            "hemoglobin": (3.0, 25.0),
+            "wbc": (0.1, 100.0),
+            "platelets": (5.0, 1500.0),
+            "albumin": (0.5, 6.0),
+        }
+
+        # PS-model labs: T0-relative (last before T0)
+        ps_lab_names = ["magnesium", "potassium", "calcium", "lactate", "heartrate"]
+        for lab_name in ps_lab_names:
+            col_name = f"last_{lab_name}"
+            sub = labs_all[labs_all.lab_name == lab_name].copy()
+            if len(sub) == 0:
+                continue
+            lo, hi = LAB_RANGES.get(lab_name, (None, None))
+            if lo is not None:
+                sub = sub[sub.value.between(lo, hi)]
+            sub["mg_off"] = sub.pid.map(mg_off_map)
+            # Treated: offset_h < mg_offset_h; Control: mg_off is NaN → keep all
+            sub = sub[
+                (sub.offset_h >= 0) & (sub.mg_off.isna() | (sub.offset_h < sub.mg_off))
+            ]
+            # Take LAST value (closest to T0)
+            last_val = (
+                sub.sort_values("offset_h", ascending=False)
+                .groupby("pid")["value"]
+                .first()
+                .reset_index()
+                .rename(columns={"value": col_name})
+            )
+            trt = trt.merge(last_val, on="pid", how="left")
+            ctl = ctl.merge(last_val, on="pid", how="left")
+
+        # Descriptive labs: first postop value with range filter
         for lab_name in ["hemoglobin", "wbc", "platelets", "albumin"]:
             sub = labs_all[labs_all.lab_name == lab_name].copy()
             if len(sub) == 0:
                 continue
-            # First postop value per patient
+            lo, hi = LAB_RANGES.get(lab_name, (None, None))
+            if lo is not None:
+                n_before = len(sub)
+                sub = sub[sub.value.between(lo, hi)]
+                n_dropped = n_before - len(sub)
+                if n_dropped > 0:
+                    print(
+                        f"    {lab_name}: dropped {n_dropped:,} outliers "
+                        f"outside [{lo}-{hi}]"
+                    )
             first_val = (
                 sub.sort_values("offset_h")
                 .groupby("pid")["value"]
@@ -336,7 +400,7 @@ def build_table1(db_tag):
                         "first_magnesium",
                     ],
                     "last_potassium": ["first_potassium", "potassium"],
-                    "cr_pre": ["cr_pre", "baseline_cr"],
+                    "cr_pre": ["cr_pre", "baseline_cr", "first_cr"],
                 }
                 found = False
                 for alt in alt_names.get(varname, []):
