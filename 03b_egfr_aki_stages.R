@@ -95,6 +95,27 @@ for (i in seq_len(n_pairs)) {
   aki_ctl[i,] <- compute_aki_stages(pairs$ctl_pid[i], pairs$t_mg[i])
 }
 
+# Post-hoc: incorporate RRT into KDIGO ≥3 (stage3 = col 3)
+if ("rrt_offset_h" %in% names(all_pts)) {
+  cat("  Incorporating RRT into KDIGO ≥3...\n")
+  rrt_map <- setNames(all_pts$rrt_offset_h, as.character(all_pts$pid))
+  for (i in seq_len(n_pairs)) {
+    t0 <- pairs$t_mg[i]
+    rrt_t <- rrt_map[as.character(pairs$trt_pid[i])]
+    rrt_c <- rrt_map[as.character(pairs$ctl_pid[i])]
+    if (!is.na(rrt_t) && rrt_t > t0 && rrt_t <= t0 + 168) {
+      aki_trt[i, 2] <- 1L  # RRT → KDIGO ≥2
+      aki_trt[i, 3] <- 1L  # RRT → KDIGO ≥3
+    }
+    if (!is.na(rrt_c) && rrt_c > t0 && rrt_c <= t0 + 168) {
+      aki_ctl[i, 2] <- 1L
+      aki_ctl[i, 3] <- 1L
+    }
+  }
+  n_rrt <- sum(!is.na(rrt_map[as.character(c(pairs$trt_pid, pairs$ctl_pid))]))
+  cat(sprintf("    RRT patients in matched set: %d\n", n_rrt))
+}
+
 # ── eGFR strata ───────────────────────────────────────────────────
 egfr_trt <- all_pts$egfr[trt_rows]
 ckd_stage <- rep(NA_character_, n_pairs)

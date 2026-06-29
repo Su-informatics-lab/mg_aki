@@ -1,123 +1,106 @@
 #!/bin/bash
-# ============================================================================
-# run.sh — Full pipeline rerun for Mg → AKI study
+# run.sh — Full pipeline for Mg → AKI (Critical Care submission)
 #
 # Usage:
-#   bash run.sh          # full clean rerun (all steps)
-#   bash run.sh 2 3 4    # only steps 2, 3, 4
-#   bash run.sh clean     # just clean results/
-#
-# Prerequisites:
-#   - Python 3.12+ with pandas, numpy, matplotlib, duckdb
-#   - R 4.4+ with mice, sandwich, lmtest
-#   - Raw data at ~/mg_aki/eicu-crd-2.0/ and ~/mg_aki/mimic-iv-3.1/
-# ============================================================================
+#   bash run.sh              # full run, both databases
+#   bash run.sh 2 3          # steps 2 and 3 only
+#   bash run.sh clean        # just clean results/
 set -euo pipefail
-
 cd "$(dirname "$0")"
+
 RESULTS="results"
 SEP="======================================================================"
-
 log() { echo -e "\n$SEP\n  STEP $1: $2\n$SEP"; }
 elapsed() { echo "  ⏱  $(( SECONDS - $1 ))s"; }
 
-# ── Parse args ──
 STEPS=("$@")
-RUN_ALL=false
-if [ ${#STEPS[@]} -eq 0 ]; then
-    RUN_ALL=true
-    STEPS=(clean 1 2 3 4 5 6 7)
-fi
+if [ ${#STEPS[@]} -eq 0 ]; then STEPS=(clean 1 2 3 4 5 6 7 8); fi
 
 for step in "${STEPS[@]}"; do
 case $step in
 
-# ── CLEAN ──────────────────────────────────────────────────────────
 clean)
-    log "0" "Clean results/"
-    mkdir -p $RESULTS
-    rm -f $RESULTS/did_*.csv
-    rm -f $RESULTS/table1_*.csv
-    rm -f $RESULTS/etable*.csv
-    rm -f $RESULTS/km_aki_*.csv
-    rm -f $RESULTS/fig*.pdf $RESULTS/fig*.png
-    rm -f $RESULTS/efig*.pdf $RESULTS/efig*.png
-    echo "  ✓ Cleaned"
-    ;;
+  log "0" "Clean results/"
+  mkdir -p $RESULTS
+  rm -f $RESULTS/did_*.csv $RESULTS/table1_*.csv $RESULTS/etable*.csv
+  rm -f $RESULTS/egfr_*.csv $RESULTS/mg_strat_*.csv $RESULTS/mg_did_*.csv
+  rm -f $RESULTS/fig*.pdf $RESULTS/fig*.png $RESULTS/efig*.pdf $RESULTS/efig*.png
+  echo "  ✓ Cleaned"
+  ;;
 
-# ── STEP 1: ETL ───────────────────────────────────────────────────
 1)
-    log "1" "ETL (01_etl.py) — cohort construction"
-    t0=$SECONDS
-    python 01_etl.py
-    elapsed $t0
-    echo "  Outputs: did_all_{db}.csv, did_cr_all_{db}.csv, did_labs_all_{db}.csv"
-    ;;
+  log "1" "ETL — cohort + RRT + death_offset + Table1 labs"
+  t0=$SECONDS; python 01_etl.py; elapsed $t0
+  ;;
 
-# ── STEP 2: PSM ───────────────────────────────────────────────────
 2)
-    log "2" "PSM (02_psm.R) — risk-set matching [set.seed(2026)]"
-    t0=$SECONDS
-    Rscript 02_psm.R mimic
-    Rscript 02_psm.R eicu
-    elapsed $t0
-    echo "  Outputs: did_riskset_{db}.csv, did_pairs_*_{db}.csv"
-    ;;
+  log "2" "PSM — risk-set matching + DiD + KDIGO staging + binary outcomes"
+  t0=$SECONDS
+  Rscript 02_psm.R mimic
+  Rscript 02_psm.R eicu
+  elapsed $t0
+  ;;
 
-# ── STEP 3: HTE ───────────────────────────────────────────────────
 3)
-    log "3" "HTE (03_hte.R) — subgroup analysis"
-    t0=$SECONDS
-    Rscript 03_hte.R mimic
-    Rscript 03_hte.R eicu
-    elapsed $t0
-    echo "  Outputs: did_hte_{db}.csv, did_hte_data_{db}.csv"
-    ;;
+  log "3" "HTE — pre-specified subgroups"
+  t0=$SECONDS
+  Rscript 03_hte.R mimic
+  Rscript 03_hte.R eicu
+  elapsed $t0
+  ;;
 
-# ── STEP 4: FIGURES ────────────────────────────────────────────────
 4)
-    log "4" "Figures (04_figures.py) — 7 publication figures"
-    t0=$SECONDS
-    python 04_figures.py
-    elapsed $t0
-    echo "  Outputs: fig1_primary, fig2_hte, fig3_benefit_harm,"
-    echo "           efig_timecourse, efig_sensitivity, efig_hte_48h, efig_love_plot"
-    ;;
+  log "4" "eGFR × AKI staging (KDIGO ≥1/≥2/≥3)"
+  t0=$SECONDS
+  Rscript 03b_egfr_aki_stages.R mimic
+  Rscript 03b_egfr_aki_stages.R eicu
+  elapsed $t0
+  ;;
 
-# ── STEP 5: TABLE 1 ───────────────────────────────────────────────
 5)
-    log "5" "Table 1 (gen_table1.py)"
-    t0=$SECONDS
-    python gen_table1.py
-    elapsed $t0
-    echo "  Outputs: table1_{db}.csv, table1_combined.csv"
-    ;;
+  log "5" "Mg-stratified analysis + eGFR×Mg cross-strat"
+  t0=$SECONDS
+  Rscript 03c_mg_strat.R mimic
+  Rscript 03c_mg_strat.R eicu
+  elapsed $t0
+  ;;
 
-# ── STEP 6: eTABLES ───────────────────────────────────────────────
 6)
-    log "6" "eTables (gen_etables.py)"
-    t0=$SECONDS
-    python gen_etables.py
-    elapsed $t0
-    echo "  Outputs: etable2_balance.csv, etable3_hte_matrix.csv"
-    ;;
+  log "6" "Figures"
+  t0=$SECONDS
+  python 04_figures.py
+  python 04b_fig_egfr.py
+  python 04c_fig_km_egfr.py
+  python 04d_fig_secondary_egfr.py
+  elapsed $t0
+  ;;
 
-# ── STEP 7: CONSORT ───────────────────────────────────────────────
 7)
-    log "7" "CONSORT (gen_consort.py)"
-    t0=$SECONDS
-    python gen_consort.py
-    elapsed $t0
-    echo "  Outputs: efig1_consort.pdf/.png"
-    ;;
+  log "7" "Tables + CONSORT"
+  t0=$SECONDS
+  python gen_table1.py
+  python gen_etables.py
+  python gen_consort.py
+  elapsed $t0
+  ;;
 
-*)
-    echo "  Unknown step: $step (valid: clean, 1-7)"
-    ;;
+8)
+  log "8" "Supplement (optional, errors non-fatal)"
+  for s in 03d_mg_did.R 03e_pair_dcr.R gen_mortality_table.R; do
+    for d in mimic eicu; do
+      Rscript "$s" "$d" 2>/dev/null || echo "  $s $d skipped"
+    done
+  done
+  ;;
 
+*) echo "  Unknown step: $step (valid: clean, 1-8)" ;;
 esac
 done
 
 echo -e "\n$SEP"
-echo "  DONE — $(ls $RESULTS/*.pdf 2>/dev/null | wc -l) PDFs in $RESULTS/"
+echo "  DONE"
+echo "  CSVs: $(ls $RESULTS/*.csv 2>/dev/null | wc -l)"
+echo "  PDFs: $(ls $RESULTS/*.pdf 2>/dev/null | wc -l)"
+echo "  Key: did_binary_*.csv (KDIGO ORs), did_riskset_*.csv (DiD)"
+echo "  NEXT: git tag v6.0-cc-submission"
 echo "$SEP"

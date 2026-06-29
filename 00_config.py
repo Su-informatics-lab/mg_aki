@@ -41,9 +41,40 @@ VITAL_HR_MIMIC = [220045]
 MG_SUPP_ITEMS_MIMIC = [222011, 227523]
 K_SUPP_ITEMS_MIMIC = [225166, 225168, 222139, 227521, 227522]
 
+# ── RRT detection (for KDIGO ≥3) ─────────────────────────────────
+# MIMIC procedureevents: dialysis procedure item IDs
+# VERIFY against d_items on Tempest before first run:
+#   SELECT itemid, label FROM mimiciv_icu.d_items
+#   WHERE LOWER(label) LIKE '%dialysis%' OR LOWER(label) LIKE '%crrt%'
+RRT_PROCEDURE_ITEMS_MIMIC = [
+    225441,  # Hemodialysis
+    225802,  # Dialysis - CRRT
+    225803,  # Dialysis - CVVHD
+    225805,  # Peritoneal Dialysis
+    225809,  # Dialysis - CVVHDF
+    225955,  # Dialysis - SCUF
+]
+# MIMIC inputevents: CRRT replacement/dialysate items
+# (presence = CRRT running)
+RRT_INPUT_ITEMS_MIMIC = [
+    227536,  # KCl (CRRT)
+    227525,  # Calcium Gluconate (CRRT)
+    227711,  # CRRT Filter Change
+    225183,  # Potassium Chloride (CRRT)
+]
+
 # All lab items needed for DuckDB filtering
 ALL_LAB_ITEMS_MIMIC = set(
     LAB_CR_MIMIC + LAB_MG_MIMIC + LAB_K_MIMIC + LAB_CA_MIMIC + LAB_LAC_MIMIC
+)
+
+# ── Table 1 descriptive labs (not in PS model) ────────────────────
+LAB_HGB_MIMIC = [51222, 50811]  # Hemoglobin (serum, blood gas)
+LAB_WBC_MIMIC = [51301, 51300]  # WBC (auto, manual)
+LAB_PLT_MIMIC = [51265]  # Platelet count
+LAB_ALB_MIMIC = [50862]  # Albumin
+TABLE1_LAB_ITEMS_MIMIC = set(
+    LAB_HGB_MIMIC + LAB_WBC_MIMIC + LAB_PLT_MIMIC + LAB_ALB_MIMIC
 )
 
 # ═══════════════════════════════════════════════════════════════════
@@ -265,6 +296,26 @@ EICU_LAB_PATTERNS = {
     "lactate": ["lactate"],
 }
 
+# eICU Table 1 descriptive lab patterns (not in PS model)
+EICU_TABLE1_LAB_PATTERNS = {
+    "hemoglobin": ["hgb", "hemoglobin"],
+    "wbc": ["wbc"],
+    "platelets": ["platelet"],
+    "albumin": ["albumin"],
+}
+
+# eICU RRT detection patterns (treatment table + intakeOutput)
+EICU_RRT_TREATMENT_PATTERNS = [
+    "dialysis",
+    "crrt",
+    "cvvh",
+    "cvvhd",
+    "cvvhdf",
+    "hemodialysis",
+    "scuf",
+    "ultrafiltration",
+]
+
 # Output column names for did_all_{db}.csv
 ALL_PATIENTS_COLS = [
     "pid",
@@ -293,4 +344,7 @@ ALL_PATIENTS_COLS = [
     "poaf_icd",
     "encephalopathy_icd",
     "vent_arrhythmia",
+    "rrt_offset_h",
+    "has_rrt",
+    "death_offset_h",
 ]

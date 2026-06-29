@@ -71,10 +71,20 @@ SUPP_VARS = [
     ("last_potassium", "Serum potassium, mean (SD), mEq/L", "continuous"),
 ]
 
+TABLE1_LAB_VARS = [
+    ("hemoglobin", "Hemoglobin, mean (SD), g/dL", "continuous"),
+    ("wbc", "White blood cell count, mean (SD), ×10⁹/L", "continuous"),
+    ("platelets", "Platelet count, mean (SD), ×10⁹/L", "continuous"),
+    ("albumin", "Albumin, mean (SD), g/dL", "continuous"),
+]
+
 OUTCOME_VARS = [
-    ("aki_48h", "48-hour AKI, n (%)", "binary"),
-    ("aki_7d", "7-day AKI, n (%)", "binary"),
+    ("aki1_48h", "48-hour AKI (KDIGO ≥1), n (%)", "binary"),
+    ("aki1_7d", "7-day AKI (KDIGO ≥1), n (%)", "binary"),
+    ("aki2_7d", "7-day AKI (KDIGO ≥2), n (%)", "binary"),
+    ("aki3_7d", "7-day AKI (KDIGO ≥3), n (%)", "binary"),
     ("hosp_mortality", "Hospital mortality, n (%)", "binary"),
+    ("death_7d", "7-day mortality, n (%)", "binary"),
     ("vent_arrhythmia", "Ventricular arrhythmia, n (%)", "binary"),
 ]
 
@@ -85,6 +95,7 @@ ALL_SECTIONS = [
     ("Renal function", RENAL_VARS),
     ("Laboratory values (closest to T₀)", LAB_VARS),
     ("Supplementary labs (not in PS model)", SUPP_VARS),
+    ("Descriptive labs (Table 1 only)", TABLE1_LAB_VARS),
     ("Outcomes", OUTCOME_VARS),
 ]
 
@@ -250,6 +261,52 @@ def build_table1(db_tag):
             if trt is None or ctl is None:
                 print(f"  ERROR: could not load any data for {tag}")
                 return None
+
+    # ── Merge Table 1 descriptive labs from did_labs_all ──
+    labs_path = os.path.join(RESULTS, f"did_labs_all_{tag}.csv")
+    if os.path.exists(labs_path):
+        labs_all = pd.read_csv(labs_path)
+        pid_col_labs = (
+            "patientunitstayid"
+            if "patientunitstayid" in labs_all.columns
+            else "stay_id"
+        )
+        labs_all["pid"] = labs_all[pid_col_labs].astype(str)
+        for lab_name in ["hemoglobin", "wbc", "platelets", "albumin"]:
+            sub = labs_all[labs_all.lab_name == lab_name].copy()
+            if len(sub) == 0:
+                continue
+            # First postop value per patient
+            first_val = (
+                sub.sort_values("offset_h")
+                .groupby("pid")["value"]
+                .first()
+                .reset_index()
+                .rename(columns={"value": lab_name})
+            )
+            trt = trt.merge(first_val, on="pid", how="left")
+            ctl = ctl.merge(first_val, on="pid", how="left")
+        print(f"  Merged Table 1 labs from {labs_path}")
+
+    # ── Merge binary outcomes from did_binary_pairs ──
+    bin_path = os.path.join(RESULTS, f"did_binary_pairs_{tag}.csv")
+    if os.path.exists(bin_path):
+        bo = pd.read_csv(bin_path)
+        bo["trt_pid"] = bo["trt_pid"].astype(str)
+        bo["ctl_pid"] = bo["ctl_pid"].astype(str)
+        # Extract trt outcomes
+        trt_cols = [c for c in bo.columns if c.endswith("_trt") and c != "trt_pid"]
+        for c in trt_cols:
+            oname = c.replace("_trt", "")
+            mapping = bo.set_index("trt_pid")[c].to_dict()
+            trt[oname] = trt.pid.map(mapping)
+        # Extract ctl outcomes
+        ctl_cols = [c for c in bo.columns if c.endswith("_ctl") and c != "ctl_pid"]
+        for c in ctl_cols:
+            oname = c.replace("_ctl", "")
+            mapping = bo.set_index("ctl_pid")[c].to_dict()
+            ctl[oname] = ctl.pid.map(mapping)
+        print(f"  Merged binary outcomes from {bin_path}")
 
     # Build table rows
     rows = []

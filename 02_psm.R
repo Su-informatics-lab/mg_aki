@@ -318,3 +318,158 @@ for(sn in names(SPECS)){
 }
 
 cat(sprintf("\n%s\n02_psm.R -- %s DONE (%d rows)\n%s\n",SEP,db,nrow(res_all),SEP))
+
+# ═══════════════════════════════════════════════════════════════════
+# BINARY OUTCOMES: KDIGO staging + time-windowed mortality
+# Runs on PRIMARY spec pairs only (the reported results)
+# ═══════════════════════════════════════════════════════════════════
+cat(sprintf("\n%s\n  BINARY OUTCOMES: %s (primary spec)\n%s\n", SEP, db, SEP))
+
+pri_pairs <- all_pairs[["primary_yet_untreated"]]
+if (!is.null(pri_pairs) && nrow(pri_pairs) > 0) {
+  npairs <- nrow(pri_pairs)
+  cat(sprintf("  Pairs: %d\n", npairs))
+
+  # Pre-index Cr data and patient info
+  base_cr_map <- setNames(all_pts$first_cr, as.character(all_pts$pid))
+  rrt_map <- if ("rrt_offset_h" %in% names(all_pts))
+    setNames(all_pts$rrt_offset_h, as.character(all_pts$pid)) else NULL
+  death_map <- if ("death_offset_h" %in% names(all_pts))
+    setNames(all_pts$death_offset_h, as.character(all_pts$pid)) else NULL
+  mort_map <- setNames(all_pts$hosp_mortality, as.character(all_pts$pid))
+
+  # For each pair, compute outcomes for both arms
+  outcome_rows <- vector("list", npairs)
+  for (k in seq_len(npairs)) {
+    tp <- as.character(pri_pairs$trt_pid[k])
+    cp <- as.character(pri_pairs$ctl_pid[k])
+    t0 <- pri_pairs$t_mg[k]
+    bl_t <- base_cr_map[tp]; bl_c <- base_cr_map[cp]
+
+    cr_t <- cr_list[[tp]]; cr_c <- cr_list[[cp]]
+    cr_t48 <- if (!is.null(cr_t)) cr_t[cr_t$offset_h > t0 & cr_t$offset_h <= t0 + 48, ] else data.frame()
+    cr_c48 <- if (!is.null(cr_c)) cr_c[cr_c$offset_h > t0 & cr_c$offset_h <= t0 + 48, ] else data.frame()
+    cr_t7d <- if (!is.null(cr_t)) cr_t[cr_t$offset_h > t0 & cr_t$offset_h <= t0 + 168, ] else data.frame()
+    cr_c7d <- if (!is.null(cr_c)) cr_c[cr_c$offset_h > t0 & cr_c$offset_h <= t0 + 168, ] else data.frame()
+
+    max_t48 <- if (nrow(cr_t48) > 0) max(cr_t48$labresult) else NA
+    max_c48 <- if (nrow(cr_c48) > 0) max(cr_c48$labresult) else NA
+    max_t7d <- if (nrow(cr_t7d) > 0) max(cr_t7d$labresult) else NA
+    max_c7d <- if (nrow(cr_c7d) > 0) max(cr_c7d$labresult) else NA
+
+    # RRT within windows
+    rrt_t <- if (!is.null(rrt_map)) rrt_map[tp] else NA
+    rrt_c <- if (!is.null(rrt_map)) rrt_map[cp] else NA
+    rrt_t48 <- !is.na(rrt_t) && rrt_t > t0 && rrt_t <= t0 + 48
+    rrt_c48 <- !is.na(rrt_c) && rrt_c > t0 && rrt_c <= t0 + 48
+    rrt_t7d <- !is.na(rrt_t) && rrt_t > t0 && rrt_t <= t0 + 168
+    rrt_c7d <- !is.na(rrt_c) && rrt_c > t0 && rrt_c <= t0 + 168
+
+    # Death within windows
+    d_t <- if (!is.null(death_map)) death_map[tp] else NA
+    d_c <- if (!is.null(death_map)) death_map[cp] else NA
+    d_t_from_t0 <- if (!is.na(d_t)) d_t - t0 else NA
+    d_c_from_t0 <- if (!is.na(d_c)) d_c - t0 else NA
+
+    # Helper: KDIGO staging
+    kdigo <- function(max_cr, bl, rrt_in_window) {
+      if (is.na(max_cr) || is.na(bl) || bl <= 0) return(c(NA, NA, NA))
+      delta <- max_cr - bl; ratio <- max_cr / bl
+      stg1 <- as.integer(delta >= 0.3 | ratio >= 1.5 | rrt_in_window)
+      stg2 <- as.integer(ratio >= 2.0 | rrt_in_window)
+      stg3 <- as.integer(ratio >= 3.0 | max_cr >= 4.0 | rrt_in_window)
+      c(stg1, stg2, stg3)
+    }
+
+    kt48 <- kdigo(max_t48, bl_t, rrt_t48)
+    kc48 <- kdigo(max_c48, bl_c, rrt_c48)
+    kt7d <- kdigo(max_t7d, bl_t, rrt_t7d)
+    kc7d <- kdigo(max_c7d, bl_c, rrt_c7d)
+
+    outcome_rows[[k]] <- data.frame(
+      trt_pid = tp, ctl_pid = cp, t0 = t0,
+      # KDIGO 48h
+      aki1_48h_trt = kt48[1], aki1_48h_ctl = kc48[1],
+      aki2_48h_trt = kt48[2], aki2_48h_ctl = kc48[2],
+      aki3_48h_trt = kt48[3], aki3_48h_ctl = kc48[3],
+      # KDIGO 7d
+      aki1_7d_trt = kt7d[1], aki1_7d_ctl = kc7d[1],
+      aki2_7d_trt = kt7d[2], aki2_7d_ctl = kc7d[2],
+      aki3_7d_trt = kt7d[3], aki3_7d_ctl = kc7d[3],
+      # Mortality
+      hosp_mort_trt = as.integer(mort_map[tp] == 1),
+      hosp_mort_ctl = as.integer(mort_map[cp] == 1),
+      death_7d_trt  = as.integer(!is.na(d_t_from_t0) && d_t_from_t0 >= 0 && d_t_from_t0 <= 168),
+      death_7d_ctl  = as.integer(!is.na(d_c_from_t0) && d_c_from_t0 >= 0 && d_c_from_t0 <= 168),
+      death_14d_trt = as.integer(!is.na(d_t_from_t0) && d_t_from_t0 >= 0 && d_t_from_t0 <= 336),
+      death_14d_ctl = as.integer(!is.na(d_c_from_t0) && d_c_from_t0 >= 0 && d_c_from_t0 <= 336),
+      stringsAsFactors = FALSE
+    )
+  }
+  bo <- do.call(rbind, outcome_rows)
+
+  # GLM for each binary outcome
+  outcome_names <- c("aki1_48h", "aki2_48h", "aki3_48h",
+                     "aki1_7d",  "aki2_7d",  "aki3_7d",
+                     "hosp_mort", "death_7d", "death_14d")
+  binary_res <- list()
+  for (oname in outcome_names) {
+    y_t <- bo[[paste0(oname, "_trt")]]
+    y_c <- bo[[paste0(oname, "_ctl")]]
+    valid <- !is.na(y_t) & !is.na(y_c)
+    nv <- sum(valid)
+    if (nv < 30 || sum(y_t[valid]) + sum(y_c[valid]) < 5) {
+      binary_res[[length(binary_res) + 1]] <- data.frame(
+        db = db, outcome = oname, n = nv,
+        rate_trt = NA, rate_ctl = NA, or = NA, ci_lo = NA, ci_hi = NA, p = NA)
+      next
+    }
+    y <- c(y_t[valid], y_c[valid])
+    x <- rep(c(1L, 0L), each = nv)
+    fit <- tryCatch(
+      glm(y ~ x, family = quasibinomial()),
+      error = function(e) NULL)
+    if (is.null(fit)) {
+      binary_res[[length(binary_res) + 1]] <- data.frame(
+        db = db, outcome = oname, n = nv,
+        rate_trt = mean(y_t[valid]), rate_ctl = mean(y_c[valid]),
+        or = NA, ci_lo = NA, ci_hi = NA, p = NA)
+      next
+    }
+    ct <- safe_coeftest(fit)
+    log_or <- ct["x", 1]; se <- ct["x", 2]; pv <- ct["x", 4]
+    binary_res[[length(binary_res) + 1]] <- data.frame(
+      db = db, outcome = oname, n = nv,
+      rate_trt = mean(y_t[valid]), rate_ctl = mean(y_c[valid]),
+      or = exp(log_or),
+      ci_lo = exp(log_or - 1.96 * se),
+      ci_hi = exp(log_or + 1.96 * se),
+      p = pv)
+  }
+  br <- do.call(rbind, binary_res)
+
+  # Print summary
+  cat("\n  outcome         rate_trt  rate_ctl  OR (95% CI)            P\n")
+  cat("  ", paste(rep("-", 66), collapse=""), "\n", sep="")
+  for (i in seq_len(nrow(br))) {
+    r <- br[i, ]
+    if (is.na(r$or)) {
+      cat(sprintf("  %-16s  %5.1f%%    %5.1f%%    --                    --  (n=%d)\n",
+                  r$outcome, 100*r$rate_trt, 100*r$rate_ctl, r$n))
+    } else {
+      sig <- if (!is.na(r$p) && r$p < 0.05) " *" else "  "
+      cat(sprintf("  %-16s  %5.1f%%    %5.1f%%    %.2f (%.2f-%.2f)  %.4f%s  n=%d\n",
+                  r$outcome, 100*r$rate_trt, 100*r$rate_ctl,
+                  r$or, r$ci_lo, r$ci_hi, r$p, sig, r$n))
+    }
+  }
+
+  # Save
+  write.csv(br, file.path(RESULTS, sprintf("did_binary_%s.csv", tag)), row.names = FALSE)
+  write.csv(bo, file.path(RESULTS, sprintf("did_binary_pairs_%s.csv", tag)), row.names = FALSE)
+  cat(sprintf("\n  ✓ did_binary_%s.csv: %d outcomes\n", tag, nrow(br)))
+  cat(sprintf("  ✓ did_binary_pairs_%s.csv: %d pairs × %d outcomes\n", tag, nrow(bo), length(outcome_names)))
+} else {
+  cat("  WARN: No primary pairs found, skipping binary outcomes\n")
+}
+cat(sprintf("\n%s\n02_psm.R -- %s COMPLETE\n%s\n", SEP, db, SEP))

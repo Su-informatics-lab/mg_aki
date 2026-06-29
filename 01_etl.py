@@ -206,6 +206,101 @@ def save_all_patients(treated, control, db_tag):
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  RRT + DEATH OFFSET HELPERS
+# ═══════════════════════════════════════════════════════════════════
+def get_rrt_mimic(stay_ids, icu_root, cardiac_df):
+    """Detect RRT from procedureevents + inputevents.
+    Returns DataFrame: stay_id, rrt_offset_h (hours from ICU admit)."""
+    frames = []
+    # 1. procedureevents
+    proc_path = _resolve(icu_root, "procedureevents")
+    if proc_path:
+        con = duckdb.connect()
+        try:
+            pid_df = pd.DataFrame({"_pid": pd.array(list(stay_ids), dtype="int64")})
+            con.register("_pf", pid_df)
+            items = ",".join(str(i) for i in RRT_PROCEDURE_ITEMS_MIMIC)
+            df = con.execute(
+                f"SELECT stay_id, starttime FROM read_csv_auto('{proc_path}', "
+                f"header=true, ignore_errors=true) "
+                f"WHERE stay_id IN (SELECT _pid FROM _pf) AND itemid IN ({items})"
+            ).df()
+            df.columns = df.columns.str.lower()
+            if len(df) > 0:
+                frames.append(df[["stay_id", "starttime"]])
+            print(f"    RRT procedureevents: {len(df):,} rows")
+        finally:
+            con.close()
+    # 2. inputevents CRRT items
+    ie_path = _resolve(icu_root, "inputevents")
+    if ie_path:
+        con = duckdb.connect()
+        try:
+            pid_df = pd.DataFrame({"_pid": pd.array(list(stay_ids), dtype="int64")})
+            con.register("_pf", pid_df)
+            items = ",".join(str(i) for i in RRT_INPUT_ITEMS_MIMIC)
+            df = con.execute(
+                f"SELECT stay_id, starttime FROM read_csv_auto('{ie_path}', "
+                f"header=true, ignore_errors=true) "
+                f"WHERE stay_id IN (SELECT _pid FROM _pf) AND itemid IN ({items})"
+            ).df()
+            df.columns = df.columns.str.lower()
+            if len(df) > 0:
+                frames.append(df[["stay_id", "starttime"]])
+            print(f"    RRT inputevents (CRRT): {len(df):,} rows")
+        finally:
+            con.close()
+    if not frames:
+        return pd.DataFrame(columns=["stay_id", "rrt_offset_h"])
+    rrt = pd.concat(frames).drop_duplicates()
+    rrt["starttime"] = pd.to_datetime(rrt["starttime"])
+    rrt = rrt.merge(cardiac_df[["stay_id", "intime"]], on="stay_id")
+    rrt["rrt_offset_h"] = (rrt.starttime - rrt.intime).dt.total_seconds() / 3600
+    rrt_first = (
+        rrt[rrt.rrt_offset_h >= 0]
+        .sort_values("rrt_offset_h")
+        .groupby("stay_id")
+        .first()
+        .reset_index()[["stay_id", "rrt_offset_h"]]
+    )
+    print(f"    RRT patients: {len(rrt_first):,}")
+    return rrt_first
+
+
+def get_rrt_eicu(stay_ids, eicu_root):
+    """Detect RRT from treatment table + intakeOutput.dialysisTotal.
+    Returns DataFrame: patientunitstayid, rrt_offset_h."""
+    frames = []
+    tx = load_filtered("treatment", eicu_root, stay_ids)
+    if len(tx) > 0 and "treatmentstring" in tx.columns:
+        rrt_mask = matches_any(tx.treatmentstring, EICU_RRT_TREATMENT_PATTERNS)
+        tx_rrt = tx[rrt_mask][["patientunitstayid", "treatmentoffset"]].copy()
+        tx_rrt["rrt_offset_h"] = tx_rrt.treatmentoffset / 60.0
+        frames.append(tx_rrt[["patientunitstayid", "rrt_offset_h"]])
+        print(f"    RRT treatment rows: {len(tx_rrt):,}")
+    io = load_filtered("intakeOutput", eicu_root, stay_ids)
+    if len(io) > 0 and "dialysistotal" in io.columns:
+        io_rrt = io[io.dialysistotal.fillna(0) != 0]
+        if len(io_rrt) > 0:
+            io_rrt = io_rrt[["patientunitstayid", "intakeoutputoffset"]].copy()
+            io_rrt["rrt_offset_h"] = io_rrt.intakeoutputoffset / 60.0
+            frames.append(io_rrt[["patientunitstayid", "rrt_offset_h"]])
+            print(f"    RRT intakeOutput rows: {len(io_rrt):,}")
+    if not frames:
+        return pd.DataFrame(columns=["patientunitstayid", "rrt_offset_h"])
+    rrt = pd.concat(frames).drop_duplicates()
+    rrt_first = (
+        rrt[rrt.rrt_offset_h >= 0]
+        .sort_values("rrt_offset_h")
+        .groupby("patientunitstayid")
+        .first()
+        .reset_index()[["patientunitstayid", "rrt_offset_h"]]
+    )
+    print(f"    RRT patients: {len(rrt_first):,}")
+    return rrt_first
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  eICU-CRD
 # ═══════════════════════════════════════════════════════════════════
 def run_eicu():
@@ -589,6 +684,44 @@ def run_eicu():
         df["transfusion"] = 0  # not available from eICU structured data
         df["reintubation"] = 0  # not available from eICU structured data
 
+    # RRT detection
+    print("\n  RRT detection...")
+    rrt_eicu = get_rrt_eicu(keep_treated | keep_control, EICU_ROOT)
+    for df in [treated, control]:
+        df_merged = df.merge(rrt_eicu, on="patientunitstayid", how="left")
+        df_merged["has_rrt"] = df_merged.rrt_offset_h.notna().astype(int)
+        # Copy back — preserves variable reference
+        for c in ["rrt_offset_h", "has_rrt"]:
+            df[c] = df_merged[c].values
+    print(f"    RRT: trt={treated.has_rrt.sum()}, ctl={control.has_rrt.sum()}")
+
+    # Death offset (hours from ICU admission)
+    hosp_dis_off = (
+        cardiac.set_index("patientunitstayid")
+        .get(
+            "hospitaldischargeoffset",
+            cardiac.set_index("patientunitstayid")["unitdischargeoffset"],
+        )
+        .to_dict()
+    )
+    hosp_dis_status = (
+        cardiac.set_index("patientunitstayid")
+        .get(
+            "hospitaldischargestatus",
+            cardiac.set_index("patientunitstayid")["unitdischargestatus"],
+        )
+        .str.lower()
+        .to_dict()
+    )
+    for df in [treated, control]:
+        df["death_offset_h"] = df.patientunitstayid.apply(
+            lambda x: (
+                hosp_dis_off.get(x, np.nan) / 60.0
+                if hosp_dis_status.get(x) == "expired"
+                else np.nan
+            )
+        )
+
     # Export
     save_all_patients(treated, control, "eicu")
 
@@ -637,6 +770,24 @@ def run_eicu():
                         "lab_name": "heartrate",
                         "value": hr.heartrate,
                         "offset_h": hr.observationoffset / 60.0,
+                    }
+                )
+            )
+    # Table 1 descriptive labs (Hb, WBC, plt, albumin)
+    for lab_name, patterns in EICU_TABLE1_LAB_PATTERNS.items():
+        sub = lab[
+            lab.patientunitstayid.isin(all_ids)
+            & matches_any(lab.labname, patterns)
+            & (lab.labresultoffset >= 0)
+        ]
+        if len(sub) > 0:
+            lab_rows.append(
+                pd.DataFrame(
+                    {
+                        "patientunitstayid": sub.patientunitstayid,
+                        "lab_name": lab_name,
+                        "value": sub.labresult,
+                        "offset_h": sub.labresultoffset / 60.0,
                     }
                 )
             )
@@ -738,7 +889,7 @@ def run_mimic():
     print(f"  ESKD excluded: {len(eskd_stays):,} \u2192 {len(cardiac):,}")
 
     # DuckDB big tables
-    item_list = ",".join(str(i) for i in ALL_LAB_ITEMS_MIMIC)
+    item_list = ",".join(str(i) for i in ALL_LAB_ITEMS_MIMIC | TABLE1_LAB_ITEMS_MIMIC)
     print(f"\n  Loading big tables via DuckDB ({len(hadms):,} hadm_ids)...")
     labs = load_filtered(
         "labevents",
@@ -1079,6 +1230,24 @@ def run_mimic():
             for c in ["poaf", "encephalopathy_delirium", "transfusion", "reintubation"]:
                 df[c] = 0
 
+    # RRT detection
+    print("\n  RRT detection...")
+    all_stay_ids = keep_treated | keep_control
+    rrt_mimic = get_rrt_mimic(all_stay_ids, MIMIC_ICU, cardiac)
+    for df in [treated, control]:
+        df_m = df.merge(rrt_mimic, on="stay_id", how="left")
+        df["rrt_offset_h"] = df_m["rrt_offset_h"].values
+        df["has_rrt"] = df_m["rrt_offset_h"].notna().astype(int).values
+    print(f"    RRT: trt={treated.has_rrt.sum()}, ctl={control.has_rrt.sum()}")
+
+    # Death offset (exact, from admissions.deathtime)
+    adm_death = admissions[["hadm_id", "deathtime"]].copy()
+    adm_death["deathtime"] = pd.to_datetime(adm_death["deathtime"])
+    for df in [treated, control]:
+        df_d = df.merge(adm_death, on="hadm_id", how="left")
+        death_h = (df_d.deathtime - df_d.intime).dt.total_seconds() / 3600
+        df["death_offset_h"] = death_h.values
+
     # Export
     save_all_patients(treated, control, "mimic")
 
@@ -1103,6 +1272,10 @@ def run_mimic():
         "potassium": LAB_K_MIMIC,
         "calcium": LAB_CA_MIMIC,
         "lactate": LAB_LAC_MIMIC,
+        "hemoglobin": LAB_HGB_MIMIC,
+        "wbc": LAB_WBC_MIMIC,
+        "platelets": LAB_PLT_MIMIC,
+        "albumin": LAB_ALB_MIMIC,
     }
     for lab_name, items in mimic_lab_map.items():
         sub = labs[
