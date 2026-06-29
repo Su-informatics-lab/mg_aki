@@ -168,9 +168,9 @@ def fig2_primary_forest():
 def fig3_egfr_forest():
     """eGFR-stratified AKI stages + mortality — reads egfr_aki_stages_{db}.csv."""
     panels = [
-        ("AKI_Stage1+", "AKI (KDIGO ≥1)"),
-        ("AKI_Stage2+", "AKI (KDIGO ≥2)"),
-        ("AKI_Stage3+", "AKI (KDIGO ≥3)"),
+        ("AKI_48h_Stage1+", "48-h AKI (KDIGO ≥1)"),
+        ("AKI_48h_Stage2+", "48-h AKI (KDIGO ≥2)"),
+        ("AKI_48h_Stage3+", "48-h AKI (KDIGO ≥3)"),
         ("hosp_mortality", "Hospital mortality"),
     ]
     strata_order = [

@@ -67,32 +67,42 @@ run_or <- function(outcome_trt, outcome_ctl) {
 }
 
 # ── Compute AKI stages ────────────────────────────────────────────
-compute_aki_stages <- function(pid, t_mg) {
+# ── Compute AKI stages (7d window) ────────────────────────────────
+compute_aki_stages <- function(pid, t_mg, window_h = 168) {
   cr <- cr_list[[as.character(pid)]]
   if (is.null(cr) || nrow(cr) < 1) return(c(NA, NA, NA))
   pre <- cr[cr$offset_h >= 0 & cr$offset_h < t_mg, ]
   if (nrow(pre) == 0) return(c(NA, NA, NA))
   bl <- pre$labresult[which.max(pre$offset_h)]
   if (is.na(bl) || bl <= 0) return(c(NA, NA, NA))
-  post <- cr[cr$offset_h >= t_mg & cr$offset_h <= (t_mg + 168), ]
+  post <- cr[cr$offset_h > t_mg & cr$offset_h <= (t_mg + window_h), ]
   if (nrow(post) == 0) return(c(0, 0, 0))
   stage1 <- 0; stage2 <- 0; stage3 <- 0
   for (i in seq_len(nrow(post))) {
     h <- post$offset_h[i] - t_mg; val <- post$labresult[i]
     delta <- val - bl; ratio <- val / bl
-    if (h <= 48 && (delta >= 0.3 || ratio >= 1.5)) stage1 <- 1
-    if (h > 48 && ratio >= 1.5) stage1 <- 1
+    if (window_h <= 48) {
+      # 48h window: both criteria active
+      if (delta >= 0.3 || ratio >= 1.5) stage1 <- 1
+    } else {
+      # 7d window: absolute within 48h, ratio within full window
+      if (h <= 48 && (delta >= 0.3 || ratio >= 1.5)) stage1 <- 1
+      if (h > 48 && ratio >= 1.5) stage1 <- 1
+    }
     if (ratio >= 2.0) stage2 <- 1
     if (ratio >= 3.0 || val >= 4.0) stage3 <- 1
   }
   c(stage1, stage2, stage3)
 }
 
-cat("  Computing AKI stages...\n")
+cat("  Computing AKI stages (7d + 48h)...\n")
 aki_trt <- aki_ctl <- matrix(NA, n_pairs, 3)
+aki48_trt <- aki48_ctl <- matrix(NA, n_pairs, 3)
 for (i in seq_len(n_pairs)) {
-  aki_trt[i,] <- compute_aki_stages(pairs$trt_pid[i], pairs$t_mg[i])
-  aki_ctl[i,] <- compute_aki_stages(pairs$ctl_pid[i], pairs$t_mg[i])
+  aki_trt[i,]   <- compute_aki_stages(pairs$trt_pid[i], pairs$t_mg[i], 168)
+  aki_ctl[i,]   <- compute_aki_stages(pairs$ctl_pid[i], pairs$t_mg[i], 168)
+  aki48_trt[i,] <- compute_aki_stages(pairs$trt_pid[i], pairs$t_mg[i], 48)
+  aki48_ctl[i,] <- compute_aki_stages(pairs$ctl_pid[i], pairs$t_mg[i], 48)
 }
 
 # Post-hoc: incorporate RRT into KDIGO ≥3 (stage3 = col 3)
@@ -132,12 +142,13 @@ cat(sprintf("  eGFR distribution: %s\n",
 
 # ── Run all combinations ──────────────────────────────────────────
 aki_labels <- c("AKI_Stage1+","AKI_Stage2+","AKI_Stage3+")
+aki48_labels <- c("AKI_48h_Stage1+","AKI_48h_Stage2+","AKI_48h_Stage3+")
 outcome_cols <- c("hosp_mortality","encephalopathy","vent_arrhythmia","poaf")
 
 results <- list()
 row_idx <- 0
 
-# AKI stages × eGFR strata
+# 7d AKI stages x eGFR strata
 for (aki_col in 1:3) {
   for (stg in strata_order) {
     if (stg == "Overall") { idx <- seq_len(n_pairs) }
@@ -145,6 +156,18 @@ for (aki_col in 1:3) {
     if (length(idx) < 30) next
     res <- run_or(aki_trt[idx, aki_col], aki_ctl[idx, aki_col])
     res$outcome <- aki_labels[aki_col]; res$stratum <- stg; res$db <- db
+    row_idx <- row_idx + 1; results[[row_idx]] <- res
+  }
+}
+
+# 48h AKI stages x eGFR strata
+for (aki_col in 1:3) {
+  for (stg in strata_order) {
+    if (stg == "Overall") { idx <- seq_len(n_pairs) }
+    else { idx <- which(ckd_stage == stg) }
+    if (length(idx) < 30) next
+    res <- run_or(aki48_trt[idx, aki_col], aki48_ctl[idx, aki_col])
+    res$outcome <- aki48_labels[aki_col]; res$stratum <- stg; res$db <- db
     row_idx <- row_idx + 1; results[[row_idx]] <- res
   }
 }
