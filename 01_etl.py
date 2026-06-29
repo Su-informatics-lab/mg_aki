@@ -1187,6 +1187,17 @@ def run_mimic():
     if os.path.exists(llm_path):
         print("\n  Merging LLM-extracted endpoints...")
         llm = pd.read_csv(llm_path, dtype={"hadm_id": int})
+        # LLM v2 schema uses _llm suffix; rename to match pipeline columns
+        llm_rename = {
+            "poaf_llm": "poaf",
+            "encephalopathy_delirium_llm": "encephalopathy_delirium",
+            "transfusion_llm": "transfusion",
+            "reintubation_llm": "reintubation",
+        }
+        llm.rename(
+            columns={k: v for k, v in llm_rename.items() if k in llm.columns},
+            inplace=True,
+        )
         llm_cols = ["poaf", "encephalopathy_delirium", "transfusion", "reintubation"]
         llm = llm[["hadm_id"] + [c for c in llm_cols if c in llm.columns]]
         for c in llm_cols:
