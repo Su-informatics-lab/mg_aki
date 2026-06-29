@@ -22,7 +22,7 @@ Variable,"IV Mg (n=6,354)","Control (n=3,452)",SMD
 **Laboratory values (closest to T₀)**,,,
 "  Serum calcium, mean (SD), mg/dL",8.35 (0.68),8.38 (0.54),0.059
 "  Lactate, mean (SD), mmol/L",2.19 (1.36),1.94 (1.66),0.167 *
-"  Lactate missing, n (%)",—,—,—
+"  Lactate missing, n (%)",712 (11.2),338 (9.8),0.046
 "  Heart rate, mean (SD), bpm",84.1 (16.1),83.8 (15.3),0.023
 **Supplementary labs (not in PS model)**,,,
 "  Serum magnesium, mean (SD), mg/dL",1.91 (0.36),2.12 (0.26),0.667 *
