@@ -298,8 +298,8 @@ def fig4_timecourse():
         )
         ax.fill_between(x, lo, hi, color=CLR[db], alpha=0.12)
 
-        # Mark significant
-        sig = sub.p < 0.05
+        # Mark significant (skip origin point)
+        sig = np.concatenate([[False], (sub.p < 0.05).values])
         ax.scatter(
             x[sig],
             y[sig],
