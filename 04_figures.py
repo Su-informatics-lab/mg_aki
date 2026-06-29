@@ -402,9 +402,9 @@ def fig5_egfr_mg_heatmap():
                 for ei in range(len(egfr_bins)):
                     v = mat[mi, ei]
                     p = pmat[mi, ei]
-                    if np.isna(v):
+                    if pd.isna(v):
                         continue
-                    sig = "*" if not np.isna(p) and p < 0.05 else ""
+                    sig = "*" if not pd.isna(p) and p < 0.05 else ""
                     txt_color = "white" if (v < 0.3 or v > 4.0) else "black"
                     ax.text(
                         ei,
