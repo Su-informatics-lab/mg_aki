@@ -1,34 +1,42 @@
-Variable,"IV Mg (n=6,354)","Control (n=3,412)",SMD
+Variable,"IV Mg (n=6,354)","Control (n=3,452)",SMD
 **Demographics**,,,
-"  Age, mean (SD), y",67.0 (12.5),66.9 (12.4),0.010
-"  Female sex, n (%)","2,176 (34.2)","1,160 (34.0)",0.005
-"  BMI, mean (SD), kg/m²",28.6 (6.0),28.6 (5.9),0.000
+"  Age, mean (SD), y",67.0 (12.5),67.1 (12.4),0.011
+"  Female sex, n (%)","2,176 (34.2)","1,165 (33.7)",0.011
+"  BMI, mean (SD), kg/m²",28.6 (6.0),28.8 (6.1),0.037
 "**Surgery type, n (%)**",,,
-  CABG,"1,325 (20.9)",654 (19.2),0.042
-  Valve surgery,826 (13.0),389 (11.4),0.049
-  Combined CABG + valve,477 (7.5),239 (7.0),0.019
+  CABG,"1,325 (20.9)",661 (19.1),0.043
+  Valve surgery,826 (13.0),402 (11.6),0.041
+  Combined CABG + valve,477 (7.5),248 (7.2),0.012
 "**Comorbidities, n (%)**",,,
-  Heart failure,"1,912 (30.1)","1,046 (30.7)",0.012
-  Hypertension,"4,826 (76.0)","2,670 (78.3)",0.055
-  Diabetes mellitus,"2,021 (31.8)","1,104 (32.4)",0.012
-  Chronic kidney disease,892 (14.0),553 (16.2),0.061
-  COPD,"1,284 (20.2)",674 (19.8),0.011
-  Peripheral vascular disease,341 (5.4),165 (4.8),0.024
-  Stroke/TIA,549 (8.6),313 (9.2),0.019
-  Liver disease,300 (4.7),188 (5.5),0.036
+  Heart failure,"1,912 (30.1)","1,107 (32.1)",0.043
+  Hypertension,"4,826 (76.0)","2,673 (77.4)",0.035
+  Diabetes mellitus,"2,021 (31.8)","1,135 (32.9)",0.023
+  Chronic kidney disease,892 (14.0),573 (16.6),0.071
+  COPD,"1,284 (20.2)",694 (20.1),0.003
+  Peripheral vascular disease,341 (5.4),182 (5.3),0.004
+  Stroke/TIA,549 (8.6),329 (9.5),0.031
+  Liver disease,300 (4.7),173 (5.0),0.013
 **Renal function**,,,
-"  eGFR, mean (SD), mL/min/1.73 m²",84.3 (22.5),82.9 (23.9),0.061
-"  Baseline creatinine, mean (SD), mg/dL",0.98 (0.45),0.97 (0.43),0.019
+"  eGFR, mean (SD), mL/min/1.73 m²",84.3 (22.5),82.0 (24.0),0.097
+"  Baseline creatinine, mean (SD), mg/dL",0.93 (0.40),0.98 (0.46),0.113 *
 **Laboratory values (closest to T₀)**,,,
-"  Serum calcium, mean (SD), mg/dL",—,—,—
-"  Lactate, mean (SD), mmol/L",—,—,—
+"  Serum calcium, mean (SD), mg/dL",8.35 (0.68),8.38 (0.54),0.059
+"  Lactate, mean (SD), mmol/L",2.19 (1.36),1.94 (1.66),0.167 *
 "  Lactate missing, n (%)",—,—,—
-"  Heart rate, mean (SD), bpm",—,—,—
+"  Heart rate, mean (SD), bpm",84.1 (16.1),83.8 (15.3),0.023
 **Supplementary labs (not in PS model)**,,,
-"  Serum magnesium, mean (SD), mg/dL",—,—,—
-"  Serum potassium, mean (SD), mEq/L",—,—,—
+"  Serum magnesium, mean (SD), mg/dL",1.91 (0.36),2.12 (0.26),0.667 *
+"  Serum potassium, mean (SD), mEq/L",4.16 (0.50),4.18 (0.43),0.047
+**Descriptive labs (Table 1 only)**,,,
+"  Hemoglobin, mean (SD), g/dL",10.2 (2.2),10.3 (2.2),0.021
+"  White blood cell count, mean (SD), ×10⁹/L",12.7 (5.6),12.7 (6.0),0.008
+"  Platelet count, mean (SD), ×10⁹/L",163.7 (71.2),168.5 (74.6),0.065
+"  Albumin, mean (SD), g/dL",3.13 (0.60),3.21 (0.61),0.133 *
 **Outcomes**,,,
-"  48-hour AKI, n (%)","1,402 (22.1)",909 (26.6),0.107 *
-"  7-day AKI, n (%)","1,653 (26.0)","1,034 (30.3)",0.095
-"  Hospital mortality, n (%)",216 (3.4),127 (3.7),0.017
-"  Ventricular arrhythmia, n (%)",420 (6.6),194 (5.7),0.038
+"  48-hour AKI (KDIGO ≥1), n (%)","1,404 (22.1)",904 (26.2),0.098
+"  7-day AKI (KDIGO ≥1), n (%)","1,983 (31.2)","1,208 (35.0)",0.084
+"  7-day AKI (KDIGO ≥2), n (%)",382 (6.0),231 (6.7),0.029
+"  7-day AKI (KDIGO ≥3), n (%)",189 (3.0),98 (2.8),0.007
+"  Hospital mortality, n (%)",216 (3.4),113 (3.3),0.007
+"  7-day mortality, n (%)",105 (1.7),54 (1.6),0.007
+"  Ventricular arrhythmia, n (%)",420 (6.6),197 (5.7),0.038
