@@ -157,7 +157,7 @@ def fig2_primary_forest():
         ax.set_xlim(0.4, 2.0)
         ax.invert_yaxis()
 
-    save(fig, "fig2_primary_forest")
+    save(fig, "primary_forest")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -262,7 +262,7 @@ def fig3_egfr_forest():
             p = egfr_p.iloc[0].p_interaction
             print(f"    {db} eGFR interaction P (AKI 7d): {p:.6f}")
 
-    save(fig, "fig3_egfr_forest")
+    save(fig, "egfr_forest")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -283,9 +283,9 @@ def fig4_timecourse():
         if len(sub) == 0:
             continue
         x = np.concatenate([[0], sub.target_h.values])
-        y = np.concatenate([[0], sub.did.values * 1000])
-        lo = np.concatenate([[0], sub.ci_lo.values * 1000])
-        hi = np.concatenate([[0], sub.ci_hi.values * 1000])
+        y = np.concatenate([[0], sub.did.values])
+        lo = np.concatenate([[0], sub.ci_lo.values])
+        hi = np.concatenate([[0], sub.ci_hi.values])
 
         ax.plot(
             x,
@@ -313,12 +313,12 @@ def fig4_timecourse():
 
     ax.axhline(0, color=BLACK, linewidth=0.5, linestyle="--")
     ax.set_xlabel("Hours from T₀")
-    ax.set_ylabel("ΔCr DiD (×10⁻³ mg/dL)")
+    ax.set_ylabel("ΔCr DiD (mg/dL)")
     ax.set_xticks([0, 6, 12, 18, 24, 30, 36, 42, 48])
     ax.set_xlim(0, 50)
     ax.legend(loc="lower left")
 
-    save(fig, "fig4_timecourse")
+    save(fig, "timecourse")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -459,7 +459,7 @@ def fig5_egfr_mg_heatmap():
     cbar.set_label("OR", fontsize=6)
     cbar.ax.tick_params(labelsize=5)
 
-    save(fig, "fig5_egfr_mg_heatmap")
+    save(fig, "egfr_mg_heatmap")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -635,7 +635,7 @@ def efig1_love():
         if si == 0:
             ax.legend(fontsize=5, loc="upper right")
 
-    save(fig, "efig1_love_mimic")
+    save(fig, "love_mimic")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -661,7 +661,7 @@ def efig2_sensitivity():
             if len(sub) == 0:
                 continue
             x = sub.target_h.values
-            y = sub.did.values * 1000
+            y = sub.did.values
             ax.plot(
                 x,
                 y,
@@ -677,10 +677,10 @@ def efig2_sensitivity():
         ax.set_title(LBL[db], fontsize=7, fontweight="bold")
         ax.set_xticks([6, 12, 18, 24, 30, 36, 42, 48])
         if i == 0:
-            ax.set_ylabel("ΔCr DiD (×10⁻³ mg/dL)")
+            ax.set_ylabel("ΔCr DiD (mg/dL)")
             ax.legend(fontsize=5, loc="lower left")
 
-    save(fig, "efig2_sensitivity")
+    save(fig, "sensitivity_did")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -746,7 +746,7 @@ def efig4_hte_forest():
         # Shade overall row
         ax.axhspan(-0.5, 0.5, color="#f0f0f0", zorder=0)
 
-    save(fig, "efig4_hte_forest")
+    save(fig, "hte_forest")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -787,21 +787,21 @@ def efig5_crossed_forest():
             mticker.FuncFormatter(lambda x, _: f"{x:.1f}" if x >= 1 else f"{x:.2f}")
         )
 
-    save(fig, "efig5_crossed_forest")
+    save(fig, "crossed_forest")
 
 
 # ═══════════════════════════════════════════════════════════════════
 # MAIN — dispatch
 # ═══════════════════════════════════════════════════════════════════
 ALL_FIGS = {
-    "fig2_primary_forest": fig2_primary_forest,
-    "fig3_egfr_forest": fig3_egfr_forest,
-    "fig4_timecourse": fig4_timecourse,
-    "fig5_egfr_mg_heatmap": fig5_egfr_mg_heatmap,
-    "efig1_love": efig1_love,
-    "efig2_sensitivity": efig2_sensitivity,
-    "efig4_hte_forest": efig4_hte_forest,
-    "efig5_crossed_forest": efig5_crossed_forest,
+    "primary_forest": fig2_primary_forest,
+    "egfr_forest": fig3_egfr_forest,
+    "timecourse": fig4_timecourse,
+    "egfr_mg_heatmap": fig5_egfr_mg_heatmap,
+    "love": efig1_love,
+    "sensitivity_did": efig2_sensitivity,
+    "hte_forest": efig4_hte_forest,
+    "crossed_forest": efig5_crossed_forest,
 }
 
 if __name__ == "__main__":
