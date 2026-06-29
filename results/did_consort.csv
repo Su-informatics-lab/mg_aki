@@ -1,3 +1,2 @@
 total_icu,cardiac_adult_first,post_eskd,treated_any_ivmg,control_no_ivmg,treated_has_cr_pre,treated_no_cr_pre,treated_hosp_fallback,treated_has_cr_pre_with_fallback,excl_cr_high,treated_final,control_has_2cr,control_final,db
-200859,26725,25822,6761,19218,4025,2736,923,4948,103,4845,14582,14244,eICU
 94458,13404,12975,6539,6436,6381,158,5,6386,20,6366,6272,6211,MIMIC

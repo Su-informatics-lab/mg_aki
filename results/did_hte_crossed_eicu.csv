@@ -1,0 +1,23 @@
+"or","or_lo","or_hi","p","rate_trt","rate_ctl","n","events_trt","events_ctl","phenotype","outcome","db","bonferroni_sig"
+0.8041,0.5078,1.2732,0.352376,0.1667,0.1992,246,41,49,"is_female + heart_failure","aki_7d","EICU",FALSE
+0.8604,0.5878,1.2593,0.439038,0.145,0.1646,407,59,67,"age_ge65 + surg_cabg","aki_7d","EICU",FALSE
+0.8833,0.3299,2.3652,0.805008,0.1429,0.1587,63,9,10,"surg_cabg + heart_failure","aki_7d","EICU",FALSE
+1.0176,0.705,1.4689,0.925592,0.1786,0.176,392,70,69,"age_ge65 + heart_failure","aki_7d","EICU",FALSE
+1.0472,0.6869,1.5965,0.830226,0.1693,0.1629,313,53,51,"surg_cabg + bmi_ge30","aki_7d","EICU",FALSE
+1.071,0.796,1.441,0.650392,0.1717,0.1622,629,108,102,"is_female + bmi_ge30","aki_7d","EICU",FALSE
+1.2012,0.8835,1.6332,0.242113,0.1897,0.1631,564,107,92,"diabetes + bmi_ge30","aki_7d","EICU",FALSE
+1.2018,0.7384,1.9558,0.459467,0.1963,0.1689,219,43,37,"is_female + surg_cabg","aki_7d","EICU",FALSE
+1.2091,0.9444,1.5481,0.132055,0.1684,0.1435,962,162,138,"age_ge65 + is_female","aki_7d","EICU",FALSE
+1.2246,0.7865,1.9068,0.369791,0.1905,0.1612,273,52,44,"surg_cabg + diabetes","aki_7d","EICU",FALSE
+1.2932,0.9273,1.8035,0.129771,0.2129,0.1729,451,96,78,"is_female + diabetes","aki_7d","EICU",FALSE
+1.344,0.8828,2.0463,0.168028,0.2288,0.1808,271,62,49,"egfr_lt60 + heart_failure","aki_7d","EICU",FALSE
+1.3451,0.851,2.1262,0.204349,0.2032,0.1594,251,51,40,"diabetes + heart_failure","aki_7d","EICU",FALSE
+1.4435,1.0889,1.9136,0.010711,0.1963,0.1447,698,137,101,"age_ge65 + bmi_ge30","aki_7d","EICU",FALSE
+1.4862,0.957,2.3079,0.07767,0.2164,0.1567,268,58,42,"heart_failure + bmi_ge30","aki_7d","EICU",FALSE
+1.4996,1.1236,2.0015,0.005935,0.2078,0.1488,645,134,96,"age_ge65 + diabetes","aki_7d","EICU",FALSE
+1.5196,1.1091,2.082,0.009196,0.2255,0.1608,510,115,82,"is_female + egfr_lt60","aki_7d","EICU",FALSE
+1.6963,1.3115,2.194,5.7e-05,0.2267,0.1474,794,180,117,"age_ge65 + egfr_lt60","aki_7d","EICU",TRUE
+1.7513,1.2703,2.4143,0.000625,0.2469,0.1577,482,119,76,"egfr_lt60 + bmi_ge30","aki_7d","EICU",TRUE
+1.8186,1.2884,2.5669,0.000671,0.2482,0.1537,423,105,65,"egfr_lt60 + diabetes","aki_7d","EICU",TRUE
+2.7344,1.4034,5.3275,0.003117,0.3153,0.1441,111,35,16,"egfr_lt60 + surg_cabg","aki_7d","EICU",FALSE
+NA,NA,NA,NA,NA,NA,23,3,4,"age_ge65 + ckd","aki_7d","EICU",FALSE
