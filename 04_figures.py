@@ -82,6 +82,8 @@ W_HALF = 4.724  # 120mm
 W_DOUBLE = 7.205  # 183mm
 
 RESULTS = os.path.expanduser("~/mg_aki/results")
+FIG_DIR = os.path.join(RESULTS, "figures")
+os.makedirs(FIG_DIR, exist_ok=True)
 DBS = ["mimic", "eicu"]
 LBL = {"mimic": "MIMIC-IV", "eicu": "eICU-CRD"}
 CLR = {"mimic": BLUE, "eicu": VERMIL}
@@ -90,7 +92,7 @@ MKR = {"mimic": "o", "eicu": "s"}
 
 def save(fig, name):
     for ext in ("pdf", "png"):
-        fig.savefig(os.path.join(RESULTS, f"{name}.{ext}"), format=ext)
+        fig.savefig(os.path.join(FIG_DIR, f"{name}.{ext}"), format=ext)
     plt.close(fig)
     print(f"  ✓ {name}")
 
