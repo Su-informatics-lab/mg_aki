@@ -1,0 +1,11 @@
+label,n,or,ci_lo,ci_hi,p,db,mg_variable,stratum
+First post-admission Mg | Overall,15055,1.4742,1.3526,1.6068,0.0,EICU,First post-admission Mg,Overall
+First post-admission Mg | eGFR>=60,10553,1.6222,1.4491,1.816,0.0,EICU,First post-admission Mg,eGFR>=60
+First post-admission Mg | eGFR_45-59,1998,1.4264,1.1613,1.7519,0.00071,EICU,First post-admission Mg,eGFR_45-59
+First post-admission Mg | eGFR<45,2504,1.3046,1.0902,1.5611,0.003697,EICU,First post-admission Mg,eGFR<45
+First post-admission Mg | Interaction Mg×eGFR<60,15055,0.9147,0.7791,1.0738,0.275757,EICU,First post-admission Mg,Interaction Mg×eGFR<60
+Last Mg before discharge/treatment | Overall,15055,1.9705,1.7322,2.2415,0.0,EICU,Last Mg before discharge/treatment,Overall
+Last Mg before discharge/treatment | eGFR>=60,10553,2.4949,2.0949,2.9712,0.0,EICU,Last Mg before discharge/treatment,eGFR>=60
+Last Mg before discharge/treatment | eGFR_45-59,1998,1.8562,1.3532,2.5461,0.000125,EICU,Last Mg before discharge/treatment,eGFR_45-59
+Last Mg before discharge/treatment | eGFR<45,2504,1.4316,1.1236,1.8241,0.003703,EICU,Last Mg before discharge/treatment,eGFR<45
+Last Mg before discharge/treatment | Interaction Mg×eGFR<60,15055,0.639,0.4953,0.8243,0.000568,EICU,Last Mg before discharge/treatment,Interaction Mg×eGFR<60

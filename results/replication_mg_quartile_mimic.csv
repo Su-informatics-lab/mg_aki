@@ -1,0 +1,33 @@
+mg_quartile,mg_range,egfr_stratum,n,events,rate,mg_variable,db
+Q1,0.40-2.00,Overall,4304,1138,0.2644,First post-admission Mg,MIMIC
+Q2,2.10-2.20,Overall,2389,689,0.2884,First post-admission Mg,MIMIC
+Q3,2.30-2.60,Overall,3334,1215,0.3644,First post-admission Mg,MIMIC
+Q4,2.70-7.50,Overall,2546,1333,0.5236,First post-admission Mg,MIMIC
+Q1,0.40-2.00,eGFR>=60,3486,838,0.2404,First post-admission Mg,MIMIC
+Q2,2.10-2.20,eGFR>=60,2014,564,0.28,First post-admission Mg,MIMIC
+Q3,2.30-2.60,eGFR>=60,2829,997,0.3524,First post-admission Mg,MIMIC
+Q4,2.70-7.50,eGFR>=60,1828,854,0.4672,First post-admission Mg,MIMIC
+Q1,0.40-2.00,eGFR_45-59,403,129,0.3201,First post-admission Mg,MIMIC
+Q2,2.10-2.20,eGFR_45-59,175,48,0.2743,First post-admission Mg,MIMIC
+Q3,2.30-2.60,eGFR_45-59,272,122,0.4485,First post-admission Mg,MIMIC
+Q4,2.70-7.50,eGFR_45-59,393,238,0.6056,First post-admission Mg,MIMIC
+Q1,0.40-2.00,eGFR<45,415,171,0.412,First post-admission Mg,MIMIC
+Q2,2.10-2.20,eGFR<45,200,77,0.385,First post-admission Mg,MIMIC
+Q3,2.30-2.60,eGFR<45,233,96,0.412,First post-admission Mg,MIMIC
+Q4,2.70-7.50,eGFR<45,325,241,0.7415,First post-admission Mg,MIMIC
+Q1,0.70-2.00,Overall,4948,1465,0.2961,Last Mg before discharge/treatment,MIMIC
+Q2,2.10-2.10,Overall,2282,761,0.3335,Last Mg before discharge/treatment,MIMIC
+Q3,2.20-2.30,Overall,3292,1149,0.349,Last Mg before discharge/treatment,MIMIC
+Q4,2.40-31.00,Overall,2051,1000,0.4876,Last Mg before discharge/treatment,MIMIC
+Q1,0.70-2.00,eGFR>=60,4045,1116,0.2759,Last Mg before discharge/treatment,MIMIC
+Q2,2.10-2.10,eGFR>=60,1908,613,0.3213,Last Mg before discharge/treatment,MIMIC
+Q3,2.20-2.30,eGFR>=60,2711,866,0.3194,Last Mg before discharge/treatment,MIMIC
+Q4,2.40-31.00,eGFR>=60,1493,658,0.4407,Last Mg before discharge/treatment,MIMIC
+Q1,0.70-2.00,eGFR_45-59,464,166,0.3578,Last Mg before discharge/treatment,MIMIC
+Q2,2.10-2.10,eGFR_45-59,203,78,0.3842,Last Mg before discharge/treatment,MIMIC
+Q3,2.20-2.30,eGFR_45-59,310,136,0.4387,Last Mg before discharge/treatment,MIMIC
+Q4,2.40-31.00,eGFR_45-59,266,157,0.5902,Last Mg before discharge/treatment,MIMIC
+Q1,0.70-2.00,eGFR<45,439,183,0.4169,Last Mg before discharge/treatment,MIMIC
+Q2,2.10-2.10,eGFR<45,171,70,0.4094,Last Mg before discharge/treatment,MIMIC
+Q3,2.20-2.30,eGFR<45,271,147,0.5424,Last Mg before discharge/treatment,MIMIC
+Q4,2.40-31.00,eGFR<45,292,185,0.6336,Last Mg before discharge/treatment,MIMIC
