@@ -379,6 +379,7 @@ if (!is.null(pri_pairs) && nrow(pri_pairs) > 0) {
     # Helper: KDIGO staging (per-measurement, matches 03b logic)
     compute_kdigo <- function(cr_post, bl, t0_h, window_h, rrt_in_window) {
       if (is.na(bl) || bl <= 0) return(c(NA, NA, NA))
+      if (nrow(cr_post) == 0 && !rrt_in_window) return(c(NA, NA, NA))
       stg1 <- 0L; stg2 <- 0L; stg3 <- 0L
       if (rrt_in_window) { stg1 <- 1L; stg2 <- 1L; stg3 <- 1L }
       if (nrow(cr_post) > 0) {
