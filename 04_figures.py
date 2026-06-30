@@ -9,8 +9,8 @@ Main text:
   fig5_egfr_mg_heatmap  — eGFR × Mg cross-stratification (confounding defense)
 
 Supplement:
-  efig1_love            — Love plots (3 specs, separate panels)
-  efig2_sensitivity     — 3 specs × 8 horizons DiD
+  efig1_love            — Love plots (primary + earliest-labs sensitivity)
+  efig2_sensitivity     — Primary vs earliest-labs sensitivity DiD
   efig4_hte_forest      — Pre-specified subgroup forest
   efig5_crossed_forest  — Crossed phenotype forest
 
@@ -472,10 +472,10 @@ def fig5_egfr_mg_heatmap():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# eFIG 1: LOVE PLOTS (3 specs, separate panels)
+# eFIG 1: LOVE PLOTS (primary + earliest-labs sensitivity)
 # ═══════════════════════════════════════════════════════════════════
 def efig1_love():
-    """Love plots: 3 separate panels for primary/sens_a/sens_b."""
+    """Love plots: primary and earliest-labs sensitivity, separate panels."""
     # Per-spec variable lists matching 02_psm.R SPECS
     PS_BASE = [
         "age",
@@ -497,15 +497,6 @@ def efig1_love():
     SPEC_VARS = {
         "primary_yet_untreated": PS_BASE
         + ["last_calcium", "last_lactate", "last_lactate_missing", "last_heartrate"],
-        "sens_a_yet_untreated": PS_BASE
-        + [
-            "last_magnesium",
-            "last_potassium",
-            "last_calcium",
-            "last_lactate",
-            "last_lactate_missing",
-            "last_heartrate",
-        ],
         "sens_b_yet_untreated": PS_BASE
         + [
             "first_calcium",
@@ -515,9 +506,8 @@ def efig1_love():
         ],
     }
     specs = [
-        ("primary_yet_untreated", "Primary (19 var, no K⁺/Mg)"),
-        ("sens_a_yet_untreated", "Sensitivity A (21 var, +K⁺/Mg)"),
-        ("sens_b_yet_untreated", "Sensitivity B (19 var, FIRST labs)"),
+        ("primary_yet_untreated", "Primary (19 covariates)"),
+        ("sens_b_yet_untreated", "Sensitivity (earliest labs)"),
     ]
     db = "mimic"
     all_pts = pd.read_csv(os.path.join(RESULTS, f"did_all_{db}.csv"))
@@ -562,7 +552,7 @@ def efig1_love():
             all_pts[miss_col] = all_pts[col].isna().astype(float)
         print("    Time-varying labs computed from did_labs_all")
 
-    fig, axes = plt.subplots(1, 3, figsize=(W_DOUBLE, W_DOUBLE * 0.65), sharey=False)
+    fig, axes = plt.subplots(1, 2, figsize=(W_HALF, W_HALF * 0.85), sharey=False)
 
     def compute_smd(x1, x0):
         m1, m0 = x1.mean(), x0.mean()
@@ -649,15 +639,22 @@ def efig1_love():
 
 # ═══════════════════════════════════════════════════════════════════
 # eFIG 2: SENSITIVITY DiD COMPARISON
-# 3 specs × 8 horizons, both DBs
+# Primary vs earliest-labs, both DBs
 # ═══════════════════════════════════════════════════════════════════
 def efig2_sensitivity():
-    """3 specs × 8 horizons DiD — reads did_riskset_{db}.csv."""
+    """Primary vs earliest-labs sensitivity DiD across horizons — reads did_riskset_{db}.csv."""
     fig, axes = plt.subplots(1, 2, figsize=(W_DOUBLE, W_DOUBLE * 0.35), sharey=True)
     spec_styles = {
-        "primary": {"color": BLUE, "marker": "o", "label": "Primary (no K⁺/Mg)"},
-        "sens_a": {"color": VERMIL, "marker": "s", "label": "Sens A (+K⁺/Mg)"},
-        "sens_b": {"color": GREEN, "marker": "^", "label": "Sens B (FIRST labs)"},
+        "primary": {
+            "color": BLUE,
+            "marker": "o",
+            "label": "Primary (labs closest to T\u2080)",
+        },
+        "sens_b": {
+            "color": GREEN,
+            "marker": "^",
+            "label": "Sensitivity (earliest labs)",
+        },
     }
     for i, db in enumerate(DBS):
         ax = axes[i]
