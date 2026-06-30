@@ -251,15 +251,15 @@ def plot_cuminc_panel(
     ci_trt = compute_cumulative_incidence(trt, TIME_GRID) * 100
     ci_ctl = compute_cumulative_incidence(ctl, TIME_GRID) * 100
 
-    # Plot control (dashed) first so treated is on top
+    # Plot control (dotted) first so treated is on top
     ax.step(
         TIME_GRID,
         ci_ctl,
         where="post",
         color=db_color,
-        ls="--",
-        lw=0.9,
-        alpha=0.8,
+        ls=":",
+        lw=1.1,
+        alpha=0.9,
         label="Control",
     )
     ax.step(
@@ -397,7 +397,7 @@ def main():
         legend_elements = [
             Line2D([0], [0], color=WONG["blue"], ls="-", lw=1.2, label="IV Mg"),
             Line2D(
-                [0], [0], color=WONG["blue"], ls="--", lw=0.9, label="Matched control"
+                [0], [0], color=WONG["blue"], ls=":", lw=1.1, label="Matched control"
             ),
         ]
         fig.legend(
@@ -456,7 +456,7 @@ def main():
 
         legend_elements = [
             Line2D([0], [0], color="grey", ls="-", lw=1.2, label="IV Mg (treated)"),
-            Line2D([0], [0], color="grey", ls="--", lw=0.9, label="Matched control"),
+            Line2D([0], [0], color="grey", ls=":", lw=1.1, label="Matched control"),
         ]
         fig.legend(
             handles=legend_elements,
