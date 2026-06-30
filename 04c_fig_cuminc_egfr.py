@@ -25,13 +25,17 @@ Reads:
   results/did_cr_all_{db}.csv
 
 Outputs:
-  results/figures/fig_cuminc_egfr.{pdf,png}
-  results/figures/fig_cuminc_egfr_mimic.{pdf,png}  (MIMIC-only, for slides)
+  results/figures/fig_cuminc_egfr.{pdf,png}          (48h, main text)
+  results/figures/fig_cuminc_egfr_mimic.{pdf,png}    (MIMIC-only, for slides)
+  results/figures/fig_cuminc_egfr_7d.{pdf,png}       (7d, supplement)
 
-Usage: python 04c_fig_cuminc_egfr.py
+Usage:
+  python 04c_fig_cuminc_egfr.py          # 48h (default)
+  python 04c_fig_cuminc_egfr.py 7d       # 7d supplement
 """
 
 import os
+import sys
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -83,14 +87,18 @@ WONG = {
 RESULTS = os.path.expanduser("~/mg_aki/results")
 FIG_DIR = os.path.join(RESULTS, "figures")
 os.makedirs(FIG_DIR, exist_ok=True)
-TIME_GRID = np.arange(0, 49, 1)  # every 1h from 0 to 48h
+TIME_GRID_48 = np.arange(0, 49, 1)  # every 1h, 48h window
+TIME_GRID_7D = np.arange(0, 169, 1)  # every 1h, 7d window
 
 
 # ══════════════════════════════════════════════════════════════════
 # DATA LOADING + AKI TIME COMPUTATION
 # ══════════════════════════════════════════════════════════════════
-def load_db(tag):
-    """Load matched pairs and compute time-to-first-AKI for each patient."""
+def load_db(tag, window_h=48):
+    """Load matched pairs and compute time-to-first-AKI for each patient.
+
+    window_h: AKI observation window in hours (48 or 168 for 7d).
+    """
     all_pts = pd.read_csv(os.path.join(RESULTS, f"did_all_{tag}.csv"))
     pairs = pd.read_csv(
         os.path.join(RESULTS, f"did_pairs_primary_yet_untreated_{tag}.csv")
@@ -143,14 +151,14 @@ def load_db(tag):
             if cr is None or len(cr) == 0:
                 continue
 
-            # ICU discharge within 48h of T0 (transparency: shrinking denominator)
+            # ICU discharge within window of T0 (transparency: shrinking denominator)
             prow = pid_to_row.get(pid)
             disc_h = (
                 disc_vals[prow] - t_mg
                 if prow is not None and pd.notna(disc_vals[prow])
                 else np.nan
             )
-            discharged_48h = bool(pd.notna(disc_h) and 0 < disc_h <= 48)
+            discharged_in_window = bool(pd.notna(disc_h) and 0 < disc_h <= window_h)
 
             # Baseline: last Cr before t_mg
             pre_mask = (cr[:, 1] >= 0) & (cr[:, 1] < t_mg)
@@ -161,8 +169,8 @@ def load_db(tag):
             if bl <= 0 or np.isnan(bl):
                 continue
 
-            # Post-T0 creatinine (48h window)
-            post_mask = (cr[:, 1] > t_mg) & (cr[:, 1] <= t_mg + 48)
+            # Post-T0 creatinine (within observation window)
+            post_mask = (cr[:, 1] > t_mg) & (cr[:, 1] <= t_mg + window_h)
             post = cr[post_mask]
             if len(post) == 0:
                 # No follow-up creatinine within window
@@ -173,7 +181,7 @@ def load_db(tag):
                         "aki_time": np.nan,
                         "censor_time": 0,
                         "event": 0,
-                        "discharged_48h": discharged_48h,
+                        "discharged_in_window": discharged_in_window,
                     }
                 )
                 continue
@@ -186,10 +194,16 @@ def load_db(tag):
                 delta = val - bl
                 ratio = val / bl if bl > 0 else 0
 
-                # KDIGO: absolute increase >=0.3 or ratio >=1.5 within 48h
-                if delta >= 0.3 or ratio >= 1.5:
-                    aki_time = h
-                    break
+                # KDIGO: delta>=0.3 OR ratio>=1.5 within 48h;
+                #        ratio>=1.5 only beyond 48h (standard 7d definition)
+                if h <= 48:
+                    if delta >= 0.3 or ratio >= 1.5:
+                        aki_time = h
+                        break
+                else:
+                    if ratio >= 1.5:
+                        aki_time = h
+                        break
 
             last_cr_time = post[-1, 1] - t_mg
             records.append(
@@ -197,9 +211,9 @@ def load_db(tag):
                     "stratum": stratum,
                     "arm": arm,
                     "aki_time": aki_time,
-                    "censor_time": min(last_cr_time, 48),
+                    "censor_time": min(last_cr_time, window_h),
                     "event": 0 if np.isnan(aki_time) else 1,
-                    "discharged_48h": discharged_48h,
+                    "discharged_in_window": discharged_in_window,
                 }
             )
 
@@ -240,20 +254,31 @@ def compute_ci_bootstrap(df, time_grid, n_boot=200, seed=2026):
 # PLOTTING
 # ══════════════════════════════════════════════════════════════════
 def plot_cuminc_panel(
-    ax, data, stratum, db_color, db_label, panel_label, show_ci=True, n_boot=200
+    ax,
+    data,
+    stratum,
+    db_color,
+    db_label,
+    panel_label,
+    time_grid=None,
+    window_h=48,
+    show_ci=True,
+    n_boot=200,
 ):
     """Plot one panel: treated vs control cumulative AKI incidence."""
+    if time_grid is None:
+        time_grid = TIME_GRID_48 if window_h <= 48 else TIME_GRID_7D
 
     sub = data[data.stratum == stratum]
     trt = sub[sub.arm == "Treated"]
     ctl = sub[sub.arm == "Control"]
 
-    ci_trt = compute_cumulative_incidence(trt, TIME_GRID) * 100
-    ci_ctl = compute_cumulative_incidence(ctl, TIME_GRID) * 100
+    ci_trt = compute_cumulative_incidence(trt, time_grid) * 100
+    ci_ctl = compute_cumulative_incidence(ctl, time_grid) * 100
 
     # Plot control (dotted) first so treated is on top
     ax.step(
-        TIME_GRID,
+        time_grid,
         ci_ctl,
         where="post",
         color=db_color,
@@ -263,33 +288,34 @@ def plot_cuminc_panel(
         label="Control",
     )
     ax.step(
-        TIME_GRID, ci_trt, where="post", color=db_color, ls="-", lw=1.2, label="IV Mg"
+        time_grid, ci_trt, where="post", color=db_color, ls="-", lw=1.2, label="IV Mg"
     )
 
     # CI bands
     if show_ci and len(trt) > 50:
-        lo_t, hi_t = compute_ci_bootstrap(trt, TIME_GRID, n_boot)
-        lo_c, hi_c = compute_ci_bootstrap(ctl, TIME_GRID, n_boot)
+        lo_t, hi_t = compute_ci_bootstrap(trt, time_grid, n_boot)
+        lo_c, hi_c = compute_ci_bootstrap(ctl, time_grid, n_boot)
         ax.fill_between(
-            TIME_GRID, lo_t * 100, hi_t * 100, step="post", alpha=0.10, color=db_color
+            time_grid, lo_t * 100, hi_t * 100, step="post", alpha=0.10, color=db_color
         )
         ax.fill_between(
-            TIME_GRID, lo_c * 100, hi_c * 100, step="post", alpha=0.06, color=db_color
+            time_grid, lo_c * 100, hi_c * 100, step="post", alpha=0.06, color=db_color
         )
 
     # (no 48h marker — entire figure is the 48h window)
 
-    # Annotations: 48h cumulative incidence + discharge fraction (transparency)
+    # Annotations: window-end cumulative incidence + discharge fraction
     n_trt = len(trt)
     n_ctl = len(ctl)
     rate_trt = ci_trt[-1]
     rate_ctl = ci_ctl[-1]
-    disc_trt = 100 * trt["discharged_48h"].mean() if n_trt else 0
-    disc_ctl = 100 * ctl["discharged_48h"].mean() if n_ctl else 0
+    disc_trt = 100 * trt["discharged_in_window"].mean() if n_trt else 0
+    disc_ctl = 100 * ctl["discharged_in_window"].mean() if n_ctl else 0
+    wlabel = "48-h" if window_h <= 48 else "7-d"
     ax.text(
         0.97,
         0.97,
-        f"48-h AKI\nIV Mg: {rate_trt:.1f}%\nControl: {rate_ctl:.1f}%\n"
+        f"{wlabel} AKI\nIV Mg: {rate_trt:.1f}%\nControl: {rate_ctl:.1f}%\n"
         f"n={n_trt}; disch. {disc_trt:.0f}/{disc_ctl:.0f}%",
         transform=ax.transAxes,
         fontsize=5,
@@ -304,18 +330,19 @@ def plot_cuminc_panel(
         ),
     )
 
-    # Direction arrow
+    # Direction arrow (at ~88% of window)
+    arrow_x = int(window_h * 0.88)
     if rate_trt < rate_ctl - 1:
         ax.annotate(
             "",
-            xy=(42, rate_trt),
-            xytext=(42, rate_ctl),
+            xy=(arrow_x, rate_trt),
+            xytext=(arrow_x, rate_ctl),
             arrowprops=dict(
                 arrowstyle="->", color=WONG["green"], lw=1.0, shrinkA=2, shrinkB=2
             ),
         )
         ax.text(
-            44,
+            arrow_x + 2,
             (rate_trt + rate_ctl) / 2,
             "Protection",
             fontsize=5,
@@ -326,14 +353,14 @@ def plot_cuminc_panel(
     elif rate_trt > rate_ctl + 1:
         ax.annotate(
             "",
-            xy=(42, rate_trt),
-            xytext=(42, rate_ctl),
+            xy=(arrow_x, rate_trt),
+            xytext=(arrow_x, rate_ctl),
             arrowprops=dict(
                 arrowstyle="->", color=WONG["vermil"], lw=1.0, shrinkA=2, shrinkB=2
             ),
         )
         ax.text(
-            44,
+            arrow_x + 2,
             (rate_trt + rate_ctl) / 2,
             "Harm",
             fontsize=5,
@@ -342,10 +369,14 @@ def plot_cuminc_panel(
             rotation=90,
         )
 
-    ax.set_xlabel("Hours from T₀")
-    ax.set_xticks([0, 12, 24, 36, 48])
-    ax.set_xticklabels(["0", "12", "24", "36", "48"])
-    ax.set_xlim(-1, 50)
+    ax.set_xlabel("Hours from T\u2080")
+    if window_h <= 48:
+        ax.set_xticks([0, 12, 24, 36, 48])
+        ax.set_xticklabels(["0", "12", "24", "36", "48"])
+        ax.set_xlim(-1, 50)
+    else:
+        ax.set_xticks([0, 24, 48, 72, 96, 120, 144, 168])
+        ax.set_xlim(-2, 175)
 
     ax.set_title(stratum, fontweight="bold", pad=6)
     ax.text(
@@ -362,11 +393,18 @@ def plot_cuminc_panel(
 def main():
     print("── 04c_fig_cuminc_egfr.py: cumulative AKI incidence by eGFR ──\n")
 
+    # CLI: "7d" → 168h window; default → 48h
+    window_h = 168 if "7d" in sys.argv[1:] else 48
+    tg = TIME_GRID_7D if window_h > 48 else TIME_GRID_48
+    wlabel = "7 Days" if window_h > 48 else "48 Hours"
+    suffix = "_7d" if window_h > 48 else ""
+    print(f"  Window: {window_h}h ({wlabel})\n")
+
     # ── Load both databases ───────────────────────────────────────
     dfs = {}
     for tag in ["mimic", "eicu"]:
         try:
-            dfs[tag] = load_db(tag)
+            dfs[tag] = load_db(tag, window_h=window_h)
         except Exception as e:
             print(f"  {tag}: {e}")
 
@@ -387,6 +425,8 @@ def main():
                 WONG["blue"],
                 "MIMIC-IV",
                 label,
+                time_grid=tg,
+                window_h=window_h,
                 show_ci=True,
                 n_boot=200,
             )
@@ -409,7 +449,7 @@ def main():
         )
 
         fig.suptitle(
-            "Cumulative AKI Incidence Within 48 Hours (MIMIC-IV)",
+            "Cumulative AKI Incidence Within {0} (MIMIC-IV)".format(wlabel),
             fontsize=8,
             fontweight="bold",
             y=1.04,
@@ -417,7 +457,7 @@ def main():
 
         plt.tight_layout()
         for ext in ["pdf", "png"]:
-            out = os.path.join(FIG_DIR, f"fig_cuminc_egfr_mimic.{ext}")
+            out = os.path.join(FIG_DIR, f"fig_cuminc_egfr_mimic{suffix}.{ext}")
             fig.savefig(out, format=ext, dpi=300 if ext == "png" else None)
             print(f"  Saved: {out}")
         plt.close(fig)
@@ -437,6 +477,8 @@ def main():
                 WONG["blue"],
                 "MIMIC-IV",
                 chr(ord("a") + i),
+                time_grid=tg,
+                window_h=window_h,
                 show_ci=True,
                 n_boot=200,
             )
@@ -447,6 +489,8 @@ def main():
                 WONG["vermil"],
                 "eICU-CRD",
                 chr(ord("d") + i),
+                time_grid=tg,
+                window_h=window_h,
                 show_ci=True,
                 n_boot=200,
             )
@@ -467,7 +511,7 @@ def main():
         )
 
         fig.suptitle(
-            "Cumulative AKI Incidence Within 48 Hours",
+            "Cumulative AKI Incidence Within {0}".format(wlabel),
             fontsize=9,
             fontweight="bold",
             y=1.02,
@@ -475,7 +519,7 @@ def main():
 
         plt.tight_layout()
         for ext in ["pdf", "png"]:
-            out = os.path.join(FIG_DIR, f"fig_cuminc_egfr.{ext}")
+            out = os.path.join(FIG_DIR, f"fig_cuminc_egfr{suffix}.{ext}")
             fig.savefig(out, format=ext, dpi=300 if ext == "png" else None)
             print(f"  Saved: {out}")
         plt.close(fig)

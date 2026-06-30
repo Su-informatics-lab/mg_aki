@@ -71,10 +71,10 @@ for (i in seq_len(n_pairs)) {
   t_mg <- pairs$t_mg[i]  # IV Mg onset in hours
   mg_i <- mg_list[[pid]]
   if (is.null(mg_i) || nrow(mg_i) == 0) next
-  # Baseline = last Mg measurement before IV Mg time
+  # Baseline = first Mg measurement after ICU admission (before IV Mg time)
   pre <- mg_i[mg_i$offset_h < t_mg, , drop = FALSE]
   if (nrow(pre) == 0) next
-  mg_trt[i] <- pre$value[nrow(pre)]  # last pre-treatment value
+  mg_trt[i] <- pre$value[1]  # first postoperative value (consistent with 06_replicate)
 }
 
 mg_avail <- sum(!is.na(mg_trt))
