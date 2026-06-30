@@ -70,7 +70,7 @@ clean)
   t0=$SECONDS
   python 04_figures.py
   python 04b_fig_egfr.py
-  python 04c_fig_km_egfr.py
+  python 04c_fig_cuminc_egfr.py
   python 04d_fig_secondary_egfr.py
   elapsed $t0
   ;;
