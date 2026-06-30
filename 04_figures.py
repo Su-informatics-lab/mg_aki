@@ -167,14 +167,13 @@ def fig2_primary_forest():
 # Each panel: 5 eGFR strata + Overall, both DBs overlaid
 # ═══════════════════════════════════════════════════════════════════
 def fig3_egfr_forest():
-    """eGFR-stratified AKI stages + mortality (2×3 layout).
-    Row 1: 48h primary (AKI ≥1, ≥2, mortality)
+    """eGFR-stratified AKI stages (2×3 layout, no mortality).
+    Row 1: 48h primary (AKI ≥1, ≥2) + empty
     Row 2: 7d secondary (AKI ≥1, ≥2, ≥3)
     """
     panels_top = [
         ("AKI_48h_Stage1+", "48-h AKI (KDIGO ≥1)"),
         ("AKI_48h_Stage2+", "48-h AKI (KDIGO ≥2)"),
-        ("hosp_mortality", "Hospital mortality"),
     ]
     panels_bot = [
         ("AKI_Stage1+", "7-d AKI (KDIGO ≥1)"),
@@ -182,6 +181,8 @@ def fig3_egfr_forest():
         ("AKI_Stage3+", "7-d AKI (KDIGO ≥3)"),
     ]
     all_panels = panels_top + panels_bot
+    # Grid positions: row 0 has 2 panels (cols 0-1), row 1 has 3 panels
+    grid_pos = [(0, 0), (0, 1), (1, 0), (1, 1), (1, 2)]
     strata_order = [
         "Overall",
         "eGFR>=90",
@@ -201,9 +202,10 @@ def fig3_egfr_forest():
     n_strata = len(strata_order)
 
     fig, axes = plt.subplots(2, 3, figsize=(W_DOUBLE, W_DOUBLE * 0.75), sharey=True)
+    axes[0, 2].set_visible(False)  # empty slot (mortality removed)
 
     for pi, (outcome, title) in enumerate(all_panels):
-        row, col = divmod(pi, 3)
+        row, col = grid_pos[pi]
         ax = axes[row, col]
         panel_label(ax, chr(ord("a") + pi))
         ax.set_title(title, fontsize=7)
@@ -338,138 +340,133 @@ def fig4_timecourse():
 def fig5_egfr_mg_heatmap(aki_outcome="aki_48h", name="egfr_mg_heatmap"):
     """eGFR × Mg OR heatmap — reads mg_strat_{db}.csv.
 
-    aki_outcome: AKI window for the top row (default 48h primary; "aki_7d" for suppl).
+    aki_outcome: AKI window (default 48h primary; "aki_7d" for suppl).
     name: output filename stem.
     """
-    fig, axes = plt.subplots(2, 2, figsize=(W_DOUBLE, W_DOUBLE * 0.55))
+    fig, axes = plt.subplots(1, 2, figsize=(W_DOUBLE, W_DOUBLE * 0.32))
 
     for col_i, db in enumerate(DBS):
         df = pd.read_csv(os.path.join(RESULTS, f"mg_strat_{db}.csv"))
 
-        for row_i, outcome_val in enumerate([aki_outcome, "mortality"]):
-            ax = axes[row_i, col_i]
-            panel_label(ax, chr(ord("a") + row_i * 2 + col_i))
+        ax = axes[col_i]
+        panel_label(ax, chr(ord("a") + col_i))
 
-            sub = df[(df.outcome == outcome_val) & (df.egfr_strat != "All")].copy()
-            if len(sub) == 0:
-                ax.text(
-                    0.5,
-                    0.5,
-                    "no cross-strat data",
-                    ha="center",
-                    va="center",
-                    transform=ax.transAxes,
-                    fontsize=6,
-                )
-                continue
-
-            mg_bins = [
-                b
-                for b in [
-                    "Mg<1.6",
-                    "Mg_1.6-2.0",
-                    "Mg>=2.0",
-                    "Mg<1.8",
-                    "Mg>=1.8",
-                    "Mg_1.6-1.8",
-                    "Mg_1.8-2.0",
-                    "Mg_2.0-2.3",
-                    "Mg>=2.3",
-                ]
-                if b in sub.mg_strat.values
-            ]
-            egfr_bins = [
-                b
-                for b in ["eGFR>=90", "eGFR_60-89", "eGFR_45-59", "eGFR<45"]
-                if b in sub.egfr_strat.values
-            ]
-
-            if not mg_bins or not egfr_bins:
-                ax.text(
-                    0.5,
-                    0.5,
-                    "insufficient strata",
-                    ha="center",
-                    va="center",
-                    transform=ax.transAxes,
-                    fontsize=6,
-                )
-                continue
-
-            mat = np.full((len(mg_bins), len(egfr_bins)), np.nan)
-            pmat = np.full_like(mat, np.nan)
-            nmat = np.full((len(mg_bins), len(egfr_bins)), 0)
-            rmat_t = np.full_like(mat, np.nan)  # rate_trt
-            rmat_c = np.full_like(mat, np.nan)  # rate_ctl
-            for mi, mg in enumerate(mg_bins):
-                for ei, eg in enumerate(egfr_bins):
-                    row = sub[(sub.mg_strat == mg) & (sub.egfr_strat == eg)]
-                    if len(row) > 0:
-                        r = row.iloc[0]
-                        mat[mi, ei] = r["or"]
-                        pmat[mi, ei] = r["p"]
-                        nmat[mi, ei] = int(r["n"])
-                        rmat_t[mi, ei] = r["rate_trt"]
-                        rmat_c[mi, ei] = r["rate_ctl"]
-
-            import matplotlib.colors as mcolors
-            from matplotlib.patches import Rectangle
-
-            norm = mcolors.TwoSlopeNorm(vmin=0.1, vcenter=1.0, vmax=8.0)
-            im = ax.imshow(mat, cmap="RdBu_r", norm=norm, aspect="auto")
-            for mi in range(len(mg_bins)):
-                for ei in range(len(egfr_bins)):
-                    v = mat[mi, ei]
-                    p = pmat[mi, ei]
-                    n = nmat[mi, ei]
-                    rt = rmat_t[mi, ei]
-                    rc = rmat_c[mi, ei]
-                    if pd.isna(v):
-                        continue
-                    # Hatch if fewer than 20 events in either arm
-                    events_trt = n * rt if not pd.isna(rt) else 0
-                    events_ctl = n * rc if not pd.isna(rc) else 0
-                    if min(events_trt, events_ctl) < 20:
-                        rect = Rectangle(
-                            (ei - 0.5, mi - 0.5),
-                            1,
-                            1,
-                            fill=False,
-                            hatch="///",
-                            linewidth=0,
-                            edgecolor="gray",
-                            alpha=0.5,
-                        )
-                        ax.add_patch(rect)
-                    sig = "*" if not pd.isna(p) and p < 0.05 else ""
-                    txt_color = "white" if (v < 0.3 or v > 4.0) else "black"
-                    ax.text(
-                        ei,
-                        mi,
-                        f"{v:.2f}{sig}\nn={n}",
-                        ha="center",
-                        va="center",
-                        fontsize=4.5,
-                        color=txt_color,
-                        fontweight="bold",
-                    )
-
-            ax.set_xticks(range(len(egfr_bins)))
-            ax.set_xticklabels(
-                [b.replace("eGFR", "").replace("_", " ") for b in egfr_bins], fontsize=5
+        sub = df[(df.outcome == aki_outcome) & (df.egfr_strat != "All")].copy()
+        if len(sub) == 0:
+            ax.text(
+                0.5,
+                0.5,
+                "no cross-strat data",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+                fontsize=6,
             )
-            ax.set_yticks(range(len(mg_bins)))
-            ax.set_yticklabels([b.replace("Mg_", "Mg ") for b in mg_bins], fontsize=5)
-            if row_i == 1:
-                ax.set_xlabel("eGFR stratum", fontsize=6)
-            if col_i == 0:
-                ax.set_ylabel("Baseline Mg", fontsize=6)
-            metric = {
-                "aki_48h": "48-h AKI",
-                "aki_7d": "7-d AKI",
-                "mortality": "Mortality",
-            }.get(outcome_val, outcome_val)
-            ax.set_title(f"{LBL[db]} — {metric}", fontsize=6, fontweight="bold")
+            continue
+
+        mg_bins = [
+            b
+            for b in [
+                "Mg<1.6",
+                "Mg_1.6-2.0",
+                "Mg>=2.0",
+                "Mg<1.8",
+                "Mg>=1.8",
+                "Mg_1.6-1.8",
+                "Mg_1.8-2.0",
+                "Mg_2.0-2.3",
+                "Mg>=2.3",
+            ]
+            if b in sub.mg_strat.values
+        ]
+        egfr_bins = [
+            b
+            for b in ["eGFR>=90", "eGFR_60-89", "eGFR_45-59", "eGFR<45"]
+            if b in sub.egfr_strat.values
+        ]
+
+        if not mg_bins or not egfr_bins:
+            ax.text(
+                0.5,
+                0.5,
+                "insufficient strata",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+                fontsize=6,
+            )
+            continue
+
+        mat = np.full((len(mg_bins), len(egfr_bins)), np.nan)
+        pmat = np.full_like(mat, np.nan)
+        nmat = np.full((len(mg_bins), len(egfr_bins)), 0)
+        rmat_t = np.full_like(mat, np.nan)
+        rmat_c = np.full_like(mat, np.nan)
+        for mi, mg in enumerate(mg_bins):
+            for ei, eg in enumerate(egfr_bins):
+                row = sub[(sub.mg_strat == mg) & (sub.egfr_strat == eg)]
+                if len(row) > 0:
+                    r = row.iloc[0]
+                    mat[mi, ei] = r["or"]
+                    pmat[mi, ei] = r["p"]
+                    nmat[mi, ei] = int(r["n"])
+                    rmat_t[mi, ei] = r["rate_trt"]
+                    rmat_c[mi, ei] = r["rate_ctl"]
+
+        import matplotlib.colors as mcolors
+        from matplotlib.patches import Rectangle
+
+        norm = mcolors.TwoSlopeNorm(vmin=0.1, vcenter=1.0, vmax=8.0)
+        im = ax.imshow(mat, cmap="RdBu_r", norm=norm, aspect="auto")
+        for mi in range(len(mg_bins)):
+            for ei in range(len(egfr_bins)):
+                v = mat[mi, ei]
+                p = pmat[mi, ei]
+                n = nmat[mi, ei]
+                rt = rmat_t[mi, ei]
+                rc = rmat_c[mi, ei]
+                if pd.isna(v):
+                    continue
+                events_trt = n * rt if not pd.isna(rt) else 0
+                events_ctl = n * rc if not pd.isna(rc) else 0
+                if min(events_trt, events_ctl) < 20:
+                    rect = Rectangle(
+                        (ei - 0.5, mi - 0.5),
+                        1,
+                        1,
+                        fill=False,
+                        hatch="///",
+                        linewidth=0,
+                        edgecolor="gray",
+                        alpha=0.5,
+                    )
+                    ax.add_patch(rect)
+                sig = "*" if not pd.isna(p) and p < 0.05 else ""
+                txt_color = "white" if (v < 0.3 or v > 4.0) else "black"
+                ax.text(
+                    ei,
+                    mi,
+                    f"{v:.2f}{sig}\nn={n}",
+                    ha="center",
+                    va="center",
+                    fontsize=4.5,
+                    color=txt_color,
+                    fontweight="bold",
+                )
+
+        ax.set_xticks(range(len(egfr_bins)))
+        ax.set_xticklabels(
+            [b.replace("eGFR", "").replace("_", " ") for b in egfr_bins], fontsize=5
+        )
+        ax.set_yticks(range(len(mg_bins)))
+        ax.set_yticklabels([b.replace("Mg_", "Mg ") for b in mg_bins], fontsize=5)
+        ax.set_xlabel("eGFR stratum", fontsize=6)
+        if col_i == 0:
+            ax.set_ylabel("Baseline Mg", fontsize=6)
+        metric = {"aki_48h": "48-h AKI", "aki_7d": "7-d AKI"}.get(
+            aki_outcome, aki_outcome
+        )
+        ax.set_title(f"{LBL[db]} \u2014 {metric}", fontsize=6, fontweight="bold")
 
     cbar = fig.colorbar(im, ax=axes, shrink=0.6, pad=0.02)
     cbar.set_label("OR", fontsize=6)

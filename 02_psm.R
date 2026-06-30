@@ -65,6 +65,14 @@ find_cr_pre <- function(cr_pt, t_h) {
   best <- cand[which.max(cand$offset_h), ]
   c(best$labresult, best$offset_h)
 }
+find_cr_max <- function(cr_pt, t0_h, target_h) {
+  # Max Cr between T0 and target_h (KDIGO-aligned peak)
+  if (is.null(cr_pt) || nrow(cr_pt) == 0) return(c(NA, NA))
+  cand <- cr_pt[cr_pt$offset_h > t0_h & cr_pt$offset_h <= target_h, ]
+  if (nrow(cand) == 0) return(c(NA, NA))
+  best <- cand[which.max(cand$labresult), ]
+  c(best$labresult, best$offset_h)
+}
 safe_coeftest <- function(fit) {
   ct <- tryCatch(suppressWarnings(coeftest(fit, vcov. = vcovHC(fit, type = "HC1"))),
                  error = function(e) NULL)
@@ -147,7 +155,7 @@ run_spec_pool <- function(spec_name, spec_obj, pool_name,
       cmg <- all_pts$mg_offset_h[match_ctl[kk]]
       if (!is.na(cmg) && cmg < tmg+target_h) { valid[idx]<-FALSE; next }
       pt <- find_cr_pre(cr_list[[tp]], tmg); pc <- find_cr_pre(cr_list[[cp]], tmg)
-      qt <- find_cr(cr_list[[tp]], tmg+target_h); qc <- find_cr(cr_list[[cp]], tmg+target_h)
+      qt <- find_cr_max(cr_list[[tp]], tmg, tmg+target_h); qc <- find_cr_max(cr_list[[cp]], tmg, tmg+target_h)
       if (any(is.na(c(pt[1],pc[1],qt[1],qc[1])))) { valid[idx]<-FALSE; next }
       dcr_t[idx] <- qt[1]-pt[1]; dcr_c[idx] <- qc[1]-pc[1]; valid[idx] <- TRUE
     }
@@ -354,11 +362,6 @@ if (!is.null(pri_pairs) && nrow(pri_pairs) > 0) {
     cr_t7d <- if (!is.null(cr_t)) cr_t[cr_t$offset_h > t0 & cr_t$offset_h <= t0 + 168, ] else data.frame()
     cr_c7d <- if (!is.null(cr_c)) cr_c[cr_c$offset_h > t0 & cr_c$offset_h <= t0 + 168, ] else data.frame()
 
-    max_t48 <- if (nrow(cr_t48) > 0) max(cr_t48$labresult) else NA
-    max_c48 <- if (nrow(cr_c48) > 0) max(cr_c48$labresult) else NA
-    max_t7d <- if (nrow(cr_t7d) > 0) max(cr_t7d$labresult) else NA
-    max_c7d <- if (nrow(cr_c7d) > 0) max(cr_c7d$labresult) else NA
-
     # RRT within windows
     rrt_t <- if (!is.null(rrt_map)) rrt_map[tp] else NA
     rrt_c <- if (!is.null(rrt_map)) rrt_map[cp] else NA
@@ -373,20 +376,33 @@ if (!is.null(pri_pairs) && nrow(pri_pairs) > 0) {
     d_t_from_t0 <- if (!is.na(d_t)) d_t - t0 else NA
     d_c_from_t0 <- if (!is.na(d_c)) d_c - t0 else NA
 
-    # Helper: KDIGO staging
-    kdigo <- function(max_cr, bl, rrt_in_window) {
-      if (is.na(max_cr) || is.na(bl) || bl <= 0) return(c(NA, NA, NA))
-      delta <- max_cr - bl; ratio <- max_cr / bl
-      stg1 <- as.integer(delta >= 0.3 | ratio >= 1.5 | rrt_in_window)
-      stg2 <- as.integer(ratio >= 2.0 | rrt_in_window)
-      stg3 <- as.integer(ratio >= 3.0 | max_cr >= 4.0 | rrt_in_window)
+    # Helper: KDIGO staging (per-measurement, matches 03b logic)
+    compute_kdigo <- function(cr_post, bl, t0_h, window_h, rrt_in_window) {
+      if (is.na(bl) || bl <= 0) return(c(NA, NA, NA))
+      stg1 <- 0L; stg2 <- 0L; stg3 <- 0L
+      if (rrt_in_window) { stg1 <- 1L; stg2 <- 1L; stg3 <- 1L }
+      if (nrow(cr_post) > 0) {
+        for (i in seq_len(nrow(cr_post))) {
+          h <- cr_post$offset_h[i] - t0_h
+          val <- cr_post$labresult[i]
+          delta <- val - bl; ratio <- val / bl
+          if (window_h <= 48) {
+            if (delta >= 0.3 || ratio >= 1.5) stg1 <- 1L
+          } else {
+            if (h <= 48 && (delta >= 0.3 || ratio >= 1.5)) stg1 <- 1L
+            if (h > 48 && ratio >= 1.5) stg1 <- 1L
+          }
+          if (ratio >= 2.0) stg2 <- 1L
+          if (ratio >= 3.0 || val >= 4.0) stg3 <- 1L
+        }
+      }
       c(stg1, stg2, stg3)
     }
 
-    kt48 <- kdigo(max_t48, bl_t, rrt_t48)
-    kc48 <- kdigo(max_c48, bl_c, rrt_c48)
-    kt7d <- kdigo(max_t7d, bl_t, rrt_t7d)
-    kc7d <- kdigo(max_c7d, bl_c, rrt_c7d)
+    kt48 <- compute_kdigo(cr_t48, bl_t, t0, 48, rrt_t48)
+    kc48 <- compute_kdigo(cr_c48, bl_c, t0, 48, rrt_c48)
+    kt7d <- compute_kdigo(cr_t7d, bl_t, t0, 168, rrt_t7d)
+    kc7d <- compute_kdigo(cr_c7d, bl_c, t0, 168, rrt_c7d)
 
     outcome_rows[[k]] <- data.frame(
       trt_pid = tp, ctl_pid = cp, t0 = t0,
