@@ -132,11 +132,35 @@ compute_aki_7d <- function(pid, t_mg) {
   return(0)
 }
 
+# ── Compute 48h AKI (KDIGO primary endpoint) ──────────────────────
+# Stage 1+ within 48h of T0: abs rise >=0.3 mg/dL OR ratio >=1.5.
+# Post window strictly after t_mg, matching 03b_egfr_aki_stages.R
+# (window_h=48 branch) so the heatmap's 48h == the forest plot's 48h.
+compute_aki_48h <- function(pid, t_mg) {
+  cr <- cr_list[[as.character(pid)]]
+  if (is.null(cr) || nrow(cr) < 1) return(NA)
+  pre <- cr[cr$offset_h >= 0 & cr$offset_h < t_mg, ]
+  if (nrow(pre) == 0) return(NA)
+  bl <- pre$labresult[which.max(pre$offset_h)]
+  if (is.na(bl) || bl <= 0) return(NA)
+  post <- cr[cr$offset_h > t_mg & cr$offset_h <= (t_mg + 48), ]
+  if (nrow(post) == 0) return(0)
+  for (i in seq_len(nrow(post))) {
+    val <- post$labresult[i]
+    delta <- val - bl; ratio <- val / bl
+    if (delta >= 0.3 || ratio >= 1.5) return(1)
+  }
+  return(0)
+}
+
 cat("  Computing 7d AKI...\n")
 aki_trt <- aki_ctl <- integer(n_pairs)
+aki48_trt <- aki48_ctl <- integer(n_pairs)
 for (i in seq_len(n_pairs)) {
-  aki_trt[i] <- compute_aki_7d(pairs$trt_pid[i], pairs$t_mg[i])
-  aki_ctl[i] <- compute_aki_7d(pairs$ctl_pid[i], pairs$t_mg[i])
+  aki_trt[i]   <- compute_aki_7d(pairs$trt_pid[i], pairs$t_mg[i])
+  aki_ctl[i]   <- compute_aki_7d(pairs$ctl_pid[i], pairs$t_mg[i])
+  aki48_trt[i] <- compute_aki_48h(pairs$trt_pid[i], pairs$t_mg[i])
+  aki48_ctl[i] <- compute_aki_48h(pairs$ctl_pid[i], pairs$t_mg[i])
 }
 
 # Also load mortality
@@ -285,6 +309,26 @@ for (mg_s in mg_coarse) {
 cat(sprintf("\n%s\nSECTION 3b: eGFR × Mg 3-bin cross-stratification\n%s\n",
             paste(rep("=",60),collapse=""), paste(rep("=",60),collapse="")))
 
+# ── 48h AKI rows for the heatmap (primary endpoint; computed silently, ──
+# ── no console table so the 7d tables above stay intact). egfr=All rows ──
+# ── are reference only; the heatmap uses the cross-strat rows below.    ──
+for (stg in mg_order) {
+  if (stg == "Overall") idx <- seq_len(n_pairs) else idx <- which(mg_strat == stg)
+  if (length(idx) < 30) next
+  res <- run_or(aki48_trt[idx], aki48_ctl[idx])
+  res$outcome <- "aki_48h"; res$mg_strat <- stg; res$egfr_strat <- "All"; res$db <- db
+  ridx <- ridx+1; results[[ridx]] <- res
+}
+for (mg_s in mg_coarse) {
+  for (eg_s in egfr_order) {
+    idx <- which(mg_coarse_strat == mg_s & egfr_strat == eg_s)
+    if (length(idx) < 30) next
+    res <- run_or(aki48_trt[idx], aki48_ctl[idx])
+    res$outcome <- "aki_48h"; res$mg_strat <- mg_s; res$egfr_strat <- eg_s; res$db <- db
+    ridx <- ridx+1; results[[ridx]] <- res
+  }
+}
+
 mg3_names <- c("Mg<1.6", "Mg_1.6-2.0", "Mg>=2.0")
 mg3_strat <- rep(NA_character_, n_pairs)
 mg3_strat[!is.na(mg_trt) & mg_trt < 1.6]                 <- "Mg<1.6"
@@ -295,7 +339,8 @@ cat(sprintf("  Mg 3-bin: %s\n",
             paste(names(table(mg3_strat)), table(mg3_strat), sep="=", collapse=", ")))
 
 for (outcome_pair in list(
-  list(label="AKI", ot=aki_trt, oc=aki_ctl, oname="aki_7d"),
+  list(label="AKI 48h", ot=aki48_trt, oc=aki48_ctl, oname="aki_48h"),
+  list(label="AKI 7d", ot=aki_trt, oc=aki_ctl, oname="aki_7d"),
   list(label="MORTALITY", ot=mort_trt, oc=mort_ctl, oname="mortality")
 )) {
   cat(sprintf("\n  %10s | %15s | %15s | %15s | %15s\n",

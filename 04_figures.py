@@ -6,13 +6,14 @@ Main text:
   fig2_primary_forest   — Overall binary outcomes (KDIGO cascade + mortality)
   fig3_egfr_forest      — eGFR-stratified AKI stages + mortality (THE finding)
   fig4_timecourse       — ΔCr time course (PK plausibility)
-  fig5_egfr_mg_heatmap  — eGFR × Mg cross-stratification (confounding defense)
+  fig5_egfr_mg_heatmap  — eGFR × Mg cross-stratification, 48-h AKI (confounding defense)
 
 Supplement:
   efig1_love            — Love plots (primary + earliest-labs sensitivity)
   efig2_sensitivity     — Primary vs earliest-labs sensitivity DiD
   efig4_hte_forest      — Pre-specified subgroup forest
   efig5_crossed_forest  — Crossed phenotype forest
+  egfr_mg_heatmap_7d    — eGFR × Mg cross-stratification, 7-d AKI
 
 Usage:
   python 04_figures.py                    # all
@@ -334,14 +335,18 @@ def fig4_timecourse():
 # FIG 5: eGFR × Mg CROSS-STRATIFICATION HEATMAP
 # Shows eGFR reversal persists within each Mg stratum
 # ═══════════════════════════════════════════════════════════════════
-def fig5_egfr_mg_heatmap():
-    """eGFR × Mg OR heatmap — reads mg_strat_{db}.csv."""
+def fig5_egfr_mg_heatmap(aki_outcome="aki_48h", name="egfr_mg_heatmap"):
+    """eGFR × Mg OR heatmap — reads mg_strat_{db}.csv.
+
+    aki_outcome: AKI window for the top row (default 48h primary; "aki_7d" for suppl).
+    name: output filename stem.
+    """
     fig, axes = plt.subplots(2, 2, figsize=(W_DOUBLE, W_DOUBLE * 0.55))
 
     for col_i, db in enumerate(DBS):
         df = pd.read_csv(os.path.join(RESULTS, f"mg_strat_{db}.csv"))
 
-        for row_i, outcome_val in enumerate(["aki_7d", "mortality"]):
+        for row_i, outcome_val in enumerate([aki_outcome, "mortality"]):
             ax = axes[row_i, col_i]
             panel_label(ax, chr(ord("a") + row_i * 2 + col_i))
 
@@ -459,16 +464,18 @@ def fig5_egfr_mg_heatmap():
                 ax.set_xlabel("eGFR stratum", fontsize=6)
             if col_i == 0:
                 ax.set_ylabel("Baseline Mg", fontsize=6)
-            title = (
-                f'{LBL[db]} — {"AKI 7d" if outcome_val == "aki_7d" else "Mortality"}'
-            )
-            ax.set_title(title, fontsize=6, fontweight="bold")
+            metric = {
+                "aki_48h": "48-h AKI",
+                "aki_7d": "7-d AKI",
+                "mortality": "Mortality",
+            }.get(outcome_val, outcome_val)
+            ax.set_title(f"{LBL[db]} — {metric}", fontsize=6, fontweight="bold")
 
     cbar = fig.colorbar(im, ax=axes, shrink=0.6, pad=0.02)
     cbar.set_label("OR", fontsize=6)
     cbar.ax.tick_params(labelsize=5)
 
-    save(fig, "egfr_mg_heatmap")
+    save(fig, name)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -804,6 +811,7 @@ ALL_FIGS = {
     "egfr_forest": fig3_egfr_forest,
     "timecourse": fig4_timecourse,
     "egfr_mg_heatmap": fig5_egfr_mg_heatmap,
+    "egfr_mg_heatmap_7d": lambda: fig5_egfr_mg_heatmap("aki_7d", "egfr_mg_heatmap_7d"),
     "love": efig1_love,
     "sensitivity_did": efig2_sensitivity,
     "hte_forest": efig4_hte_forest,
