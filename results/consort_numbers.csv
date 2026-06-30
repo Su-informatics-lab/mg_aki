@@ -1,0 +1,3 @@
+db,total_icu,excl_noncardiac,cardiac_surgery,eskd_excluded,post_eskd,treated_eligible,control_eligible,eligible_total,matched_pairs,matched_treated,match_rate_pct,unique_controls_used,control_reuse_ratio
+mimic,94458,81054,13404,429,12975,6366,6211,12577,6354,6354,99.8,3452,1.84
+eicu,200859,174134,26725,903,25822,4845,14244,19089,4835,4835,99.8,3468,1.39
