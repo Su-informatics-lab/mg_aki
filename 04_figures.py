@@ -166,13 +166,21 @@ def fig2_primary_forest():
 # Each panel: 5 eGFR strata + Overall, both DBs overlaid
 # ═══════════════════════════════════════════════════════════════════
 def fig3_egfr_forest():
-    """eGFR-stratified AKI stages + mortality — reads egfr_aki_stages_{db}.csv."""
-    panels = [
+    """eGFR-stratified AKI stages + mortality (2×3 layout).
+    Row 1: 48h primary (AKI ≥1, ≥2, mortality)
+    Row 2: 7d secondary (AKI ≥1, ≥2, ≥3)
+    """
+    panels_top = [
         ("AKI_48h_Stage1+", "48-h AKI (KDIGO ≥1)"),
         ("AKI_48h_Stage2+", "48-h AKI (KDIGO ≥2)"),
-        ("AKI_48h_Stage3+", "48-h AKI (KDIGO ≥3)"),
         ("hosp_mortality", "Hospital mortality"),
     ]
+    panels_bot = [
+        ("AKI_Stage1+", "7-d AKI (KDIGO ≥1)"),
+        ("AKI_Stage2+", "7-d AKI (KDIGO ≥2)"),
+        ("AKI_Stage3+", "7-d AKI (KDIGO ≥3)"),
+    ]
+    all_panels = panels_top + panels_bot
     strata_order = [
         "Overall",
         "eGFR>=90",
@@ -191,10 +199,11 @@ def fig3_egfr_forest():
     ]
     n_strata = len(strata_order)
 
-    fig, axes = plt.subplots(1, 4, figsize=(W_DOUBLE, W_DOUBLE * 0.55), sharey=True)
+    fig, axes = plt.subplots(2, 3, figsize=(W_DOUBLE, W_DOUBLE * 0.75), sharey=True)
 
-    for pi, (outcome, title) in enumerate(panels):
-        ax = axes[pi]
+    for pi, (outcome, title) in enumerate(all_panels):
+        row, col = divmod(pi, 3)
+        ax = axes[row, col]
         panel_label(ax, chr(ord("a") + pi))
         ax.set_title(title, fontsize=7)
 
@@ -221,7 +230,7 @@ def fig3_egfr_forest():
         # Reference line + styling
         ax.axvline(1.0, color=BLACK, linewidth=0.5, linestyle="--", zorder=1)
         ax.set_yticks(range(n_strata))
-        if pi == 0:
+        if col == 0:
             ax.set_yticklabels(strata_labels, fontsize=6)
         ax.set_xlabel("OR (95% CI)", fontsize=6)
         ax.set_xscale("log")
@@ -249,7 +258,7 @@ def fig3_egfr_forest():
         )
         for db in DBS
     ]
-    axes[-1].legend(handles=handles, loc="lower right", fontsize=6)
+    axes[1, 2].legend(handles=handles, loc="lower right", fontsize=6)
 
     # Interaction P annotation
     for db in DBS:

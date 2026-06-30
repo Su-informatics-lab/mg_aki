@@ -72,7 +72,7 @@ WONG = {
 RESULTS = os.path.expanduser("~/mg_aki/results")
 FIG_DIR = os.path.join(RESULTS, "figures")
 os.makedirs(FIG_DIR, exist_ok=True)
-TIME_GRID = np.arange(0, 169, 2)  # every 2h from 0 to 168h (7d)
+TIME_GRID = np.arange(0, 49, 1)  # every 1h from 0 to 48h
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -140,8 +140,8 @@ def load_db(tag):
             if bl <= 0 or np.isnan(bl):
                 continue
 
-            # Post-T0 creatinine
-            post_mask = (cr[:, 1] >= t_mg) & (cr[:, 1] <= t_mg + 168)
+            # Post-T0 creatinine (48h window)
+            post_mask = (cr[:, 1] > t_mg) & (cr[:, 1] <= t_mg + 48)
             post = cr[post_mask]
             if len(post) == 0:
                 # Censored at T0 with no follow-up
@@ -178,7 +178,7 @@ def load_db(tag):
                     "stratum": stratum,
                     "arm": arm,
                     "aki_time": aki_time,
-                    "censor_time": min(last_cr_time, 168),
+                    "censor_time": min(last_cr_time, 48),
                     "event": 0 if np.isnan(aki_time) else 1,
                 }
             )
@@ -280,17 +280,7 @@ def plot_km_panel(
             TIME_GRID, lo_c * 100, hi_c * 100, step="post", alpha=0.06, color=db_color
         )
 
-    # 48h marker
-    ax.axvspan(46, 50, color="grey", alpha=0.08, zorder=0)
-    ax.text(
-        48,
-        ax.get_ylim()[1] * 0.02,
-        "48h",
-        fontsize=5,
-        ha="center",
-        color="grey",
-        alpha=0.6,
-    )
+    # (48h marker removed — entire figure is 48h window)
 
     # Annotations
     n_trt = len(trt)
@@ -318,14 +308,14 @@ def plot_km_panel(
     if rate_trt < rate_ctl - 1:
         ax.annotate(
             "",
-            xy=(140, rate_trt),
-            xytext=(140, rate_ctl),
+            xy=(42, rate_trt),
+            xytext=(42, rate_ctl),
             arrowprops=dict(
                 arrowstyle="->", color=WONG["green"], lw=1.0, shrinkA=2, shrinkB=2
             ),
         )
         ax.text(
-            145,
+            44,
             (rate_trt + rate_ctl) / 2,
             "Protection",
             fontsize=5,
@@ -336,14 +326,14 @@ def plot_km_panel(
     elif rate_trt > rate_ctl + 1:
         ax.annotate(
             "",
-            xy=(140, rate_trt),
-            xytext=(140, rate_ctl),
+            xy=(42, rate_trt),
+            xytext=(42, rate_ctl),
             arrowprops=dict(
                 arrowstyle="->", color=WONG["vermil"], lw=1.0, shrinkA=2, shrinkB=2
             ),
         )
         ax.text(
-            145,
+            44,
             (rate_trt + rate_ctl) / 2,
             "Harm",
             fontsize=5,
@@ -353,9 +343,9 @@ def plot_km_panel(
         )
 
     ax.set_xlabel("Hours from T₀")
-    ax.set_xticks([0, 24, 48, 72, 96, 120, 144, 168])
-    ax.set_xticklabels(["0", "24", "48", "72", "96", "120", "144", "7d"])
-    ax.set_xlim(-2, 172)
+    ax.set_xticks([0, 12, 24, 36, 48])
+    ax.set_xticklabels(["0", "12", "24", "36", "48"])
+    ax.set_xlim(-1, 50)
 
     ax.set_title(stratum, fontweight="bold", pad=6)
     ax.text(
@@ -419,7 +409,7 @@ def main():
         )
 
         fig.suptitle(
-            "Cumulative AKI Incidence by Baseline Renal Function (MIMIC-IV)",
+            "Cumulative AKI Incidence Within 48 Hours (MIMIC-IV)",
             fontsize=8,
             fontweight="bold",
             y=1.04,
@@ -477,7 +467,7 @@ def main():
         )
 
         fig.suptitle(
-            "Cumulative AKI Incidence by Baseline Renal Function",
+            "Cumulative AKI Incidence Within 48 Hours",
             fontsize=9,
             fontweight="bold",
             y=1.02,
