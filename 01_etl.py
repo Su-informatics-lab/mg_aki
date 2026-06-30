@@ -1382,10 +1382,17 @@ if __name__ == "__main__":
             consorts.append(c)
 
     if consorts:
-        pd.DataFrame(consorts).to_csv(
-            os.path.join(RESULTS, "did_consort.csv"), index=False
-        )
-        print(f"\n  \u2713 did_consort.csv saved")
+        consort_path = os.path.join(RESULTS, "did_consort.csv")
+        new_df = pd.DataFrame(consorts)
+        # Merge with existing rows (preserve other db when running single db)
+        if os.path.exists(consort_path):
+            old_df = pd.read_csv(consort_path)
+            # Drop rows for databases we just re-ran, keep the rest
+            new_dbs = set(new_df["db"])
+            old_df = old_df[~old_df["db"].isin(new_dbs)]
+            new_df = pd.concat([old_df, new_df], ignore_index=True)
+        new_df.to_csv(consort_path, index=False)
+        print(f"\n  \u2713 did_consort.csv saved ({', '.join(new_df['db'].tolist())})")
 
     print("\n" + "=" * 70)
     print("NEXT: Rscript 02_psm.R eicu / mimic")
