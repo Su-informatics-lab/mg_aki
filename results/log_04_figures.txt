@@ -1,0 +1,37 @@
+============================================================
+04_figures.py — Critical Care submission figures
+============================================================
+
+  Generating primary_forest...
+  ✓ primary_forest
+
+  Generating egfr_forest...
+    mimic eGFR interaction P (AKI 7d): 0.000000
+    eicu eGFR interaction P (AKI 7d): 0.000000
+  ✓ egfr_forest
+
+  Generating timecourse...
+  ✓ timecourse
+
+  Generating egfr_mg_heatmap...
+  ✓ egfr_mg_heatmap
+
+  Generating egfr_mg_heatmap_7d...
+  ✓ egfr_mg_heatmap_7d
+
+  Generating love...
+    Time-varying labs computed from did_labs_all
+  ✓ love_mimic
+
+  Generating sensitivity_did...
+  ✓ sensitivity_did
+
+  Generating hte_forest...
+  ✓ hte_forest
+
+  Generating crossed_forest...
+  ✓ crossed_forest
+
+============================================================
+DONE
+============================================================
