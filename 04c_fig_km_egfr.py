@@ -102,6 +102,7 @@ def load_db(tag):
     # Map pairs to eGFR
     pid_to_row = {pid: i for i, pid in enumerate(all_pts["pid"])}
     egfr_vals = all_pts["egfr"].values
+    disc_vals = all_pts["icu_discharge_h"].values
 
     records = []
     for _, pair in pairs.iterrows():
@@ -131,6 +132,15 @@ def load_db(tag):
             if cr is None or len(cr) == 0:
                 continue
 
+            # ICU discharge within 48h of T0 (transparency: shrinking denominator)
+            prow = pid_to_row.get(pid)
+            disc_h = (
+                disc_vals[prow] - t_mg
+                if prow is not None and pd.notna(disc_vals[prow])
+                else np.nan
+            )
+            discharged_48h = bool(pd.notna(disc_h) and 0 < disc_h <= 48)
+
             # Baseline: last Cr before t_mg
             pre_mask = (cr[:, 1] >= 0) & (cr[:, 1] < t_mg)
             if not np.any(pre_mask):
@@ -144,7 +154,7 @@ def load_db(tag):
             post_mask = (cr[:, 1] > t_mg) & (cr[:, 1] <= t_mg + 48)
             post = cr[post_mask]
             if len(post) == 0:
-                # Censored at T0 with no follow-up
+                # No follow-up creatinine within window
                 records.append(
                     {
                         "stratum": stratum,
@@ -152,6 +162,7 @@ def load_db(tag):
                         "aki_time": np.nan,
                         "censor_time": 0,
                         "event": 0,
+                        "discharged_48h": discharged_48h,
                     }
                 )
                 continue
@@ -180,6 +191,7 @@ def load_db(tag):
                     "aki_time": aki_time,
                     "censor_time": min(last_cr_time, 48),
                     "event": 0 if np.isnan(aki_time) else 1,
+                    "discharged_48h": discharged_48h,
                 }
             )
 
@@ -189,41 +201,17 @@ def load_db(tag):
 
 
 def compute_cumulative_incidence(df, time_grid):
-    """Compute 1 - KM estimator (cumulative incidence) on a time grid."""
+    """Simple empirical cumulative incidence (not KM).
+    At each time t: proportion of all patients with AKI event by time t.
+    Censored patients counted as non-events (conservative).
+    Avoids KM's sensitivity to informative censoring.
+    """
     events = df[df.event == 1]["aki_time"].values
-    censors = df[df.event == 0]["censor_time"].values
     n_total = len(df)
     if n_total == 0:
         return np.zeros_like(time_grid, dtype=float)
-
-    # Sort all event/censor times
-    times = np.concatenate([events, censors])
-    event_flags = np.concatenate([np.ones(len(events)), np.zeros(len(censors))])
-    order = np.argsort(times)
-    times = times[order]
-    event_flags = event_flags[order]
-
-    # KM estimator
-    n_at_risk = n_total
-    surv = 1.0
-    surv_curve = np.ones_like(time_grid, dtype=float)
-
-    t_idx = 0
-    for i in range(len(times)):
-        # Advance time grid
-        while t_idx < len(time_grid) and time_grid[t_idx] <= times[i]:
-            surv_curve[t_idx] = surv
-            t_idx += 1
-        if event_flags[i] == 1:
-            surv *= 1 - 1 / max(n_at_risk, 1)
-        n_at_risk -= 1
-
-    # Fill remaining
-    while t_idx < len(time_grid):
-        surv_curve[t_idx] = surv
-        t_idx += 1
-
-    return 1 - surv_curve  # cumulative incidence
+    cum_inc = np.array([np.sum(events <= t) / n_total for t in time_grid], dtype=float)
+    return cum_inc
 
 
 def compute_ci_bootstrap(df, time_grid, n_boot=200, seed=2026):
@@ -287,12 +275,15 @@ def plot_km_panel(
     n_ctl = len(ctl)
     rate_trt = ci_trt[-1]
     rate_ctl = ci_ctl[-1]
+    disc_trt = 100 * trt["discharged_48h"].mean() if n_trt else 0
+    disc_ctl = 100 * ctl["discharged_48h"].mean() if n_ctl else 0
     ax.text(
         0.97,
         0.97,
-        f"IV Mg: {rate_trt:.1f}%\nControl: {rate_ctl:.1f}%\nn={n_trt}",
+        f"48-h AKI\nIV Mg: {rate_trt:.1f}%\nControl: {rate_ctl:.1f}%\n"
+        f"n={n_trt}; disch. {disc_trt:.0f}/{disc_ctl:.0f}%",
         transform=ax.transAxes,
-        fontsize=5.5,
+        fontsize=5,
         va="top",
         ha="right",
         bbox=dict(
