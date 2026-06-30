@@ -1,12 +1,23 @@
 #!/usr/bin/env python3
 """
-04c_fig_km_egfr.py — KM-style cumulative AKI by eGFR stratum
+04c_fig_cuminc_egfr.py — Cumulative AKI incidence by eGFR stratum
 
 The key figure: shows the REVERSAL from protection to harm as eGFR decreases.
 
-Panel a: eGFR ≥ 90  → solid (treated) BELOW dashed (control) = protection
-Panel b: eGFR 60–89 → lines overlap = neutral
-Panel c: eGFR < 45  → solid ABOVE dashed = HARM
+NOTE ON METHOD (read before editing):
+  This plots the NAIVE empirical cumulative incidence (events<=t / N_total),
+  NOT a Kaplan-Meier curve. KM was abandoned after a probe showed it inflates
+  the 48h estimate ~2x (e.g. eGFR>=90 MIMIC: KM 34.6% vs naive 17.1% which
+  matches the Table 2 binary OR). The reason is informative censoring by ICU
+  discharge: ~54% (MIMIC) / ~44% (eICU) of patients are discharged AKI-free
+  within 48h, and KM wrongly assumes they keep accruing AKI risk. Death before
+  AKI is negligible (0.4% MIMIC, 1.1% eICU), so a competing-risk estimator
+  (CIF/Aalen-Johansen) gives the same answer as naive and was not needed.
+  See probe_competing_risks.py and STUDY_DESIGN.md section 14.
+
+Panel a: eGFR >= 90  → solid (treated) BELOW dashed (control) = protection
+Panel b: eGFR 60–89  → lines overlap = neutral
+Panel c: eGFR < 45   → solid ABOVE dashed = HARM
 
 Reads:
   results/did_all_{db}.csv
@@ -14,10 +25,10 @@ Reads:
   results/did_cr_all_{db}.csv
 
 Outputs:
-  results/fig_km_egfr.{pdf,png}
-  results/fig_km_egfr_mimic.{pdf,png}  (MIMIC-only, cleaner for slides)
+  results/figures/fig_cuminc_egfr.{pdf,png}
+  results/figures/fig_cuminc_egfr_mimic.{pdf,png}  (MIMIC-only, for slides)
 
-Usage: python 04c_fig_km_egfr.py
+Usage: python 04c_fig_cuminc_egfr.py
 """
 
 import os
@@ -175,11 +186,8 @@ def load_db(tag):
                 delta = val - bl
                 ratio = val / bl if bl > 0 else 0
 
-                # KDIGO: absolute within 48h, ratio within 7d
-                if h <= 48 and (delta >= 0.3 or ratio >= 1.5):
-                    aki_time = h
-                    break
-                if h > 48 and ratio >= 1.5:
+                # KDIGO: absolute increase >=0.3 or ratio >=1.5 within 48h
+                if delta >= 0.3 or ratio >= 1.5:
                     aki_time = h
                     break
 
@@ -201,10 +209,11 @@ def load_db(tag):
 
 
 def compute_cumulative_incidence(df, time_grid):
-    """Simple empirical cumulative incidence (not KM).
+    """Naive empirical cumulative incidence (NOT Kaplan-Meier).
     At each time t: proportion of all patients with AKI event by time t.
-    Censored patients counted as non-events (conservative).
-    Avoids KM's sensitivity to informative censoring.
+    Discharged/censored patients counted as non-events (conservative).
+    This matches the fixed-window binary endpoint in Table 2 and avoids
+    KM's overestimation under informative discharge. See module docstring.
     """
     events = df[df.event == 1]["aki_time"].values
     n_total = len(df)
@@ -230,10 +239,10 @@ def compute_ci_bootstrap(df, time_grid, n_boot=200, seed=2026):
 # ══════════════════════════════════════════════════════════════════
 # PLOTTING
 # ══════════════════════════════════════════════════════════════════
-def plot_km_panel(
+def plot_cuminc_panel(
     ax, data, stratum, db_color, db_label, panel_label, show_ci=True, n_boot=200
 ):
-    """Plot one panel: treated vs control cumulative AKI."""
+    """Plot one panel: treated vs control cumulative AKI incidence."""
 
     sub = data[data.stratum == stratum]
     trt = sub[sub.arm == "Treated"]
@@ -251,10 +260,10 @@ def plot_km_panel(
         ls="--",
         lw=0.9,
         alpha=0.8,
-        label=f"Control",
+        label="Control",
     )
     ax.step(
-        TIME_GRID, ci_trt, where="post", color=db_color, ls="-", lw=1.2, label=f"IV Mg"
+        TIME_GRID, ci_trt, where="post", color=db_color, ls="-", lw=1.2, label="IV Mg"
     )
 
     # CI bands
@@ -268,9 +277,9 @@ def plot_km_panel(
             TIME_GRID, lo_c * 100, hi_c * 100, step="post", alpha=0.06, color=db_color
         )
 
-    # (48h marker removed — entire figure is 48h window)
+    # (no 48h marker — entire figure is the 48h window)
 
-    # Annotations
+    # Annotations: 48h cumulative incidence + discharge fraction (transparency)
     n_trt = len(trt)
     n_ctl = len(ctl)
     rate_trt = ci_trt[-1]
@@ -351,7 +360,7 @@ def plot_km_panel(
 
 
 def main():
-    print("── 04c_fig_km_egfr.py: KM-style AKI by eGFR ──\n")
+    print("── 04c_fig_cuminc_egfr.py: cumulative AKI incidence by eGFR ──\n")
 
     # ── Load both databases ───────────────────────────────────────
     dfs = {}
@@ -371,7 +380,7 @@ def main():
         fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.8), sharey=True)
 
         for i, (stratum, label) in enumerate(zip(strata, ["a", "b", "c"])):
-            plot_km_panel(
+            plot_cuminc_panel(
                 axes[i],
                 data,
                 stratum,
@@ -408,7 +417,7 @@ def main():
 
         plt.tight_layout()
         for ext in ["pdf", "png"]:
-            out = os.path.join(FIG_DIR, f"fig_km_egfr_mimic.{ext}")
+            out = os.path.join(FIG_DIR, f"fig_cuminc_egfr_mimic.{ext}")
             fig.savefig(out, format=ext, dpi=300 if ext == "png" else None)
             print(f"  Saved: {out}")
         plt.close(fig)
@@ -421,7 +430,7 @@ def main():
         fig, axes = plt.subplots(2, 3, figsize=(7.2, 5.0), sharey="row")
 
         for i, stratum in enumerate(strata):
-            plot_km_panel(
+            plot_cuminc_panel(
                 axes[0, i],
                 dfs["mimic"],
                 stratum,
@@ -431,7 +440,7 @@ def main():
                 show_ci=True,
                 n_boot=200,
             )
-            plot_km_panel(
+            plot_cuminc_panel(
                 axes[1, i],
                 dfs["eicu"],
                 stratum,
@@ -466,7 +475,7 @@ def main():
 
         plt.tight_layout()
         for ext in ["pdf", "png"]:
-            out = os.path.join(FIG_DIR, f"fig_km_egfr.{ext}")
+            out = os.path.join(FIG_DIR, f"fig_cuminc_egfr.{ext}")
             fig.savefig(out, format=ext, dpi=300 if ext == "png" else None)
             print(f"  Saved: {out}")
         plt.close(fig)
