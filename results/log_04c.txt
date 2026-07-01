@@ -1,0 +1,12 @@
+── 04c_fig_cuminc_egfr.py: cumulative AKI incidence by eGFR ──
+
+  Mode: combined (7d curves + dual 48h/7d annotations)
+
+  mimic: 12703 patient-records across 4 strata
+  eicu: 8645 patient-records across 4 strata
+  Saved: /home/g91p721/mg_aki/results/figures/fig_cuminc_egfr.pdf
+  Saved: /home/g91p721/mg_aki/results/figures/fig_cuminc_egfr.png
+  Saved: /home/g91p721/mg_aki/results/figures/fig_cuminc_egfr_mimic.pdf
+  Saved: /home/g91p721/mg_aki/results/figures/fig_cuminc_egfr_mimic.png
+
+Done.
