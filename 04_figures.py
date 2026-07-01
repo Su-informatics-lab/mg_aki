@@ -117,17 +117,15 @@ def panel_label(ax, label, x=-0.12, y=1.06):
 # Two panels (MIMIC | eICU), rows = binary outcomes
 # ═══════════════════════════════════════════════════════════════════
 def fig2_primary_forest():
-    """Overall binary outcomes forest — reads did_binary_{db}.csv."""
-    fig, axes = plt.subplots(1, 2, figsize=(W_DOUBLE, W_DOUBLE * 0.45), sharey=True)
-    # Row order (top to bottom on plot = bottom to top in data)
+    """Overall binary outcomes forest — reads did_binary_{db}.csv.
+    AKI outcomes only (mortality removed per editorial decision)."""
+    fig, axes = plt.subplots(1, 2, figsize=(W_DOUBLE, W_DOUBLE * 0.30), sharey=True)
+    # Row order: AKI outcomes only (mortality kept in Table 2 only)
     row_order = [
         ("aki1_48h", "48-h AKI (KDIGO ≥1)"),
         ("aki1_7d", "7-d AKI (KDIGO ≥1)"),
         ("aki2_7d", "7-d AKI (KDIGO ≥2)"),
         ("aki3_7d", "7-d AKI (KDIGO ≥3)"),
-        ("hosp_mort", "Hospital mortality"),
-        ("death_7d", "7-d mortality"),
-        ("death_14d", "14-d mortality"),
     ]
     for i, (db, ax) in enumerate(zip(DBS, axes)):
         panel_label(ax, chr(ord("a") + i))
