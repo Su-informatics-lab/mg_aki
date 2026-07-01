@@ -692,6 +692,132 @@ def efig2_sensitivity():
 
 
 # ═══════════════════════════════════════════════════════════════════
+# eFIG 3: SENSITIVITY — BINARY 48h AKI BY eGFR
+# Primary vs earliest-labs PS, 48h AKI (KDIGO ≥1), both DBs
+# ═══════════════════════════════════════════════════════════════════
+def efig3_sensitivity_binary():
+    """Sensitivity analysis: 48h AKI ORs by eGFR under primary vs
+    earliest-labs PS specifications. Reads egfr_aki_stages_{db}.csv
+    (primary) and egfr_aki_stages_sens_b_{db}.csv (sensitivity)."""
+    fig, axes = plt.subplots(1, 2, figsize=(W_DOUBLE, W_DOUBLE * 0.40), sharey=True)
+
+    outcome = "AKI_48h_Stage1+"
+    strata_order = [
+        "Overall",
+        "eGFR>=90",
+        "eGFR_60-89",
+        "eGFR_45-59",
+        "eGFR_30-44",
+        "eGFR<30",
+    ]
+    strata_labels = [
+        "Overall",
+        "eGFR \u226590",
+        "eGFR 60\u201389",
+        "eGFR 45\u201359",
+        "eGFR 30\u201344",
+        "eGFR <30",
+    ]
+    n_strata = len(strata_order)
+
+    spec_styles = {
+        "primary": {
+            "marker": "o",
+            "label": "Primary (labs closest to T\u2080)",
+            "size": 5,
+        },
+        "sens_b": {"marker": "^", "label": "Sensitivity (earliest labs)", "size": 5},
+    }
+    spec_files = {
+        "primary": "egfr_aki_stages_{db}.csv",
+        "sens_b": "egfr_aki_stages_sens_b_{db}.csv",
+    }
+
+    for i, db in enumerate(DBS):
+        ax = axes[i]
+        panel_label(ax, chr(ord("a") + i))
+        ax.set_title(LBL[db], fontsize=7, fontweight="bold")
+
+        for si, (spec, sty) in enumerate(spec_styles.items()):
+            fname = spec_files[spec].replace("{db}", db)
+            fpath = os.path.join(RESULTS, fname)
+            if not os.path.exists(fpath):
+                print(f"    {db} {spec}: {fname} not found, skipping")
+                continue
+            df = pd.read_csv(fpath)
+            sub = df[df.outcome == outcome].copy()
+            sub["stratum"] = pd.Categorical(
+                sub.stratum, categories=strata_order, ordered=True
+            )
+            sub = sub.sort_values("stratum")
+
+            offset = -0.12 if si == 0 else 0.12
+            for j, strat in enumerate(strata_order):
+                row = sub[sub.stratum == strat]
+                if len(row) == 0 or pd.isna(row.iloc[0]["or"]):
+                    continue
+                r = row.iloc[0]
+                y = j + offset
+                ax.plot(
+                    r["or"],
+                    y,
+                    sty["marker"],
+                    color=CLR[db],
+                    markersize=sty["size"],
+                    zorder=3,
+                    fillstyle="full" if si == 0 else "none",
+                )
+                ax.plot(
+                    [r.or_lo, r.or_hi],
+                    [y, y],
+                    color=CLR[db],
+                    linewidth=0.8,
+                    zorder=2,
+                    alpha=1.0 if si == 0 else 0.6,
+                )
+
+        ax.axvline(1.0, color=BLACK, linewidth=0.5, linestyle="--", zorder=1)
+        ax.set_yticks(range(n_strata))
+        if i == 0:
+            ax.set_yticklabels(strata_labels, fontsize=6)
+        ax.set_xlabel("OR (95% CI)", fontsize=6)
+        ax.set_xscale("log")
+        ax.xaxis.set_major_formatter(
+            mticker.FuncFormatter(lambda x, _: f"{x:.1f}" if x >= 1 else f"{x:.2f}")
+        )
+        ax.set_xlim(0.2, 6)
+        ax.invert_yaxis()
+        ax.axhspan(-0.5, 0.5, color="#f0f0f0", zorder=0)
+
+    # Shared legend
+    from matplotlib.lines import Line2D
+
+    handles = []
+    for spec, sty in spec_styles.items():
+        handles.append(
+            Line2D(
+                [0],
+                [0],
+                marker=sty["marker"],
+                color="grey",
+                linestyle="",
+                markersize=5,
+                label=sty["label"],
+                fillstyle="full" if spec == "primary" else "none",
+            )
+        )
+    fig.legend(
+        handles=handles,
+        loc="lower center",
+        ncol=2,
+        bbox_to_anchor=(0.5, -0.06),
+        fontsize=6,
+    )
+
+    save(fig, "sensitivity_binary")
+
+
+# ═══════════════════════════════════════════════════════════════════
 # eFIG 4: HTE SUBGROUP FOREST
 # Pre-specified subgroups × aki_7d, both DBs
 # ═══════════════════════════════════════════════════════════════════
@@ -809,6 +935,7 @@ ALL_FIGS = {
     "egfr_mg_heatmap_7d": lambda: fig5_egfr_mg_heatmap("aki_7d", "egfr_mg_heatmap_7d"),
     "love": efig1_love,
     "sensitivity_did": efig2_sensitivity,
+    "sensitivity_binary": efig3_sensitivity_binary,
     "hte_forest": efig4_hte_forest,
     "crossed_forest": efig5_crossed_forest,
 }

@@ -6,25 +6,31 @@
 # No new matching — just outcome computation by eGFR stratum.
 #
 # Outputs:
-#   results/egfr_aki_stages_{db}.csv  — OR, CI, P for all strata × outcomes
+#   results/egfr_aki_stages_{db}.csv          (primary, default)
+#   results/egfr_aki_stages_{spec}_{db}.csv    (non-primary specs)
 #
 # Usage: Rscript 03b_egfr_aki_stages.R mimic
 #        Rscript 03b_egfr_aki_stages.R eicu
+#        Rscript 03b_egfr_aki_stages.R mimic sens_b
+#        Rscript 03b_egfr_aki_stages.R eicu sens_b
 # ============================================================================
 
 suppressPackageStartupMessages({ library(sandwich); library(lmtest) })
 
 RESULTS <- path.expand("~/mg_aki/results")
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 1) { cat("Usage: Rscript 03b_egfr_aki_stages.R <db>\n"); quit(status=1) }
+if (length(args) < 1) { cat("Usage: Rscript 03b_egfr_aki_stages.R <db> [spec]\n"); quit(status=1) }
 tag <- tolower(args[1]); db <- toupper(tag)
+spec <- if (length(args) >= 2) tolower(args[2]) else "primary"
+spec_tag <- paste0(spec, "_yet_untreated")  # e.g. "primary_yet_untreated" or "sens_b_yet_untreated"
+spec_suffix <- if (spec == "primary") "" else paste0("_", spec)  # "" or "_sens_b"
 
 SEP <- paste(rep("=", 60), collapse = "")
-cat(sprintf("\n%s\n03b_egfr_aki_stages.R — %s\n%s\n", SEP, db, SEP))
+cat(sprintf("\n%s\n03b_egfr_aki_stages.R — %s (spec: %s)\n%s\n", SEP, db, spec_tag, SEP))
 
 # ── Load data ─────────────────────────────────────────────────────
 all_pts <- read.csv(file.path(RESULTS, sprintf("did_all_%s.csv", tag)), stringsAsFactors=FALSE)
-pairs   <- read.csv(file.path(RESULTS, sprintf("did_pairs_primary_yet_untreated_%s.csv", tag)),
+pairs   <- read.csv(file.path(RESULTS, sprintf("did_pairs_%s_%s.csv", spec_tag, tag)),
                      stringsAsFactors=FALSE)
 cr_all  <- read.csv(file.path(RESULTS, sprintf("did_cr_all_%s.csv", tag)), stringsAsFactors=FALSE)
 
@@ -206,8 +212,8 @@ for (oc in unique(res_df$outcome)) {
 }
 
 # ── Save ──────────────────────────────────────────────────────────
-outpath <- file.path(RESULTS, sprintf("egfr_aki_stages_%s.csv", tag))
+outpath <- file.path(RESULTS, sprintf("egfr_aki_stages%s_%s.csv", spec_suffix, tag))
 write.csv(res_df, outpath, row.names = FALSE)
 cat(sprintf("\n  Saved: %s (%d rows)\n", outpath, nrow(res_df)))
 
-cat(sprintf("\n%s\n03b done: %s\n%s\n", SEP, db, SEP))
+cat(sprintf("\n%s\n03b done: %s (spec: %s)\n%s\n", SEP, db, spec_tag, SEP))
