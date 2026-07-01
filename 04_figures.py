@@ -414,8 +414,10 @@ def fig5_egfr_mg_heatmap(aki_outcome="aki_48h", name="egfr_mg_heatmap"):
         import matplotlib.colors as mcolors
         from matplotlib.patches import Rectangle
 
-        norm = mcolors.TwoSlopeNorm(vmin=0.1, vcenter=1.0, vmax=8.0)
-        im = ax.imshow(mat, cmap="RdBu_r", norm=norm, aspect="auto")
+        # Log-symmetric norm: OR 0.5 and OR 2.0 get equal visual weight
+        mat_clipped = np.clip(mat, 1 / 3.0, 3.0)
+        norm = mcolors.LogNorm(vmin=1 / 3.0, vmax=3.0)
+        im = ax.imshow(mat_clipped, cmap="RdBu_r", norm=norm, aspect="auto")
         for mi in range(len(mg_bins)):
             for ei in range(len(egfr_bins)):
                 v = mat[mi, ei]
@@ -440,7 +442,7 @@ def fig5_egfr_mg_heatmap(aki_outcome="aki_48h", name="egfr_mg_heatmap"):
                     )
                     ax.add_patch(rect)
                 sig = "*" if not pd.isna(p) and p < 0.05 else ""
-                txt_color = "white" if (v < 0.3 or v > 4.0) else "black"
+                txt_color = "white" if (v < 0.4 or v > 2.5) else "black"
                 ax.text(
                     ei,
                     mi,
@@ -467,6 +469,8 @@ def fig5_egfr_mg_heatmap(aki_outcome="aki_48h", name="egfr_mg_heatmap"):
         ax.set_title(f"{LBL[db]} \u2014 {metric}", fontsize=6, fontweight="bold")
 
     cbar = fig.colorbar(im, ax=axes, shrink=0.6, pad=0.02)
+    cbar.set_ticks([1 / 3.0, 0.5, 1.0, 2.0, 3.0])
+    cbar.set_ticklabels(["0.33", "0.5", "1.0", "2.0", "3.0"])
     cbar.set_label("OR", fontsize=6)
     cbar.ax.tick_params(labelsize=5)
 
