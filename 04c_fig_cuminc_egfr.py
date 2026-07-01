@@ -25,13 +25,13 @@ Reads:
   results/did_cr_all_{db}.csv
 
 Outputs:
-  results/figures/fig_cuminc_egfr.{pdf,png}          (48h, main text)
+  results/figures/fig_cuminc_egfr.{pdf,png}          (combined, main text)
   results/figures/fig_cuminc_egfr_mimic.{pdf,png}    (MIMIC-only, for slides)
-  results/figures/fig_cuminc_egfr_7d.{pdf,png}       (7d, supplement)
 
 Usage:
-  python 04c_fig_cuminc_egfr.py          # 48h (default)
-  python 04c_fig_cuminc_egfr.py 7d       # 7d supplement
+  python 04c_fig_cuminc_egfr.py          # combined (default)
+  python 04c_fig_cuminc_egfr.py 48h      # legacy 48h-only
+  python 04c_fig_cuminc_egfr.py 7d       # legacy 7d-only
 """
 
 import os
@@ -43,7 +43,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
 
-# ── Nature / JAMA style (consistent with 04_figures.py, 04b_fig_egfr.py) ──
+# ── Nature / JAMA style (consistent with 04_figures.py) ──
 mpl.rcParams.update(
     {
         "pdf.fonttype": 42,
@@ -138,11 +138,11 @@ def load_db(tag, window_h=48):
         if pd.isna(egfr):
             continue
         if egfr >= 90:
-            stratum = "eGFR ≥ 90"
+            stratum = "eGFR \u2265 90"
         elif egfr >= 60:
-            stratum = "eGFR 60–89"
+            stratum = "eGFR 60\u201389"
         elif egfr >= 45:
-            stratum = "eGFR 45–59"
+            stratum = "eGFR 45\u201359"
         else:
             stratum = "eGFR < 45"
 
@@ -151,7 +151,7 @@ def load_db(tag, window_h=48):
             if cr is None or len(cr) == 0:
                 continue
 
-            # ICU discharge within window of T0 (transparency: shrinking denominator)
+            # ICU discharge within window of T0
             prow = pid_to_row.get(pid)
             disc_h = (
                 disc_vals[prow] - t_mg
@@ -173,7 +173,6 @@ def load_db(tag, window_h=48):
             post_mask = (cr[:, 1] > t_mg) & (cr[:, 1] <= t_mg + window_h)
             post = cr[post_mask]
             if len(post) == 0:
-                # No follow-up creatinine within window
                 records.append(
                     {
                         "stratum": stratum,
@@ -190,7 +189,7 @@ def load_db(tag, window_h=48):
             aki_time = np.nan
             for j in range(len(post)):
                 val = post[j, 0]
-                h = post[j, 1] - t_mg  # hours from T0
+                h = post[j, 1] - t_mg
                 delta = val - bl
                 ratio = val / bl if bl > 0 else 0
 
@@ -226,8 +225,7 @@ def compute_cumulative_incidence(df, time_grid):
     """Naive empirical cumulative incidence (NOT Kaplan-Meier).
     At each time t: proportion of all patients with AKI event by time t.
     Discharged/censored patients counted as non-events (conservative).
-    This matches the fixed-window binary endpoint in Table 2 and avoids
-    KM's overestimation under informative discharge. See module docstring.
+    This matches the fixed-window binary endpoint in Table 2.
     """
     events = df[df.event == 1]["aki_time"].values
     n_total = len(df)
@@ -251,7 +249,7 @@ def compute_ci_bootstrap(df, time_grid, n_boot=200, seed=2026):
 
 
 # ══════════════════════════════════════════════════════════════════
-# PLOTTING
+# LEGACY PANEL (single-window, backward compat)
 # ══════════════════════════════════════════════════════════════════
 def plot_cuminc_panel(
     ax,
@@ -276,7 +274,6 @@ def plot_cuminc_panel(
     ci_trt = compute_cumulative_incidence(trt, time_grid) * 100
     ci_ctl = compute_cumulative_incidence(ctl, time_grid) * 100
 
-    # Plot control (dotted) first so treated is on top
     ax.step(
         time_grid,
         ci_ctl,
@@ -291,7 +288,6 @@ def plot_cuminc_panel(
         time_grid, ci_trt, where="post", color=db_color, ls="-", lw=1.2, label="IV Mg"
     )
 
-    # CI bands
     if show_ci and len(trt) > 50:
         lo_t, hi_t = compute_ci_bootstrap(trt, time_grid, n_boot)
         lo_c, hi_c = compute_ci_bootstrap(ctl, time_grid, n_boot)
@@ -302,15 +298,11 @@ def plot_cuminc_panel(
             time_grid, lo_c * 100, hi_c * 100, step="post", alpha=0.06, color=db_color
         )
 
-    # (no 48h marker — entire figure is the 48h window)
-
-    # Annotations: window-end cumulative incidence + discharge fraction
     n_trt = len(trt)
-    n_ctl = len(ctl)
     rate_trt = ci_trt[-1]
     rate_ctl = ci_ctl[-1]
     disc_trt = 100 * trt["discharged_in_window"].mean() if n_trt else 0
-    disc_ctl = 100 * ctl["discharged_in_window"].mean() if n_ctl else 0
+    disc_ctl = 100 * ctl["discharged_in_window"].mean() if len(ctl) else 0
     wlabel = "48-h" if window_h <= 48 else "7-d"
     ax.text(
         0.97,
@@ -330,7 +322,6 @@ def plot_cuminc_panel(
         ),
     )
 
-    # Direction arrow (at ~88% of window)
     arrow_x = int(window_h * 0.88)
     if rate_trt < rate_ctl - 1:
         ax.annotate(
@@ -372,7 +363,6 @@ def plot_cuminc_panel(
     ax.set_xlabel("Hours from T\u2080")
     if window_h <= 48:
         ax.set_xticks([0, 12, 24, 36, 48])
-        ax.set_xticklabels(["0", "12", "24", "36", "48"])
         ax.set_xlim(-1, 50)
     else:
         ax.set_xticks([0, 24, 48, 72, 96, 120, 144, 168])
@@ -417,7 +407,6 @@ def plot_combined_panel(
     ci_trt = compute_cumulative_incidence(trt, tg) * 100
     ci_ctl = compute_cumulative_incidence(ctl, tg) * 100
 
-    # Plot control (dotted) first so treated is on top
     ax.step(
         tg,
         ci_ctl,
@@ -430,7 +419,6 @@ def plot_combined_panel(
     )
     ax.step(tg, ci_trt, where="post", color=db_color, ls="-", lw=1.2, label="IV Mg")
 
-    # CI bands
     if show_ci and len(trt) > 50:
         lo_t, hi_t = compute_ci_bootstrap(trt, tg, n_boot)
         lo_c, hi_c = compute_ci_bootstrap(ctl, tg, n_boot)
@@ -451,11 +439,10 @@ def plot_combined_panel(
     rate_trt_7d = ci_trt[-1]
     rate_ctl_7d = ci_ctl[-1]
     n_trt = len(trt)
-    n_ctl = len(ctl)
-    disc_48_trt = 100 * trt["discharged_in_window"].mean() if n_trt else 0
-    disc_48_ctl = 100 * ctl["discharged_in_window"].mean() if n_ctl else 0
+    disc_trt = 100 * trt["discharged_in_window"].mean() if n_trt else 0
+    disc_ctl = 100 * ctl["discharged_in_window"].mean() if len(ctl) else 0
 
-    # Dual annotation boxes
+    # Dual annotation boxes — SIDE BY SIDE (left=48h, right=7d)
     box_props = dict(
         boxstyle="round,pad=0.3",
         facecolor="white",
@@ -463,15 +450,13 @@ def plot_combined_panel(
         alpha=0.85,
         linewidth=0.3,
     )
-    if is_harm:
-        y48, y7d = 0.42, 0.16
-    else:
-        y48, y7d = 0.97, 0.71
+    box_y = 0.42 if is_harm else 0.97
 
     ax.text(
-        0.97,
-        y48,
-        f"48-h AKI\nIV Mg: {rate_trt_48:.1f}%\nControl: {rate_ctl_48:.1f}%",
+        0.48,
+        box_y,
+        f"48-h AKI\nIV Mg: {rate_trt_48:.1f}%\nControl: {rate_ctl_48:.1f}%\n"
+        f"n={n_trt}",
         transform=ax.transAxes,
         fontsize=4.5,
         va="top",
@@ -480,9 +465,9 @@ def plot_combined_panel(
     )
     ax.text(
         0.97,
-        y7d,
+        box_y,
         f"7-d AKI\nIV Mg: {rate_trt_7d:.1f}%\nControl: {rate_ctl_7d:.1f}%\n"
-        f"n={n_trt}; disch. {disc_48_trt:.0f}/{disc_48_ctl:.0f}%",
+        f"n={n_trt}; disch. {disc_trt:.0f}/{disc_ctl:.0f}%",
         transform=ax.transAxes,
         fontsize=4.5,
         va="top",
@@ -529,7 +514,6 @@ def plot_combined_panel(
             rotation=90,
         )
 
-    # Axis styling (7d grid)
     ax.set_xlabel("Hours from T\u2080")
     ax.set_xticks([0, 24, 48, 72, 96, 120, 144, 168])
     ax.set_xlim(-2, 175)
@@ -551,7 +535,7 @@ def generate_combined(dfs):
     Replaces old Figure 5 (48h) and eFigure 6 (7d).
     """
     strata = ["eGFR \u2265 90", "eGFR 60\u201389", "eGFR < 45"]
-    harm_col = 2  # eGFR < 45 is the harm panel
+    harm_col = 2
 
     db_info = [
         ("mimic", WONG["blue"], "MIMIC-IV", "a"),
@@ -561,28 +545,23 @@ def generate_combined(dfs):
     # ── Both databases (2 x 3) ──
     if len(dfs) == 2:
         fig, axes = plt.subplots(2, 3, figsize=(7.2, 5.0), sharey="row")
-
         for row_i, (tag, color, label, start) in enumerate(db_info):
             if tag not in dfs:
                 continue
             data = dfs[tag]
             for col_i, stratum in enumerate(strata):
-                ax = axes[row_i, col_i]
-                panel_lbl = chr(ord(start) + col_i)
                 plot_combined_panel(
-                    ax,
+                    axes[row_i, col_i],
                     data,
                     stratum,
                     color,
-                    panel_lbl,
+                    chr(ord(start) + col_i),
                     is_harm=(col_i == harm_col),
                     show_ci=True,
                     n_boot=200,
                 )
-
         axes[0, 0].set_ylabel("Cumulative AKI (%)\nMIMIC-IV")
         axes[1, 0].set_ylabel("Cumulative AKI (%)\neICU-CRD")
-
         legend_elements = [
             Line2D([0], [0], color="grey", ls="-", lw=1.2, label="IV Mg (treated)"),
             Line2D([0], [0], color="grey", ls=":", lw=1.1, label="Matched control"),
@@ -600,7 +579,6 @@ def generate_combined(dfs):
             fontweight="bold",
             y=1.02,
         )
-
         plt.tight_layout()
         for ext in ["pdf", "png"]:
             out = os.path.join(FIG_DIR, f"fig_cuminc_egfr.{ext}")
@@ -624,7 +602,6 @@ def generate_combined(dfs):
                 n_boot=200,
             )
         axes[0].set_ylabel("Cumulative AKI incidence (%)")
-
         legend_elements = [
             Line2D([0], [0], color=WONG["blue"], ls="-", lw=1.2, label="IV Mg"),
             Line2D(
@@ -644,7 +621,6 @@ def generate_combined(dfs):
             fontweight="bold",
             y=1.04,
         )
-
         plt.tight_layout()
         for ext in ["pdf", "png"]:
             out = os.path.join(FIG_DIR, f"fig_cuminc_egfr_mimic.{ext}")
@@ -654,7 +630,9 @@ def generate_combined(dfs):
 
 
 def main():
-    print("── 04c_fig_cuminc_egfr.py: cumulative AKI incidence by eGFR ──\n")
+    print(
+        "\u2500\u2500 04c_fig_cuminc_egfr.py: cumulative AKI incidence by eGFR \u2500\u2500\n"
+    )
 
     # CLI modes:
     #   (default)   combined mode: 7d curves + dual 48h/7d annotations
@@ -664,7 +642,7 @@ def main():
     args = set(sys.argv[1:])
 
     if not (args & {"48h", "7d", "legacy"}):
-        # ── Default: combined mode (7d curves + dual 48h/7d annotations) ──
+        # ── Default: combined mode ──
         print("  Mode: combined (7d curves + dual 48h/7d annotations)\n")
         dfs = {}
         for tag in ["mimic", "eicu"]:
@@ -681,9 +659,8 @@ def main():
     tg = TIME_GRID_7D if window_h > 48 else TIME_GRID_48
     wlabel = "7 Days" if window_h > 48 else "48 Hours"
     suffix = "_7d" if window_h > 48 else ""
-    print(f"  Window: {window_h}h ({wlabel})\n")
+    print(f"  [legacy] Window: {window_h}h ({wlabel})\n")
 
-    # ── Load both databases ───────────────────────────────────────
     dfs = {}
     for tag in ["mimic", "eicu"]:
         try:
@@ -691,15 +668,11 @@ def main():
         except Exception as e:
             print(f"  {tag}: {e}")
 
-    # ══════════════════════════════════════════════════════════════
-    # FIGURE 1: MIMIC-only (clean, for slides)
-    # ══════════════════════════════════════════════════════════════
+    strata = ["eGFR \u2265 90", "eGFR 60\u201389", "eGFR < 45"]
+
     if "mimic" in dfs:
         data = dfs["mimic"]
-        strata = ["eGFR ≥ 90", "eGFR 60–89", "eGFR < 45"]
-
         fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.8), sharey=True)
-
         for i, (stratum, label) in enumerate(zip(strata, ["a", "b", "c"])):
             plot_cuminc_panel(
                 axes[i],
@@ -713,10 +686,7 @@ def main():
                 show_ci=True,
                 n_boot=200,
             )
-
         axes[0].set_ylabel("Cumulative AKI incidence (%)")
-
-        # Shared legend
         legend_elements = [
             Line2D([0], [0], color=WONG["blue"], ls="-", lw=1.2, label="IV Mg"),
             Line2D(
@@ -730,14 +700,12 @@ def main():
             bbox_to_anchor=(0.5, -0.06),
             fontsize=6.5,
         )
-
         fig.suptitle(
-            "Cumulative AKI Incidence Within {0} (MIMIC-IV)".format(wlabel),
+            f"Cumulative AKI Incidence Within {wlabel} (MIMIC-IV)",
             fontsize=8,
             fontweight="bold",
             y=1.04,
         )
-
         plt.tight_layout()
         for ext in ["pdf", "png"]:
             out = os.path.join(FIG_DIR, f"fig_cuminc_egfr_mimic{suffix}.{ext}")
@@ -745,13 +713,8 @@ def main():
             print(f"  Saved: {out}")
         plt.close(fig)
 
-    # ══════════════════════════════════════════════════════════════
-    # FIGURE 2: Both databases (2 rows × 3 columns)
-    # ══════════════════════════════════════════════════════════════
     if len(dfs) == 2:
-        strata = ["eGFR ≥ 90", "eGFR 60–89", "eGFR < 45"]
         fig, axes = plt.subplots(2, 3, figsize=(7.2, 5.0), sharey="row")
-
         for i, stratum in enumerate(strata):
             plot_cuminc_panel(
                 axes[0, i],
@@ -777,10 +740,8 @@ def main():
                 show_ci=True,
                 n_boot=200,
             )
-
         axes[0, 0].set_ylabel("Cumulative AKI (%)\nMIMIC-IV")
         axes[1, 0].set_ylabel("Cumulative AKI (%)\neICU-CRD")
-
         legend_elements = [
             Line2D([0], [0], color="grey", ls="-", lw=1.2, label="IV Mg (treated)"),
             Line2D([0], [0], color="grey", ls=":", lw=1.1, label="Matched control"),
@@ -792,14 +753,12 @@ def main():
             bbox_to_anchor=(0.5, -0.04),
             fontsize=6.5,
         )
-
         fig.suptitle(
-            "Cumulative AKI Incidence Within {0}".format(wlabel),
+            f"Cumulative AKI Incidence Within {wlabel}",
             fontsize=9,
             fontweight="bold",
             y=1.02,
         )
-
         plt.tight_layout()
         for ext in ["pdf", "png"]:
             out = os.path.join(FIG_DIR, f"fig_cuminc_egfr{suffix}.{ext}")
