@@ -1,0 +1,61 @@
+
+============================================================
+03f_hosp_re.R — Hospital RE sensitivity (eICU-CRD)
+============================================================
+  Pairs: 4835 | Patients: 19087
+  Loading hospitalid from patient table...
+  Hospitals mapped: 76 unique
+  Computing AKI outcomes (48h + 7d)...
+  48h AKI valid: 3913 pairs | 7d AKI valid: 3913 pairs
+  [AKI_48h_Stage1+ x Overall] n=4835 ... primary=0.886  glmm=0.863  var_h=0.1710  
+  [AKI_48h_Stage1+ x eGFR>=90] n=1759 ... primary=0.486  glmm=0.468  var_h=0.1797  
+  [AKI_48h_Stage1+ x eGFR_60-89] n=1632 ... primary=0.679  glmm=0.620  var_h=0.1832  
+  [AKI_48h_Stage1+ x eGFR_45-59] n=623 ... primary=1.977  glmm=1.998  var_h=0.0888  
+  [AKI_48h_Stage1+ x eGFR_30-44] n=477 ... primary=1.524  glmm=1.528  var_h=0.2603  
+  [AKI_48h_Stage1+ x eGFR<30] n=312 ... primary=2.241  glmm=2.318  var_h=0.1877  
+  [AKI_7d_Stage1+ x Overall] n=4835 ... primary=0.886  glmm=0.859  var_h=0.1404  
+  [AKI_7d_Stage1+ x eGFR>=90] n=1759 ... primary=0.578  glmm=0.544  var_h=0.1999  
+  [AKI_7d_Stage1+ x eGFR_60-89] n=1632 ... primary=0.700  glmm=0.651  var_h=0.1316  
+  [AKI_7d_Stage1+ x eGFR_45-59] n=623 ... primary=2.072  glmm=2.077  var_h=0.0392  
+  [AKI_7d_Stage1+ x eGFR_30-44] n=477 ... primary=1.269  glmm=1.306  var_h=0.2693  
+  [AKI_7d_Stage1+ x eGFR<30] n=312 ... primary=1.744  glmm=1.751  var_h=0.1777  
+  [hosp_mortality x Overall] n=4835 ... primary=0.828  glmm=0.762  var_h=0.6138  
+  [hosp_mortality x eGFR>=90] n=1759 ... primary=0.308  glmm=0.274  var_h=0.3324  
+  [hosp_mortality x eGFR_60-89] n=1632 ... primary=0.787  glmm=0.804  var_h=0.2305  
+  [hosp_mortality x eGFR_45-59] n=623 ... primary=1.808  glmm=1.806  var_h=0.2710  
+  [hosp_mortality x eGFR_30-44] n=477 ... primary=1.323  glmm=1.421  var_h=0.3417  
+  [hosp_mortality x eGFR<30] n=312 ... primary=1.978  glmm=1.949  var_h=0.1996  
+
+============================================================
+Summary: 18 rows
+============================================================
+
+  [AKI_48h_Stage1+]
+    Overall          Primary: 0.886 [0.775,1.013]  GLMM: 0.863 [0.735,1.014]  var_h=0.1710  n_hosp=74
+    eGFR>=90         Primary: 0.486 [0.375,0.628]  GLMM: 0.468 [0.350,0.625]  var_h=0.1797  n_hosp=68
+    eGFR_60-89       Primary: 0.679 [0.538,0.857]  GLMM: 0.620 [0.476,0.808]  var_h=0.1832  n_hosp=70
+    eGFR_45-59       Primary: 1.977 [1.357,2.879]  GLMM: 1.998 [1.347,2.963]  var_h=0.0888  n_hosp=63
+    eGFR_30-44       Primary: 1.524 [1.044,2.227]  GLMM: 1.528 [0.999,2.338]  var_h=0.2603  n_hosp=61
+    eGFR<30          Primary: 2.241 [1.413,3.557]  GLMM: 2.318 [1.404,3.827]  var_h=0.1877  n_hosp=54
+
+  [AKI_7d_Stage1+]
+    Overall          Primary: 0.886 [0.784,1.002]  GLMM: 0.859 [0.741,0.995]  var_h=0.1404  n_hosp=74
+    eGFR>=90         Primary: 0.578 [0.463,0.722]  GLMM: 0.544 [0.421,0.704]  var_h=0.1999  n_hosp=68
+    eGFR_60-89       Primary: 0.700 [0.565,0.866]  GLMM: 0.651 [0.511,0.830]  var_h=0.1316  n_hosp=70
+    eGFR_45-59       Primary: 2.072 [1.453,2.953]  GLMM: 2.077 [1.444,2.988]  var_h=0.0392  n_hosp=63
+    eGFR_30-44       Primary: 1.269 [0.894,1.802]  GLMM: 1.306 [0.874,1.950]  var_h=0.2693  n_hosp=61
+    eGFR<30          Primary: 1.744 [1.147,2.654]  GLMM: 1.751 [1.107,2.769]  var_h=0.1777  n_hosp=54
+
+  [hosp_mortality]
+    Overall          Primary: 0.828 [0.715,0.958]  GLMM: 0.762 [0.636,0.913]  var_h=0.6138  n_hosp=75
+    eGFR>=90         Primary: 0.308 [0.228,0.417]  GLMM: 0.274 [0.196,0.385]  var_h=0.3324  n_hosp=71
+    eGFR_60-89       Primary: 0.787 [0.597,1.040]  GLMM: 0.804 [0.588,1.099]  var_h=0.2305  n_hosp=70
+    eGFR_45-59       Primary: 1.808 [1.214,2.692]  GLMM: 1.806 [1.162,2.807]  var_h=0.2710  n_hosp=63
+    eGFR_30-44       Primary: 1.323 [0.892,1.963]  GLMM: 1.421 [0.904,2.235]  var_h=0.3417  n_hosp=65
+    eGFR<30          Primary: 1.978 [1.270,3.083]  GLMM: 1.949 [1.194,3.182]  var_h=0.1996  n_hosp=59
+
+  Saved: /home/g91p721/mg_aki/results/hosp_re_eicu.csv
+
+============================================================
+03f_hosp_re.R done
+============================================================
