@@ -83,6 +83,8 @@ WONG = {
     "green": "#009E73",
     "purple": "#CC79A7",
 }
+ARROW_PROTECT = WONG["green"]
+ARROW_HARM = "#CC0000"  # distinct from WONG vermil/orange line colors
 
 RESULTS = os.path.expanduser("~/mg_aki/results")
 FIG_DIR = os.path.join(RESULTS, "figures")
@@ -329,15 +331,19 @@ def plot_cuminc_panel(
             xy=(arrow_x, rate_trt),
             xytext=(arrow_x, rate_ctl),
             arrowprops=dict(
-                arrowstyle="->", color=WONG["green"], lw=1.0, shrinkA=2, shrinkB=2
+                arrowstyle="->,head_width=0.5,head_length=0.4",
+                color=ARROW_PROTECT,
+                lw=2.0,
+                shrinkA=2,
+                shrinkB=2,
             ),
         )
         ax.text(
             arrow_x + 2,
             (rate_trt + rate_ctl) / 2,
             "Protection",
-            fontsize=5,
-            color=WONG["green"],
+            fontsize=6,
+            color=ARROW_PROTECT,
             va="center",
             rotation=90,
         )
@@ -347,15 +353,19 @@ def plot_cuminc_panel(
             xy=(arrow_x, rate_trt),
             xytext=(arrow_x, rate_ctl),
             arrowprops=dict(
-                arrowstyle="->", color=WONG["vermil"], lw=1.0, shrinkA=2, shrinkB=2
+                arrowstyle="->,head_width=0.5,head_length=0.4",
+                color=ARROW_HARM,
+                lw=2.0,
+                shrinkA=2,
+                shrinkB=2,
             ),
         )
         ax.text(
             arrow_x + 2,
             (rate_trt + rate_ctl) / 2,
             "Harm",
-            fontsize=5,
-            color=WONG["vermil"],
+            fontsize=6,
+            color=ARROW_HARM,
             va="center",
             rotation=90,
         )
@@ -483,15 +493,19 @@ def plot_combined_panel(
             xy=(arrow_x, rate_trt_7d),
             xytext=(arrow_x, rate_ctl_7d),
             arrowprops=dict(
-                arrowstyle="->", color=WONG["green"], lw=1.0, shrinkA=2, shrinkB=2
+                arrowstyle="->,head_width=0.5,head_length=0.4",
+                color=ARROW_PROTECT,
+                lw=2.0,
+                shrinkA=2,
+                shrinkB=2,
             ),
         )
         ax.text(
             arrow_x + 3,
             (rate_trt_7d + rate_ctl_7d) / 2,
             "Protection",
-            fontsize=4.5,
-            color=WONG["green"],
+            fontsize=6,
+            color=ARROW_PROTECT,
             va="center",
             rotation=90,
         )
@@ -501,15 +515,19 @@ def plot_combined_panel(
             xy=(arrow_x, rate_trt_7d),
             xytext=(arrow_x, rate_ctl_7d),
             arrowprops=dict(
-                arrowstyle="->", color=WONG["vermil"], lw=1.0, shrinkA=2, shrinkB=2
+                arrowstyle="->,head_width=0.5,head_length=0.4",
+                color=ARROW_HARM,
+                lw=2.0,
+                shrinkA=2,
+                shrinkB=2,
             ),
         )
         ax.text(
             arrow_x + 3,
             (rate_trt_7d + rate_ctl_7d) / 2,
             "Harm",
-            fontsize=4.5,
-            color=WONG["vermil"],
+            fontsize=6,
+            color=ARROW_HARM,
             va="center",
             rotation=90,
         )
