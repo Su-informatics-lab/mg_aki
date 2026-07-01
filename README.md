@@ -3,8 +3,6 @@
 Retrospective cohort study of postoperative IV magnesium and AKI after cardiac surgery, with pre-specified eGFR×treatment interaction.
 Risk-set propensity score matching + difference-in-differences across MIMIC-IV and eICU-CRD.
 
-Pipeline v6.0, `set.seed(2026)`. Target journal: *Critical Care* (BMC).
-
 ## Data
 
 Both require credentialed access via [PhysioNet](https://physionet.org):
@@ -14,11 +12,9 @@ Both require credentialed access via [PhysioNet](https://physionet.org):
 
 ## Dependencies
 
-**R 4.5.1:** `mice`, `sandwich`, `lmtest`, `MatchIt`
+**R 4.5.1:** `mice`, `sandwich`, `lmtest`, `MatchIt`, `lme4`
 
 **Python 3.10.8:** `pandas`, `numpy`, `matplotlib`
-
-On IU Tempest, R and Python modules cannot coexist; `module purge` between them.
 
 ## Pipeline
 
@@ -34,6 +30,7 @@ Scripts are numbered in execution order. Each reads from `~/mg_aki/results/` and
 | `03c_mg_strat.R` | eGFR × baseline Mg cross-stratification |
 | `03d_mg_did.R` | Continuous ΔCr difference-in-differences at 6h intervals |
 | `03e_pair_dcr.R` | Pair-level ΔCr export for cumulative incidence figures |
+| `03f_hosp_re.R` | Hospital random-effects sensitivity (eICU-CRD only; requires `lme4`) |
 | `04_figures.py` | All publication figures (forests, heatmaps, love plots, sensitivity) |
 | `04c_fig_cuminc_egfr.py` | Cumulative AKI incidence by eGFR stratum (combined 48h+7d) |
 | `05_qc.R` | Post-hoc balance and outcome QC checks |
@@ -59,7 +56,12 @@ Scripts are numbered in execution order. Each reads from `~/mg_aki/results/` and
 ## Reproduction
 
 ```bash
-# On Tempest — R steps
+# on Tempest — ETL (Python, run first)
+module load Python/3.10.8-GCCcore-12.2.0
+python 01_etl.py
+
+# R steps
+module purge
 module load R/4.5.1-gfbf-2025a
 Rscript 02_psm.R mimic
 Rscript 02_psm.R eicu
@@ -73,17 +75,29 @@ Rscript 03d_mg_did.R mimic
 Rscript 03d_mg_did.R eicu
 Rscript 03e_pair_dcr.R mimic
 Rscript 03e_pair_dcr.R eicu
+Rscript 03f_hosp_re.R
 
-# Python steps
+# figures (Python)
 module purge
 module load Python/3.10.8-GCCcore-12.2.0
-python 01_etl.py
 python 04_figures.py
 python 04c_fig_cuminc_egfr.py
 ```
 
-Patient-level CSVs are excluded from git per PhysioNet DUA. Only aggregate outputs and figures are committed.
 
 ## License
 
 MIT. Datasets governed by PhysioNet data use agreements.
+
+## Citation
+
+```bibtex
+[PLACEHOLDER]
+```
+
+## Contact
+
+- [Jing Su](mailto:su1@iu.edu) for general questions.
+- [Haining Wang](mailto:hw56@iu.edu) for reproduction.
+
+Su Lab in Biomedical Informatics, Biostatistics & Health Data Science · Indiana University School of Medicine
