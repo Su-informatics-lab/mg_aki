@@ -1,0 +1,13 @@
+Using eICU root: /home/g91p721/mg_aki/eicu-crd-2.0
+
+======================================================================
+PROBE 1: Cardiac surgery cohort
+======================================================================
+Traceback (most recent call last):
+  File "/home/g91p721/mg_aki/probe_albumin_eicu.py", line 51, in <module>
+    patient.apacheAdmissionDx.str.lower().str.contains(
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/g91p721/.local/lib/python3.13/site-packages/pandas/core/generic.py", line 6194, in __getattr__
+    return object.__getattribute__(self, name)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+AttributeError: 'DataFrame' object has no attribute 'apacheAdmissionDx'. Did you mean: 'apacheadmissiondx'?
