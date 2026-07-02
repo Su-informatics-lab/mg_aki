@@ -149,8 +149,8 @@ cat(sprintf("  eGFR distribution: %s\n",
 # ── Run all combinations ──────────────────────────────────────────
 aki_labels <- c("AKI_Stage1+","AKI_Stage2+","AKI_Stage3+")
 aki48_labels <- c("AKI_48h_Stage1+","AKI_48h_Stage2+","AKI_48h_Stage3+")
-outcome_cols <- c("hosp_mortality","encephalopathy_delirium",
-                  "vent_arrhythmia","poaf","transfusion","reintubation")
+outcome_cols <- c("hosp_mortality","encephalopathy_delirium","encephalopathy_icd",
+                  "vent_arrhythmia","poaf","poaf_icd","transfusion","reintubation")
 
 results <- list()
 row_idx <- 0
