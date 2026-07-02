@@ -1066,15 +1066,12 @@ def fig_internal_all_endpoints():
     For internal circulation only (not for manuscript).
     """
     outcome_labels = {
-        "AKI_48h_Stage1+": "48h AKI \u22651",
-        "AKI_48h_Stage2+": "48h AKI \u22652",
-        "AKI_48h_Stage3+": "48h AKI \u22653",
-        "AKI_Stage1+": "7d AKI \u22651",
-        "AKI_Stage2+": "7d AKI \u22652",
-        "AKI_Stage3+": "7d AKI \u22653",
-        "hosp_mortality": "Hospital mortality",
-        "poaf": "POAF",
-        "vent_arrhythmia": "Vent. arrhythmia",
+        "hosp_mortality": "Hospital mortality (flag)",
+        "encephalopathy_delirium": "Delirium (LLM/ICD)",
+        "poaf": "POAF (LLM/ICD)",
+        "vent_arrhythmia": "Vent. arrhythmia (ICD)",
+        "transfusion": "Transfusion (LLM)",
+        "reintubation": "Reintubation (LLM)",
     }
     strata_order = [
         "Overall",
