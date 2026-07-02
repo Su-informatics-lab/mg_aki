@@ -250,6 +250,56 @@ def compute_ci_bootstrap(df, time_grid, n_boot=200, seed=2026):
     return lo, hi
 
 
+def compute_cox_hr(df_stratum):
+    """Compute Cox HR (treated vs control) from time-to-AKI data.
+
+    Uses lifelines CoxPHFitter if available; falls back to simple
+    observed/expected HR estimate otherwise.
+    Returns (hr, ci_lo, ci_hi, p) or (nan, nan, nan, nan) on failure.
+    """
+    trt = df_stratum[df_stratum.arm == "Treated"]
+    ctl = df_stratum[df_stratum.arm == "Control"]
+    records = []
+    for arm_df, tx in [(trt, 1), (ctl, 0)]:
+        for _, r in arm_df.iterrows():
+            duration = r.aki_time if r.event == 1 else r.censor_time
+            if pd.isna(duration) or duration <= 0:
+                duration = 0.1
+            records.append(
+                {"duration": float(duration), "event": int(r.event), "treatment": tx}
+            )
+    surv = pd.DataFrame(records)
+    if surv.event.sum() < 5 or len(surv) < 20:
+        return np.nan, np.nan, np.nan, np.nan
+    try:
+        from lifelines import CoxPHFitter
+
+        cph = CoxPHFitter()
+        cph.fit(
+            surv[["duration", "event", "treatment"]],
+            duration_col="duration",
+            event_col="event",
+        )
+        hr = np.exp(cph.params_["treatment"])
+        ci = np.exp(cph.confidence_intervals_.values.flatten())
+        p = cph.summary["p"]["treatment"]
+        return float(hr), float(ci[0]), float(ci[1]), float(p)
+    except ImportError:
+        print("    [warn] lifelines not found; using O/E HR estimate (no CI)")
+        n_trt, n_ctl = len(trt), len(ctl)
+        e_trt, e_ctl = int(trt.event.sum()), int(ctl.event.sum())
+        e_total = e_trt + e_ctl
+        if e_total == 0:
+            return np.nan, np.nan, np.nan, np.nan
+        expected_trt = e_total * n_trt / (n_trt + n_ctl)
+        if expected_trt == 0:
+            return np.nan, np.nan, np.nan, np.nan
+        return float(e_trt / expected_trt), np.nan, np.nan, np.nan
+    except Exception as exc:
+        print(f"    [warn] Cox HR failed: {exc}")
+        return np.nan, np.nan, np.nan, np.nan
+
+
 # ══════════════════════════════════════════════════════════════════
 # LEGACY PANEL (single-window, backward compat)
 # ══════════════════════════════════════════════════════════════════
@@ -403,11 +453,13 @@ def plot_combined_panel(
     is_harm=False,
     show_ci=True,
     n_boot=200,
+    cox_hr=None,
 ):
     """Plot one panel: treated vs control cumulative AKI incidence
     through 7 days, with vertical 48h marker and dual annotation boxes.
 
     is_harm: if True, annotation boxes placed below curves (eGFR < 45).
+    cox_hr: tuple (hr, ci_lo, ci_hi, p) from compute_cox_hr, or None.
     """
     tg = TIME_GRID_7D
     sub = data[data.stratum == stratum]
@@ -532,6 +584,33 @@ def plot_combined_panel(
             rotation=90,
         )
 
+    # Cox HR annotation (bottom-left or bottom-right depending on direction)
+    if cox_hr is not None and not np.isnan(cox_hr[0]):
+        hr, hr_lo, hr_hi, hr_p = cox_hr
+        if not np.isnan(hr_lo):
+            p_str = "P<0.001" if hr_p < 0.001 else f"P={hr_p:.3f}"
+            hr_txt = f"Cox HR {hr:.2f}\n({hr_lo:.2f}\u2013{hr_hi:.2f})\n{p_str}"
+        else:
+            hr_txt = f"HR {hr:.2f}"
+        hr_x = 0.03
+        hr_y = 0.03 if is_harm else 0.35
+        ax.text(
+            hr_x,
+            hr_y,
+            hr_txt,
+            transform=ax.transAxes,
+            fontsize=5,
+            va="bottom",
+            ha="left",
+            bbox=dict(
+                boxstyle="round,pad=0.25",
+                facecolor="#ffffdd",
+                edgecolor="grey",
+                alpha=0.9,
+                linewidth=0.3,
+            ),
+        )
+
     ax.set_xlabel("Hours from T\u2080")
     ax.set_xticks([0, 24, 48, 72, 96, 120, 144, 168])
     ax.set_xlim(-2, 175)
@@ -568,6 +647,13 @@ def generate_combined(dfs):
                 continue
             data = dfs[tag]
             for col_i, stratum in enumerate(strata):
+                sub = data[data.stratum == stratum]
+                hr_result = compute_cox_hr(sub) if len(sub) > 30 else (np.nan,) * 4
+                print(
+                    f"    {tag} {stratum}: Cox HR = {hr_result[0]:.3f}"
+                    if not np.isnan(hr_result[0])
+                    else f"    {tag} {stratum}: Cox HR = N/A"
+                )
                 plot_combined_panel(
                     axes[row_i, col_i],
                     data,
@@ -577,6 +663,7 @@ def generate_combined(dfs):
                     is_harm=(col_i == harm_col),
                     show_ci=True,
                     n_boot=200,
+                    cox_hr=hr_result,
                 )
         axes[0, 0].set_ylabel("Cumulative AKI (%)\nMIMIC-IV")
         axes[1, 0].set_ylabel("Cumulative AKI (%)\neICU-CRD")
@@ -609,6 +696,8 @@ def generate_combined(dfs):
         data = dfs["mimic"]
         fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.8), sharey=True)
         for col_i, stratum in enumerate(strata):
+            sub = data[data.stratum == stratum]
+            hr_result = compute_cox_hr(sub) if len(sub) > 30 else (np.nan,) * 4
             plot_combined_panel(
                 axes[col_i],
                 data,
@@ -618,6 +707,7 @@ def generate_combined(dfs):
                 is_harm=(col_i == harm_col),
                 show_ci=True,
                 n_boot=200,
+                cox_hr=hr_result,
             )
         axes[0].set_ylabel("Cumulative AKI incidence (%)")
         legend_elements = [

@@ -165,22 +165,23 @@ def fig2_primary_forest():
 # Each panel: 5 eGFR strata + Overall, both DBs overlaid
 # ═══════════════════════════════════════════════════════════════════
 def fig3_egfr_forest():
-    """eGFR-stratified AKI stages (2×3 layout, no mortality).
-    Row 1: 48h primary (AKI ≥1, ≥2) + empty
-    Row 2: 7d secondary (AKI ≥1, ≥2, ≥3)
+    """eGFR-stratified AKI stages + mortality (2x3 layout).
+    Row 1: 48h primary (AKI >=1, >=2) + hospital mortality
+    Row 2: 7d secondary (AKI >=1, >=2, >=3)
     """
     panels_top = [
-        ("AKI_48h_Stage1+", "48-h AKI (KDIGO ≥1)"),
-        ("AKI_48h_Stage2+", "48-h AKI (KDIGO ≥2)"),
+        ("AKI_48h_Stage1+", "48-h AKI (KDIGO \u22651)"),
+        ("AKI_48h_Stage2+", "48-h AKI (KDIGO \u22652)"),
+        ("hosp_mortality", "Hospital mortality"),
     ]
     panels_bot = [
-        ("AKI_Stage1+", "7-d AKI (KDIGO ≥1)"),
-        ("AKI_Stage2+", "7-d AKI (KDIGO ≥2)"),
-        ("AKI_Stage3+", "7-d AKI (KDIGO ≥3)"),
+        ("AKI_Stage1+", "7-d AKI (KDIGO \u22651)"),
+        ("AKI_Stage2+", "7-d AKI (KDIGO \u22652)"),
+        ("AKI_Stage3+", "7-d AKI (KDIGO \u22653)"),
     ]
     all_panels = panels_top + panels_bot
-    # Grid positions: row 0 has 2 panels (cols 0-1), row 1 has 3 panels
-    grid_pos = [(0, 0), (0, 1), (1, 0), (1, 1), (1, 2)]
+    # Grid positions: 2x3, all 6 slots filled (mortality at top-right)
+    grid_pos = [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2)]
     strata_order = [
         "Overall",
         "eGFR>=90",
@@ -200,7 +201,6 @@ def fig3_egfr_forest():
     n_strata = len(strata_order)
 
     fig, axes = plt.subplots(2, 3, figsize=(W_DOUBLE, W_DOUBLE * 0.75), sharey=True)
-    axes[0, 2].set_visible(False)  # empty slot (mortality removed)
 
     for pi, (outcome, title) in enumerate(all_panels):
         row, col = grid_pos[pi]
@@ -238,7 +238,7 @@ def fig3_egfr_forest():
         ax.xaxis.set_major_formatter(
             mticker.FuncFormatter(lambda x, _: f"{x:.1f}" if x >= 1 else f"{x:.2f}")
         )
-        ax.set_xlim(0.15, 12)
+        ax.set_xlim(0.1, 20) if outcome == "hosp_mortality" else ax.set_xlim(0.15, 12)
         ax.invert_yaxis()
 
         # Shading for overall row
@@ -929,19 +929,236 @@ def efig5_crossed_forest():
 
 
 # ═══════════════════════════════════════════════════════════════════
+# FIG 5 DUAL: eGFR × Mg HEATMAP with AKI + MORTALITY rows
+# ═══════════════════════════════════════════════════════════════════
+def fig5_egfr_mg_heatmap_dual(aki_outcome="aki_48h", name="egfr_mg_heatmap"):
+    """eGFR x Mg OR heatmap — 2x2: top = AKI, bottom = mortality."""
+    import matplotlib.colors as mcolors
+    from matplotlib.patches import Rectangle
+
+    outcomes = [
+        (
+            aki_outcome,
+            {"aki_48h": "48-h AKI", "aki_7d": "7-d AKI"}.get(aki_outcome, aki_outcome),
+        ),
+        ("mortality", "Hospital mortality"),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(W_DOUBLE, W_DOUBLE * 0.58))
+
+    im = None
+    for row_i, (oc, oc_label) in enumerate(outcomes):
+        for col_i, db in enumerate(DBS):
+            df = pd.read_csv(os.path.join(RESULTS, f"mg_strat_{db}.csv"))
+            ax = axes[row_i, col_i]
+            panel_label(ax, chr(ord("a") + row_i * 2 + col_i))
+            sub = df[(df.outcome == oc) & (df.egfr_strat != "All")].copy()
+            if len(sub) == 0:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "no data",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                    fontsize=6,
+                )
+                continue
+            mg_bins = [
+                b
+                for b in ["Mg<1.6", "Mg_1.6-2.0", "Mg>=2.0", "Mg<1.8", "Mg>=1.8"]
+                if b in sub.mg_strat.values
+            ]
+            egfr_bins = [
+                b
+                for b in ["eGFR>=90", "eGFR_60-89", "eGFR_45-59", "eGFR<45"]
+                if b in sub.egfr_strat.values
+            ]
+            if not mg_bins or not egfr_bins:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "insufficient strata",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                    fontsize=6,
+                )
+                continue
+            mat = np.full((len(mg_bins), len(egfr_bins)), np.nan)
+            pmat = np.full_like(mat, np.nan)
+            nmat = np.full((len(mg_bins), len(egfr_bins)), 0)
+            rmat_t = np.full_like(mat, np.nan)
+            rmat_c = np.full_like(mat, np.nan)
+            for mi, mg in enumerate(mg_bins):
+                for ei, eg in enumerate(egfr_bins):
+                    row = sub[(sub.mg_strat == mg) & (sub.egfr_strat == eg)]
+                    if len(row) > 0:
+                        r = row.iloc[0]
+                        mat[mi, ei] = r["or"]
+                        pmat[mi, ei] = r["p"]
+                        nmat[mi, ei] = int(r["n"])
+                        rmat_t[mi, ei] = r["rate_trt"]
+                        rmat_c[mi, ei] = r["rate_ctl"]
+            mat_clipped = np.clip(mat, 1 / 3.0, 3.0)
+            norm = mcolors.LogNorm(vmin=1 / 3.0, vmax=3.0)
+            im = ax.imshow(mat_clipped, cmap="RdBu_r", norm=norm, aspect="auto")
+            for mi in range(len(mg_bins)):
+                for ei in range(len(egfr_bins)):
+                    v = mat[mi, ei]
+                    p = pmat[mi, ei]
+                    n = nmat[mi, ei]
+                    rt = rmat_t[mi, ei]
+                    rc = rmat_c[mi, ei]
+                    if pd.isna(v):
+                        continue
+                    events_trt = n * rt if not pd.isna(rt) else 0
+                    events_ctl = n * rc if not pd.isna(rc) else 0
+                    if min(events_trt, events_ctl) < 20:
+                        rect = Rectangle(
+                            (ei - 0.5, mi - 0.5),
+                            1,
+                            1,
+                            fill=False,
+                            hatch="///",
+                            linewidth=0,
+                            edgecolor="gray",
+                            alpha=0.5,
+                        )
+                        ax.add_patch(rect)
+                    sig = "*" if not pd.isna(p) and p < 0.05 else ""
+                    txt_color = "white" if (v < 0.4 or v > 2.5) else "black"
+                    ax.text(
+                        ei,
+                        mi,
+                        f"{v:.2f}{sig}\nn={n}",
+                        ha="center",
+                        va="center",
+                        fontsize=4.5,
+                        color=txt_color,
+                        fontweight="bold",
+                    )
+            ax.set_xticks(range(len(egfr_bins)))
+            ax.set_xticklabels(
+                [b.replace("eGFR", "").replace("_", " ") for b in egfr_bins], fontsize=5
+            )
+            ax.set_yticks(range(len(mg_bins)))
+            ax.set_yticklabels([b.replace("Mg_", "Mg ") for b in mg_bins], fontsize=5)
+            if row_i == 1:
+                ax.set_xlabel("eGFR stratum", fontsize=6)
+            if col_i == 0:
+                ax.set_ylabel("Baseline Mg", fontsize=6)
+            ax.set_title(f"{LBL[db]} \u2014 {oc_label}", fontsize=6, fontweight="bold")
+
+    if im is not None:
+        cbar = fig.colorbar(im, ax=axes, shrink=0.6, pad=0.02)
+        cbar.set_ticks([1 / 3.0, 0.5, 1.0, 2.0, 3.0])
+        cbar.set_ticklabels(["0.33", "0.5", "1.0", "2.0", "3.0"])
+        cbar.set_label("OR", fontsize=6)
+        cbar.ax.tick_params(labelsize=5)
+    save(fig, name)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# INTERNAL: ALL ENDPOINTS × eGFR (for group circulation)
+# ═══════════════════════════════════════════════════════════════════
+def fig_internal_all_endpoints():
+    """Comprehensive eGFR-stratified forest for ALL computed endpoints.
+    For internal circulation only (not for manuscript).
+    """
+    outcome_labels = {
+        "AKI_48h_Stage1+": "48h AKI \u22651",
+        "AKI_48h_Stage2+": "48h AKI \u22652",
+        "AKI_48h_Stage3+": "48h AKI \u22653",
+        "AKI_Stage1+": "7d AKI \u22651",
+        "AKI_Stage2+": "7d AKI \u22652",
+        "AKI_Stage3+": "7d AKI \u22653",
+        "hosp_mortality": "Hospital mortality",
+        "poaf": "POAF",
+        "vent_arrhythmia": "Vent. arrhythmia",
+    }
+    strata_order = [
+        "Overall",
+        "eGFR>=90",
+        "eGFR_60-89",
+        "eGFR_45-59",
+        "eGFR_30-44",
+        "eGFR<30",
+    ]
+    strata_labels = ["Overall", "\u226590", "60-89", "45-59", "30-44", "<30"]
+    n_strata = len(strata_order)
+
+    fig, axes = plt.subplots(
+        len(outcome_labels),
+        2,
+        figsize=(W_DOUBLE, 1.4 * len(outcome_labels)),
+        sharey=True,
+        sharex="col",
+    )
+
+    for col_i, db in enumerate(DBS):
+        df = pd.read_csv(os.path.join(RESULTS, f"egfr_aki_stages_{db}.csv"))
+        for row_i, (outcome, label) in enumerate(outcome_labels.items()):
+            ax = axes[row_i, col_i]
+            sub = df[df.outcome == outcome].copy()
+            sub["stratum"] = pd.Categorical(
+                sub.stratum, categories=strata_order, ordered=True
+            )
+            sub = sub.sort_values("stratum")
+            for j, strat in enumerate(strata_order):
+                r = sub[sub.stratum == strat]
+                if len(r) == 0 or pd.isna(r.iloc[0]["or"]):
+                    continue
+                r = r.iloc[0]
+                color = CLR[db]
+                ax.plot(r["or"], j, MKR[db], color=color, markersize=3.5, zorder=3)
+                ax.plot(
+                    [r.or_lo, r.or_hi], [j, j], color=color, linewidth=0.6, zorder=2
+                )
+            ax.axvline(1.0, color=BLACK, linewidth=0.4, linestyle="--", zorder=1)
+            ax.axhspan(-0.5, 0.5, color="#f0f0f0", zorder=0)
+            ax.set_xscale("log")
+            ax.set_xlim(0.08, 25)
+            ax.xaxis.set_major_formatter(
+                mticker.FuncFormatter(lambda x, _: f"{x:.1f}" if x >= 1 else f"{x:.2f}")
+            )
+            ax.set_yticks(range(n_strata))
+            if col_i == 0:
+                ax.set_yticklabels(strata_labels, fontsize=5)
+                ax.set_ylabel(label, fontsize=5.5, fontweight="bold")
+            if row_i == 0:
+                ax.set_title(LBL[db], fontsize=7, fontweight="bold")
+            if row_i == len(outcome_labels) - 1:
+                ax.set_xlabel("OR (95% CI)", fontsize=6)
+            ax.invert_yaxis()
+
+    fig.suptitle(
+        "All Endpoints: eGFR-Stratified ORs (Internal)",
+        fontsize=9,
+        fontweight="bold",
+        y=1.01,
+    )
+    plt.tight_layout()
+    save(fig, "internal_all_endpoints")
+
+
+# ═══════════════════════════════════════════════════════════════════
 # MAIN — dispatch
 # ═══════════════════════════════════════════════════════════════════
 ALL_FIGS = {
     "primary_forest": fig2_primary_forest,
     "egfr_forest": fig3_egfr_forest,
     "timecourse": fig4_timecourse,
-    "egfr_mg_heatmap": fig5_egfr_mg_heatmap,
-    "egfr_mg_heatmap_7d": lambda: fig5_egfr_mg_heatmap("aki_7d", "egfr_mg_heatmap_7d"),
+    "egfr_mg_heatmap": lambda: fig5_egfr_mg_heatmap_dual("aki_48h", "egfr_mg_heatmap"),
+    "egfr_mg_heatmap_7d": lambda: fig5_egfr_mg_heatmap_dual(
+        "aki_7d", "egfr_mg_heatmap_7d"
+    ),
+    "egfr_mg_heatmap_aki_only": fig5_egfr_mg_heatmap,  # legacy AKI-only version
     "love": efig1_love,
     "sensitivity_did": efig2_sensitivity,
     "sensitivity_binary": efig3_sensitivity_binary,
     "hte_forest": efig4_hte_forest,
     "crossed_forest": efig5_crossed_forest,
+    "internal_all_endpoints": fig_internal_all_endpoints,
 }
 
 if __name__ == "__main__":
