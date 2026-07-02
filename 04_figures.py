@@ -1232,7 +1232,9 @@ ALL_FIGS = {
     "egfr_mg_heatmap_7d": lambda: fig5_egfr_mg_heatmap_dual(
         "aki_7d", "egfr_mg_heatmap_7d"
     ),
-    "egfr_mg_heatmap_aki_only": fig5_egfr_mg_heatmap,
+    "egfr_mg_heatmap_aki_only": lambda: fig5_egfr_mg_heatmap(
+        "aki_48h", "egfr_mg_heatmap_aki_only"
+    ),
     "love": efig1_love,
     "sensitivity_did": efig2_sensitivity,
     "sensitivity_binary": efig3_sensitivity_binary,
