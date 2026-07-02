@@ -1082,7 +1082,9 @@ _SRC_STYLE = {
 
 
 def fig_internal_endpoints():
-    """Single internal figure: non-AKI endpoints x eGFR, ICD vs LLM color-coded."""
+    """Single internal figure: non-AKI endpoints x eGFR, ICD vs Note-extracted.
+    MIMIC: both ICD and Note-extracted shown. eICU: ICD only (no notes).
+    """
     strata_order = [
         "Overall",
         "eGFR>=90",
@@ -1094,6 +1096,10 @@ def fig_internal_endpoints():
     strata_labels = ["Overall", "\u226590", "60-89", "45-59", "30-44", "<30"]
     n_strata = len(strata_order)
     n_rows = len(_INTERNAL_ENDPOINTS)
+    db_titles = {
+        "mimic": "MIMIC-IV (ICD + Note-extracted)",
+        "eicu": "eICU-CRD (ICD only)",
+    }
 
     fig, axes = plt.subplots(
         n_rows, 2, figsize=(W_DOUBLE, 1.5 * n_rows), sharey=True, sharex="col"
@@ -1103,8 +1109,11 @@ def fig_internal_endpoints():
         df = pd.read_csv(os.path.join(RESULTS, f"egfr_aki_stages_{db}.csv"))
         for row_i, (ep_label, sources) in enumerate(_INTERNAL_ENDPOINTS):
             ax = axes[row_i, col_i]
-            n_src = len(sources)
+            any_plotted = False
             for si, (col_name, src_tag) in enumerate(sources):
+                # eICU has no notes: skip note-extracted (identical to ICD)
+                if src_tag == "LLM" and db == "eicu":
+                    continue
                 sty = _SRC_STYLE[src_tag]
                 sub = df[df.outcome == col_name].copy()
                 if len(sub) == 0:
@@ -1113,7 +1122,9 @@ def fig_internal_endpoints():
                     sub.stratum, categories=strata_order, ordered=True
                 )
                 sub = sub.sort_values("stratum")
-                offset = (-0.12 if si == 0 else 0.12) if n_src > 1 else 0
+                # Dodge only when both sources are actually plotted (MIMIC + dual-source)
+                show_dual = (len(sources) > 1) and (db == "mimic")
+                offset = (-0.12 if si == 0 else 0.12) if show_dual else 0
                 for j, strat in enumerate(strata_order):
                     r = sub[sub.stratum == strat]
                     if len(r) == 0 or pd.isna(r.iloc[0]["or"]):
@@ -1135,6 +1146,19 @@ def fig_internal_endpoints():
                         linewidth=0.6,
                         zorder=2,
                     )
+                    any_plotted = True
+            if not any_plotted:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No structured data",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                    fontsize=6,
+                    color=GRAY,
+                    fontstyle="italic",
+                )
             ax.axvline(1.0, color=BLACK, linewidth=0.4, linestyle="--", zorder=1)
             ax.axhspan(-0.5, 0.5, color="#f0f0f0", zorder=0)
             ax.set_xscale("log")
@@ -1147,7 +1171,7 @@ def fig_internal_endpoints():
                 ax.set_yticklabels(strata_labels, fontsize=5)
                 ax.set_ylabel(ep_label, fontsize=5.5, fontweight="bold")
             if row_i == 0:
-                ax.set_title(LBL[db], fontsize=7, fontweight="bold")
+                ax.set_title(db_titles[db], fontsize=7, fontweight="bold")
             if row_i == n_rows - 1:
                 ax.set_xlabel("OR (95% CI)", fontsize=6)
             ax.invert_yaxis()
