@@ -54,12 +54,12 @@ LAB_VARS = [
     ("last_lactate", "Lactate, mean (SD), mmol/L", "continuous"),
     ("last_lactate_missing", "Lactate missing, n (%)", "binary"),
     ("last_heartrate", "Heart rate, mean (SD), bpm", "continuous"),
-    ("last_magnesium", "Serum magnesium, median (IQR), mg/dL", "median_iqr"),
-    ("last_potassium", "Serum potassium, mean (SD), mEq/L", "continuous"),
 ]
-# Mg and K moved to LAB_VARS above; kept for backward compatibility
+# Mg and K are in TABLE1_LAB_VARS (descriptive, not in PS)
 SUPP_VARS = []
 TABLE1_LAB_VARS = [
+    ("last_magnesium", "Serum magnesium, mean (SD), mg/dL", "continuous"),
+    ("last_potassium", "Serum potassium, mean (SD), mEq/L", "continuous"),
     ("hemoglobin", "Hemoglobin, mean (SD), g/dL", "continuous"),
     ("wbc", "White blood cell count, mean (SD), ×10⁹/L", "continuous"),
     ("platelets", "Platelet count, mean (SD), ×10⁹/L", "continuous"),
@@ -385,8 +385,14 @@ def build_table1(db_tag):
                 trt_val = format_binary(x1.dropna(), len(trt))
                 ctl_val = format_binary(x0.dropna(), len(ctl))
             smd = compute_smd(x1, x0, vtype)
-            smd_str = f"{smd:.3f}" if not np.isnan(smd) else "—"
-            flag = " *" if not np.isnan(smd) and smd > 0.10 else ""
+            # No SMD for descriptive-only labs (not in PS model)
+            in_descriptive = varname in [v[0] for v in TABLE1_LAB_VARS]
+            if in_descriptive:
+                smd_str = "—"
+                flag = ""
+            else:
+                smd_str = f"{smd:.3f}" if not np.isnan(smd) else "—"
+                flag = " *" if not np.isnan(smd) and smd > 0.10 else ""
             rows.append(
                 {
                     "variable": f"  {display}",
