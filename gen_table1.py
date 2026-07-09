@@ -54,11 +54,11 @@ LAB_VARS = [
     ("last_lactate", "Lactate, mean (SD), mmol/L", "continuous"),
     ("last_lactate_missing", "Lactate missing, n (%)", "binary"),
     ("last_heartrate", "Heart rate, mean (SD), bpm", "continuous"),
-]
-SUPP_VARS = [
-    ("last_magnesium", "Serum magnesium, mean (SD), mg/dL", "continuous"),
+    ("last_magnesium", "Serum magnesium, median (IQR), mg/dL", "median_iqr"),
     ("last_potassium", "Serum potassium, mean (SD), mEq/L", "continuous"),
 ]
+# Mg and K moved to LAB_VARS above; kept for backward compatibility
+SUPP_VARS = []
 TABLE1_LAB_VARS = [
     ("hemoglobin", "Hemoglobin, mean (SD), g/dL", "continuous"),
     ("wbc", "White blood cell count, mean (SD), ×10⁹/L", "continuous"),
@@ -116,6 +116,14 @@ def format_continuous(series):
     if pd.isna(m):
         return "—"
     return f"{m:.1f} ({s:.1f})" if abs(m) >= 10 else f"{m:.2f} ({s:.2f})"
+
+
+def format_median_iqr(series):
+    s = series.dropna()
+    if len(s) < 5:
+        return "—"
+    q25, med, q75 = s.quantile([0.25, 0.50, 0.75])
+    return f"{med:.2f} ({q25:.2f}–{q75:.2f})"
 
 
 def format_binary(series, n_total):
@@ -367,16 +375,15 @@ def build_table1(db_tag):
                 if varname in ctl.columns
                 else pd.Series(dtype=float)
             )
-            trt_val = (
-                format_continuous(x1)
-                if vtype == "continuous"
-                else format_binary(x1.dropna(), len(trt))
-            )
-            ctl_val = (
-                format_continuous(x0)
-                if vtype == "continuous"
-                else format_binary(x0.dropna(), len(ctl))
-            )
+            if vtype == "median_iqr":
+                trt_val = format_median_iqr(x1)
+                ctl_val = format_median_iqr(x0)
+            elif vtype == "continuous":
+                trt_val = format_continuous(x1)
+                ctl_val = format_continuous(x0)
+            else:
+                trt_val = format_binary(x1.dropna(), len(trt))
+                ctl_val = format_binary(x0.dropna(), len(ctl))
             smd = compute_smd(x1, x0, vtype)
             smd_str = f"{smd:.3f}" if not np.isnan(smd) else "—"
             flag = " *" if not np.isnan(smd) and smd > 0.10 else ""
