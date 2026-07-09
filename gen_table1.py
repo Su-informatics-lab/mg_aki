@@ -58,8 +58,8 @@ LAB_VARS = [
 # Mg and K are in TABLE1_LAB_VARS (descriptive, not in PS)
 SUPP_VARS = []
 TABLE1_LAB_VARS = [
-    ("last_magnesium", "Serum magnesium, mean (SD), mg/dL", "continuous"),
-    ("last_potassium", "Serum potassium, mean (SD), mEq/L", "continuous"),
+    ("magnesium", "Serum magnesium, mean (SD), mg/dL", "continuous"),
+    ("potassium", "Serum potassium, mean (SD), mEq/L", "continuous"),
     ("hemoglobin", "Hemoglobin, mean (SD), g/dL", "continuous"),
     ("wbc", "White blood cell count, mean (SD), ×10⁹/L", "continuous"),
     ("platelets", "Platelet count, mean (SD), ×10⁹/L", "continuous"),
@@ -192,7 +192,14 @@ def merge_labs(trt, ctl, tag):
     ctl["last_lactate_missing"] = ctl["last_lactate"].isna().astype(int)
 
     # 2. Descriptive labs: first postop value with range filter
-    for lab_name in ["hemoglobin", "wbc", "platelets", "albumin"]:
+    for lab_name in [
+        "hemoglobin",
+        "wbc",
+        "platelets",
+        "albumin",
+        "magnesium",
+        "potassium",
+    ]:
         sub = labs_all[labs_all.lab_name == lab_name].copy()
         if len(sub) == 0:
             continue
